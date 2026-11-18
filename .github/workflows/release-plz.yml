@@ -16,6 +16,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      actions: write
       # Allows a later migration to crates.io trusted publishing.
       id-token: write
     steps:
@@ -38,10 +39,24 @@ jobs:
             echo "CARGO_REGISTRY_TOKEN is unset; using crates.io trusted publishing."
           fi
       - uses: release-plz/action@v0.5.148
+        id: release
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      # GITHUB_TOKEN-created tags do not trigger tag-push workflows, so
+      # dispatch cargo-dist explicitly. workflow_dispatch is exempt from that
+      # suppression, and this keeps CLI binaries working without a PAT.
+      - name: Trigger CLI binary build
+        if: steps.release.outputs.releases_created == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASES_JSON: ${{ steps.release.outputs.releases }}
+        run: |
+          tag=$(jq -r '(.releases // .)[]? | select(.tag | startswith("shaul-cli-v")) | .tag' <<< "$RELEASES_JSON" | head -n1)
+          if [ -n "$tag" ]; then
+            gh workflow run shaul-cli-release.yml --ref "$tag" -f tag="$tag"
+          fi
 
   release-plz-pr:
     name: release-plz PR

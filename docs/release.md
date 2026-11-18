@@ -78,22 +78,21 @@ release-plz 自己实现这套换取流程。
 `CARGO_REGISTRY_TOKEN` secret 只存在于 GitHub Secrets；workflow 仅在 release
 job 内把它写入 `$GITHUB_ENV`，不会写入文件或日志。
 
-#### RELEASE_PLZ_TOKEN（CLI 二进制发布必需）
+#### RELEASE_PLZ_TOKEN（可选）
 
 fine-grained PAT，授予当前仓库的 **Contents: read/write** 和
 **Pull requests: read/write**。
 
 - 使用 `GITHUB_TOKEN` 创建的 release PR 不会自动触发 `pull_request` CI；
-  需要手动 close/reopen PR。
-- release-plz 用 `GITHUB_TOKEN` 创建的 tag 也不会触发 `shaul-cli-release.yml`，
-  因此 CLI 预编译二进制不会构建。要让 release-plz 的 tag 触发 cargo-dist，
-  必须配置 `RELEASE_PLZ_TOKEN`。
+  需要手动 close/reopen PR 才能跑检查。
+- CLI 二进制发布不依赖该 PAT：release job 会在发布后通过
+  `workflow_dispatch` 主动触发 cargo-dist。
 - 该 token 只影响 GitHub 操作，与 crates.io 发布凭据无关。
 
 ### CLI 二进制分发
 
-`.github/workflows/shaul-cli-release.yml` 由 cargo-dist 生成，监听
-`shaul-cli-v*` tag：
+`.github/workflows/shaul-cli-release.yml` 由 cargo-dist 生成，支持
+`shaul-cli-v*` tag 和手动 `workflow_dispatch`：
 
 - 构建 Linux x86_64/aarch64、macOS x86_64/aarch64、Windows x86_64；
 - 附带 `.tar.xz`/`.zip`、SHA-256、shell 安装器和 PowerShell 安装器；
@@ -102,8 +101,13 @@ fine-grained PAT，授予当前仓库的 **Contents: read/write** 和
 release-plz 对 `shaul-cli` 关闭了 `git_release_enable`，但保留 tag 创建，
 避免与 cargo-dist 重复创建 Release。
 
+发布后，release-plz job 会从 `releases` 输出中取出 `shaul-cli-v*` tag，并用
+`gh workflow run` 触发 cargo-dist。`workflow_dispatch` 不受
+“`GITHUB_TOKEN` 创建的事件不触发新 workflow”这一限制，因此不需要 PAT。
+
 已有 `shaul-cli-v1.0.0` Release 早于该流程，因此没有二进制附件；从下一个
-CLI release 开始生效。
+CLI release 开始生效。若要补 1.0.0 二进制，需要按目标平台手动构建后
+`gh release upload` 到现有 Release，或重新创建该 Release。
 
 ### GitHub Actions 设置
 

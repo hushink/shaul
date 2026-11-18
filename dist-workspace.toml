@@ -13,6 +13,9 @@ installers = ["shell", "powershell"]
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Only the CLI tag belongs to dist; release-plz owns the library tags.
 tag-namespace = "shaul-cli"
+# Allow dispatching the release from the Release-plz workflow even when tags
+# are created with GITHUB_TOKEN (which does not trigger tag-push workflows).
+dispatch-releases = true
 
 # Pin the actions used by the generated workflow (v7.0.1).
 [dist.github-action-commits]
