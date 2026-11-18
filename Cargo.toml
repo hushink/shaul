@@ -4,11 +4,11 @@ members = ["crates/*"]
 
 [workspace.dependencies]
 async-trait = "0.1"
-shaul = { version = "0.3.0", path = "crates/shaul" }
-shaul-bt = { version = "0.3.0", path = "crates/shaul-bt" }
-shaul-core = { version = "0.3.0", path = "crates/shaul-core" }
-shaul-hub = { version = "0.3.0", path = "crates/shaul-hub" }
-shaul-http = { version = "0.3.0", path = "crates/shaul-http" }
+shaul = { version = "1.0.0", path = "crates/shaul" }
+shaul-bt = { version = "1.0.0", path = "crates/shaul-bt" }
+shaul-core = { version = "1.0.0", path = "crates/shaul-core" }
+shaul-hub = { version = "1.0.0", path = "crates/shaul-hub" }
+shaul-http = { version = "1.0.0", path = "crates/shaul-http" }
 base64 = "0.22"
 bytes = "1"
 clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
@@ -44,7 +44,7 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [workspace.package]
-version = "0.3.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.92"
 authors = ["weilanzhuan@gmail.com"]

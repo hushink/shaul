@@ -173,7 +173,7 @@ delete_archive = false
 timeout_secs = 60
 connect_timeout_secs = 15
 retries = 5
-user_agent = "shaul/0.3.0"
+user_agent = "shaul/1.0.0"
 allow_cross_origin_auth = false
 
 [hub]

@@ -43,11 +43,9 @@
 ## 版本规则
 
 - 常规提交：`fix:` → patch，`feat:` → minor，`feat!:`/`BREAKING CHANGE:`
-  → major（1.x）。
-- 当前从 `0.3.0` 首次发布到 `1.0.0`，使用 `major:` 提交类型；
-  `release-plz.toml` 中的 `custom_major_increment_regex = "^major$"` 会让它
-  在 0.x 阶段直接触发 major。
-- 1.0 之后可移除 `custom_major_increment_regex`，改用标准 `feat!:`。
+  → major。
+- 首次 1.0 发布前，workspace 版本已手动设为 `1.0.0`；release-plz 对未发布
+  crate 的首次 release PR 会沿用当前版本，不会再次自增。
 - `semver_check = false`，因为 1.0 tag 尚不存在、没有基线；1.0 发布后应打开
   并接入 `cargo-semver-checks`。
 
