@@ -9,10 +9,10 @@ repository.workspace = true
 description = "Embeddable multi-protocol download engine"
 
 [dependencies]
-shaul-bt = { path = "../shaul-bt", optional = true }
-shaul-core = { path = "../shaul-core" }
-shaul-hub = { path = "../shaul-hub" }
-shaul-http = { path = "../shaul-http" }
+shaul-bt = { workspace = true, optional = true }
+shaul-core.workspace = true
+shaul-hub.workspace = true
+shaul-http.workspace = true
 
 [features]
 default = []

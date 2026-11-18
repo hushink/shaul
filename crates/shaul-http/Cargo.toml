@@ -19,7 +19,7 @@ percent-encoding.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-shaul-core = { path = "../shaul-core" }
+shaul-core.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

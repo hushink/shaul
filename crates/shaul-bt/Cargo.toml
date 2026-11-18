@@ -12,7 +12,7 @@ description = "BitTorrent parser and leech-only backend for shaul (via librqbit)
 async-trait.workspace = true
 globset.workspace = true
 librqbit.workspace = true
-shaul-core = { path = "../shaul-core" }
+shaul-core.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true

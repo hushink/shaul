@@ -21,7 +21,7 @@ fs2.workspace = true
 futures-util.workspace = true
 indicatif.workspace = true
 serde_json.workspace = true
-shaul = { path = "../shaul", features = ["bt"] }
+shaul = { workspace = true, features = ["bt"] }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

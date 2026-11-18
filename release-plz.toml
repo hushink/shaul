@@ -1,0 +1,13 @@
+[workspace]
+# Publish only after the release PR is merged, not on every push to main.
+release_always = false
+# One changelog for the whole workspace; all crates share the workspace version.
+changelog_path = "CHANGELOG.md"
+git_release_enable = true
+# Enable once the 1.0.0 tag exists as a semver baseline.
+semver_check = false
+# The "major:" commit type is used for the deliberate 0.3.0 -> 1.0.0 jump.
+# For 1.x, breaking changes should normally use a conventional `feat!:` commit.
+custom_major_increment_regex = "^major$"
+publish_timeout = "15m"
+pr_labels = ["release"]
