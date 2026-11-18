@@ -7,6 +7,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Command line interface for shaul"
+readme = "README.md"
 
 [[bin]]
 name = "shaul"

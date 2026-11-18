@@ -7,6 +7,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core domain, engine, task store, resume and finalizers for shaul"
+readme = "README.md"
 
 [dependencies]
 async-trait.workspace = true

@@ -7,6 +7,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Embeddable multi-protocol download engine"
+readme = "README.md"
 
 [dependencies]
 shaul-bt = { workspace = true, optional = true }

@@ -36,6 +36,24 @@ crates.io 不允许通过 trusted publishing 创建全新 crate。六个 crate �
 5. 确认六个 crate 在 crates.io 可见后，立即撤销这个 API token；
 6. 删除 GitHub secret `CARGO_REGISTRY_TOKEN`。
 
+#### 本地 bootstrap（不配置 GitHub secret 的替代方案）
+
+本地没有 GitHub OIDC，因此仍然需要一个 crates.io token：
+
+```console
+$ cargo login
+$ cp release-plz.toml release-plz.local.toml
+# 在 release-plz.local.toml 中设置 release_always = true
+# 如工作区有未跟踪文件，另设 publish_allow_dirty = true
+$ release-plz release --config release-plz.local.toml --dry-run
+$ release-plz release --config release-plz.local.toml
+```
+
+本地 release 也会创建 git tag / GitHub Release，需要 `GITHUB_TOKEN` 或
+`--git-token`。如果只想发布、不创建 tag/Release，在本地配置中设置
+`git_tag_enable = false` 与 `git_release_enable = false`，之后手动创建。
+完成后删除 `release-plz.local.toml`、执行 `cargo logout` 并撤销 token。
+
 #### 切换到 trusted publishing（首次发布后）
 
 1. 在 crates.io 为每个 crate 配置 trusted publisher：
