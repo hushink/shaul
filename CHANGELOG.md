@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2](https://github.com/hushink/shaul/compare/shaul-v1.0.1...shaul-v1.0.2) - 2026-11-18
+
+### Other
+
+- *(cli)* cover queue, config precedence and JSON redaction
+
 ## [1.0.1](https://github.com/hushink/shaul/compare/shaul-v1.0.0...shaul-v1.0.1) - 2026-11-18
 
 ### Other
