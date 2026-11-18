@@ -53,7 +53,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASES_JSON: ${{ steps.release.outputs.releases }}
         run: |
-          tag=$(jq -r '(.releases // .)[]? | select(.tag | startswith("shaul-cli-v")) | .tag' <<< "$RELEASES_JSON" | head -n1)
+          set -euo pipefail
+          tag=$(jq -r 'first((if type == "array" then .[]? else .releases[]? end) | select(.tag | startswith("shaul-cli-v")) | .tag) // empty' <<< "$RELEASES_JSON")
           if [ -n "$tag" ]; then
             gh workflow run shaul-cli-release.yml --ref "$tag" -f tag="$tag"
           fi
