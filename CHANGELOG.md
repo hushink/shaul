@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3](https://github.com/hushink/shaul/compare/shaul-v1.0.2...shaul-v1.0.3) - 2026-11-18
+
+### Other
+
+- cover corrupt sidecars and worker crash recovery
+
 ## [1.0.2](https://github.com/hushink/shaul/compare/shaul-v1.0.1...shaul-v1.0.2) - 2026-11-18
 
 ### Other
