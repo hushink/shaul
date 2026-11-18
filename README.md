@@ -264,6 +264,13 @@ downloads, include filters, auth failures, cache population/cache hits, and a
 local BitTorrent peer (torrent creation, seeder session and leech download).
 No external network is required.
 
+## API stability
+
+The 1.0 stability audit — semver rules, MSRV policy, constructible types and
+known risks — lives in [docs/api-audit.md](docs/api-audit.md). All crates use
+`#![forbid(unsafe_code)]`. Cross-platform CI covers Linux, Windows and macOS,
+plus rustfmt, clippy, rustdoc, feature combinations and MSRV 1.92.
+
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).

@@ -118,7 +118,7 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub no_verify: bool,
 
-    /// Expected checksum ("sha256:<hex>", "sha512:<hex>", "sha1:<hex>", "md5:<hex>")
+    /// Expected checksum (`sha256:<hex>`, `sha512:<hex>`, `sha1:<hex>`, `md5:<hex>`)
     #[arg(long, conflicts_with = "checksum_file", value_name = "ALG:HEX")]
     pub checksum: Option<String>,
 

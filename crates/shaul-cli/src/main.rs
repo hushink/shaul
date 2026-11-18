@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod args;
 mod render;
 mod support;

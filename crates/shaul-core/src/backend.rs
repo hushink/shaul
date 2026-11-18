@@ -13,10 +13,21 @@ use crate::resource::Resource;
 use crate::task::{TaskId, TaskResume};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BackendCapabilities {
     pub segmented: bool,
     pub resume: bool,
     pub multi_file: bool,
+}
+
+impl BackendCapabilities {
+    pub fn new(segmented: bool, resume: bool, multi_file: bool) -> Self {
+        Self {
+            segmented,
+            resume,
+            multi_file,
+        }
+    }
 }
 
 #[async_trait]
@@ -47,6 +58,7 @@ pub struct DownloadRequest {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct FileOutcome {
     pub path: PathBuf,
     /// Relative to the task destination, using `/`.
@@ -54,6 +66,24 @@ pub struct FileOutcome {
     pub size: u64,
     pub checksum: Option<Checksum>,
     pub checksum_verified: bool,
+}
+
+impl FileOutcome {
+    pub fn new(
+        path: PathBuf,
+        relative_path: String,
+        size: u64,
+        checksum: Option<Checksum>,
+        checksum_verified: bool,
+    ) -> Self {
+        Self {
+            path,
+            relative_path,
+            size,
+            checksum,
+            checksum_verified,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

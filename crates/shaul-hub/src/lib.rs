@@ -1,7 +1,9 @@
 //! Hugging Face and ModelScope link parsers and download backends.
 
+#![forbid(unsafe_code)]
+
 pub mod backend;
-pub mod cache;
+mod cache;
 pub mod client;
 pub mod parser;
 

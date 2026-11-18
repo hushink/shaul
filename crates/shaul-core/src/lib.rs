@@ -4,6 +4,8 @@
 //! `Link -> LinkParser -> Resource -> Router -> DownloadBackend`, driven by
 //! [`DownloadEngine`] over [`Task`] / [`FileItem`] / segments.
 
+#![forbid(unsafe_code)]
+
 pub mod archive;
 pub mod backend;
 pub mod blocking;
@@ -22,7 +24,7 @@ pub mod resource;
 pub mod router;
 pub mod store;
 pub mod task;
-pub mod util;
+mod util;
 
 pub use backend::{
     BackendCapabilities, DownloadBackend, DownloadOutcome, DownloadRequest, FileOutcome,
@@ -30,7 +32,7 @@ pub use backend::{
 };
 pub use blocking::BlockingEngine;
 pub use checksum::{Checksum, ChecksumAlgorithm, compute_file_checksum};
-pub use config::{Config, ResolvedOptions};
+pub use config::{BtConfig, Config, DownloadConfig, HubConfig, NetworkConfig, ResolvedOptions};
 pub use engine::DownloadEngine;
 pub use error::{Error, Result};
 pub use event::{DownloadEvent, EventKind, EventSink};
@@ -44,7 +46,7 @@ pub use resource::{
     BitTorrentSource, HubProvider, HubRepoType, Resource, ResourceFile, ResourceKind,
 };
 pub use router::{RoutedResource, Router, backend_arc, parser_arc};
-pub use store::{SidecarStore, TaskStore};
+pub use store::{SidecarStore, TaskStore, TaskUpdate};
 pub use task::{
     FileItem, FileResume, FileState, Task, TaskId, TaskOptions, TaskResume, TaskState, Validator,
     VerifyMode, destination_file, part_path,

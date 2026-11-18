@@ -11,6 +11,7 @@ description = "Command line interface for shaul"
 [[bin]]
 name = "shaul"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 clap.workspace = true

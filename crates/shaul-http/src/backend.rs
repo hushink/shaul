@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -16,7 +16,7 @@ use shaul_core::{
     BackendCapabilities, Checksum, ChecksumAlgorithm, Config, DownloadBackend, DownloadOutcome,
     DownloadRequest, Error, EventKind, EventSink, FileOutcome, FileResume, Header, Resource,
     ResourceFile, ResourceKind, Result, TaskId, TaskResume, Validator, VerifyMode, completed_bytes,
-    merge_ranges, missing_ranges, part_path, sanitize_file_name, split_range, util::now_ms,
+    merge_ranges, missing_ranges, part_path, sanitize_file_name, split_range,
 };
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Mutex;
@@ -104,13 +104,13 @@ impl HttpBackend {
                     downloaded_bytes: size,
                     total_bytes: Some(size),
                 });
-                return Ok(FileOutcome {
-                    path: final_path,
-                    relative_path: relative,
+                return Ok(FileOutcome::new(
+                    final_path,
+                    relative,
                     size,
-                    checksum: stored.checksum.or(request.options.checksum.clone()),
-                    checksum_verified: false,
-                });
+                    stored.checksum.or(request.options.checksum.clone()),
+                    false,
+                ));
             }
             if tokio::fs::try_exists(&part).await? {
                 ensure_parent(&final_path).await?;
@@ -123,13 +123,13 @@ impl HttpBackend {
                     file: relative.clone(),
                     total_bytes: Some(size),
                 });
-                return Ok(FileOutcome {
-                    path: final_path,
-                    relative_path: relative,
+                return Ok(FileOutcome::new(
+                    final_path,
+                    relative,
                     size,
-                    checksum: stored.checksum.or(request.options.checksum.clone()),
-                    checksum_verified: false,
-                });
+                    stored.checksum.or(request.options.checksum.clone()),
+                    false,
+                ));
             }
         }
 
@@ -336,13 +336,9 @@ impl HttpBackend {
             tokio::fs::write(&final_path, []).await?;
         }
         let size = tokio::fs::metadata(&final_path).await?.len();
-        Ok(FileOutcome {
-            path: final_path,
-            relative_path: relative,
-            size,
-            checksum,
-            checksum_verified: false,
-        })
+        Ok(FileOutcome::new(
+            final_path, relative, size, checksum, false,
+        ))
     }
 
     async fn probe(&self, request: &DownloadRequest, file: &ResourceFile) -> Result<Probe> {
@@ -1115,11 +1111,7 @@ impl DownloadBackend for HttpBackend {
     }
 
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities {
-            segmented: true,
-            resume: true,
-            multi_file: true,
-        }
+        BackendCapabilities::new(true, true, true)
     }
 
     fn supports(&self, resource: &Resource) -> bool {
@@ -1479,6 +1471,13 @@ async fn unique_path(path: &Path) -> Result<PathBuf> {
     Err(Error::Backend(
         "could not find a free destination name".to_string(),
     ))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 async fn ensure_parent(path: &Path) -> Result<()> {

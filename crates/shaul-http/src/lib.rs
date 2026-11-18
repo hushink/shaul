@@ -1,7 +1,9 @@
 //! Direct-link HTTP backend for shaul.
 
+#![forbid(unsafe_code)]
+
 pub mod backend;
-pub mod filename;
+mod filename;
 pub mod parser;
 
 pub use backend::HttpBackend;

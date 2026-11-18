@@ -243,6 +243,13 @@ tar.gz/zip 解压、HF/MS 仓库下载、include 过滤、鉴权失败、缓存�
 以及本地 BitTorrent peer（创建种子、seeder session、leech 下载）。
 不依赖外网。
 
+## API 稳定性
+
+1.0 稳定性审计（semver 规则、MSRV 策略、可构造类型与已知风险）见
+[docs/api-audit.md](docs/api-audit.md)。所有 crate 都启用了
+`#![forbid(unsafe_code)]`。跨平台 CI 覆盖 Linux、Windows、macOS，以及
+rustfmt、clippy、rustdoc、feature 组合和 MSRV 1.92。
+
 ## 许可证
 
 Apache-2.0，见 [LICENSE](LICENSE)。

@@ -117,6 +117,7 @@ impl HubClient {
                     }
                 }
             }
+            _ => {}
         }
         Ok(options)
     }
@@ -133,8 +134,16 @@ impl HubClient {
             let mut segments = url
                 .path_segments_mut()
                 .map_err(|_| Error::Backend("invalid Hugging Face endpoint".to_string()))?;
-            if repo_type == HubRepoType::Dataset {
-                segments.push("datasets");
+            match repo_type {
+                HubRepoType::Model => {}
+                HubRepoType::Dataset => {
+                    segments.push("datasets");
+                }
+                _ => {
+                    return Err(Error::Backend(
+                        "unsupported Hugging Face repository type".to_string(),
+                    ));
+                }
             }
             push_repo(&mut segments, repo);
             segments.push("resolve");
@@ -158,10 +167,14 @@ impl HubClient {
                 .map_err(|_| Error::Backend("invalid ModelScope endpoint".to_string()))?;
             segments.push("api");
             segments.push("v1");
-            segments.push(match repo_type {
+            let repo_segment = match repo_type {
                 HubRepoType::Model => "models",
                 HubRepoType::Dataset => "datasets",
-            });
+                _ => {
+                    return Err(Error::Backend("unsupported repository type".to_string()));
+                }
+            };
+            segments.push(repo_segment);
             push_repo(&mut segments, repo);
             segments.push("repo");
         }
@@ -180,6 +193,7 @@ impl HubClient {
         let prefix = match repo_type {
             HubRepoType::Model => "models",
             HubRepoType::Dataset => "datasets",
+            _ => "repositories",
         };
         let repo = repo
             .split('/')
@@ -189,6 +203,7 @@ impl HubClient {
         let root = match provider {
             HubProvider::HuggingFace => &self.hf_cache,
             HubProvider::ModelScope => &self.ms_cache,
+            _ => &self.hf_cache,
         };
         root.join(format!("{prefix}--{repo}"))
     }
@@ -206,10 +221,14 @@ impl HubClient {
                 .path_segments_mut()
                 .map_err(|_| Error::Backend("invalid Hugging Face endpoint".to_string()))?;
             segments.push("api");
-            segments.push(match repo_type {
+            let repo_segment = match repo_type {
                 HubRepoType::Model => "models",
                 HubRepoType::Dataset => "datasets",
-            });
+                _ => {
+                    return Err(Error::Backend("unsupported repository type".to_string()));
+                }
+            };
+            segments.push(repo_segment);
             push_repo(&mut segments, repo);
             segments.push("tree");
             segments.push(revision);
@@ -268,10 +287,14 @@ impl HubClient {
                 .map_err(|_| Error::Backend("invalid ModelScope endpoint".to_string()))?;
             segments.push("api");
             segments.push("v1");
-            segments.push(match repo_type {
+            let repo_segment = match repo_type {
                 HubRepoType::Model => "models",
                 HubRepoType::Dataset => "datasets",
-            });
+                _ => {
+                    return Err(Error::Backend("unsupported repository type".to_string()));
+                }
+            };
+            segments.push(repo_segment);
             push_repo(&mut segments, repo);
             segments.push("repo");
             segments.push("files");

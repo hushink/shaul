@@ -155,13 +155,13 @@ impl HubBackend {
                         downloaded_bytes: size,
                         total_bytes: Some(size),
                     });
-                    return Ok(FileOutcome {
-                        path: final_path,
-                        relative_path: relative.to_string(),
+                    return Ok(FileOutcome::new(
+                        final_path,
+                        relative.to_string(),
                         size,
                         checksum,
-                        checksum_verified: false,
-                    });
+                        false,
+                    ));
                 }
                 Ok(false) => {
                     warning(
@@ -298,11 +298,7 @@ impl DownloadBackend for HubBackend {
     }
 
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities {
-            segmented: true,
-            resume: true,
-            multi_file: true,
-        }
+        BackendCapabilities::new(true, true, true)
     }
 
     fn supports(&self, resource: &Resource) -> bool {

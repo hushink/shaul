@@ -15,6 +15,7 @@ use crate::task::{TaskOptions, VerifyMode};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
+#[non_exhaustive]
 pub struct Config {
     pub download: DownloadConfig,
     pub network: NetworkConfig,
@@ -26,6 +27,7 @@ pub struct Config {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct DownloadConfig {
     pub dir: PathBuf,
     pub connections: usize,
@@ -41,6 +43,7 @@ pub struct DownloadConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct NetworkConfig {
     pub timeout_secs: u64,
     pub connect_timeout_secs: u64,
@@ -52,6 +55,7 @@ pub struct NetworkConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
+#[non_exhaustive]
 pub struct HubConfig {
     /// Populate a provider cache while downloading. HF uses the Python
     /// compatible `models--org--repo` layout.
@@ -64,6 +68,7 @@ pub struct HubConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct BtConfig {
     pub dht: bool,
     pub trackers: bool,
@@ -118,6 +123,7 @@ impl Default for NetworkConfig {
 
 /// Options after task overrides and config defaults have been resolved.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ResolvedOptions {
     pub destination: PathBuf,
     pub output: Option<PathBuf>,

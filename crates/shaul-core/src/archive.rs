@@ -8,6 +8,7 @@ use crate::error::{Error, Result};
 use crate::path::archive_stem;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ArchiveKind {
     Zip,
     Tar,

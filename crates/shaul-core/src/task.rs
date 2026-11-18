@@ -17,6 +17,7 @@ pub type TaskId = Uuid;
 pub const TASK_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Task {
     pub schema_version: u32,
     pub id: TaskId,
@@ -120,6 +121,7 @@ impl Task {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum TaskState {
     Pending,
     Running,
@@ -175,6 +177,7 @@ pub struct TaskOptions {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum VerifyMode {
     #[default]
     Auto,
@@ -183,6 +186,7 @@ pub enum VerifyMode {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FileItem {
     pub path: String,
     #[serde(default)]
@@ -204,6 +208,7 @@ fn default_selected() -> bool {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum FileState {
     Pending,
     Downloading,
@@ -213,6 +218,7 @@ pub enum FileState {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TaskResume {
     pub version: u32,
     #[serde(default)]

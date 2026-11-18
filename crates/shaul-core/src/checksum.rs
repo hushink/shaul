@@ -12,6 +12,7 @@ use crate::error::{Error, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum ChecksumAlgorithm {
     Sha256,
     Sha512,

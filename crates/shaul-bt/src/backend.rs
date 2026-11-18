@@ -124,6 +124,11 @@ impl BtBackend {
                 })?;
                 AddTorrent::from_bytes(bytes)
             }
+            _ => {
+                return Err(Error::InvalidLink(
+                    "unsupported BitTorrent source".to_string(),
+                ));
+            }
         };
 
         let session = self.session().await?;
@@ -275,13 +280,7 @@ impl BtBackend {
                 handle.output_folder(),
                 &info.relative_filename,
             );
-            outcomes.push(FileOutcome {
-                path,
-                relative_path,
-                size: info.len,
-                checksum: None,
-                checksum_verified: true,
-            });
+            outcomes.push(FileOutcome::new(path, relative_path, info.len, None, true));
         }
         Ok(DownloadOutcome::Completed(outcomes))
     }
@@ -294,11 +293,7 @@ impl DownloadBackend for BtBackend {
     }
 
     fn capabilities(&self) -> BackendCapabilities {
-        BackendCapabilities {
-            segmented: false,
-            resume: true,
-            multi_file: true,
-        }
+        BackendCapabilities::new(false, true, true)
     }
 
     fn supports(&self, resource: &shaul_core::Resource) -> bool {

@@ -2,6 +2,7 @@ use thiserror::Error;
 
 /// Errors produced by the core engine, store, finalizers and backends.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     #[error("invalid link: {0}")]
     InvalidLink(String),

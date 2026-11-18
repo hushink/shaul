@@ -26,6 +26,7 @@ pub struct Resource {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ResourceKind {
     Http,
     Hub {
@@ -42,6 +43,7 @@ pub enum ResourceKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum BitTorrentSource {
     Magnet,
     TorrentFile,
@@ -49,6 +51,7 @@ pub enum BitTorrentSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum HubProvider {
     HuggingFace,
     ModelScope,
@@ -56,6 +59,7 @@ pub enum HubProvider {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum HubRepoType {
     Model,
     Dataset,

@@ -27,6 +27,7 @@ impl DownloadEvent {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum EventKind {
     TaskAdded {
         task_id: TaskId,
