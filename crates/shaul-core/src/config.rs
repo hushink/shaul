@@ -1,0 +1,840 @@
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::time::Duration;
+
+use directories::{BaseDirs, ProjectDirs};
+use serde::{Deserialize, Serialize};
+
+use crate::error::{Error, Result};
+use crate::header::{Header, RequestOptions};
+use crate::task::{TaskOptions, VerifyMode};
+
+/// Effective configuration. Precedence is CLI flags > config file >
+/// environment variables > built-in defaults; see `Config::load`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+pub struct Config {
+    pub download: DownloadConfig,
+    pub network: NetworkConfig,
+    pub hub: HubConfig,
+    pub bt: BtConfig,
+    pub state_dir: Option<PathBuf>,
+    pub headers: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DownloadConfig {
+    pub dir: PathBuf,
+    pub connections: usize,
+    pub per_host: usize,
+    pub global: usize,
+    pub segment_size: u64,
+    pub resume: bool,
+    pub verify: VerifyMode,
+    pub extract: bool,
+    pub extract_dir: Option<PathBuf>,
+    pub delete_archive: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkConfig {
+    pub timeout_secs: u64,
+    pub connect_timeout_secs: u64,
+    pub retries: u32,
+    pub user_agent: String,
+    pub allow_cross_origin_auth: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+pub struct HubConfig {
+    /// Populate a provider cache while downloading. HF uses the Python
+    /// compatible `models--org--repo` layout.
+    pub use_cache: bool,
+    pub hf_cache: Option<PathBuf>,
+    pub modelscope_cache: Option<PathBuf>,
+    pub hf_endpoint: Option<String>,
+    pub modelscope_endpoint: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BtConfig {
+    pub dht: bool,
+    pub trackers: bool,
+    pub listen: bool,
+    pub persistence: bool,
+    pub peer_limit: Option<usize>,
+    /// `ip:port` endpoints used directly as initial peers.
+    pub initial_peers: Vec<String>,
+}
+
+impl Default for BtConfig {
+    fn default() -> Self {
+        Self {
+            dht: true,
+            trackers: true,
+            listen: true,
+            persistence: true,
+            peer_limit: None,
+            initial_peers: Vec::new(),
+        }
+    }
+}
+
+impl Default for DownloadConfig {
+    fn default() -> Self {
+        Self {
+            dir: PathBuf::from("."),
+            connections: 8,
+            per_host: 16,
+            global: 64,
+            segment_size: 8 * 1024 * 1024,
+            resume: true,
+            verify: VerifyMode::Auto,
+            extract: false,
+            extract_dir: None,
+            delete_archive: false,
+        }
+    }
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            timeout_secs: 60,
+            connect_timeout_secs: 15,
+            retries: 5,
+            user_agent: format!("shaul/{}", env!("CARGO_PKG_VERSION")),
+            allow_cross_origin_auth: false,
+        }
+    }
+}
+
+/// Options after task overrides and config defaults have been resolved.
+#[derive(Clone, Debug)]
+pub struct ResolvedOptions {
+    pub destination: PathBuf,
+    pub output: Option<PathBuf>,
+    pub connections: usize,
+    pub per_host: usize,
+    pub global: usize,
+    pub segment_size: u64,
+    pub resume: bool,
+    pub verify: VerifyMode,
+    pub checksum: Option<crate::checksum::Checksum>,
+    pub extract: bool,
+    pub extract_dir: Option<PathBuf>,
+    pub delete_archive: bool,
+    pub cache: bool,
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+    pub request: RequestOptions,
+    pub overwrite: bool,
+    pub rename_on_conflict: bool,
+    pub retries: u32,
+    pub timeout: Duration,
+    pub connect_timeout: Duration,
+    pub user_agent: String,
+}
+
+impl Config {
+    pub fn default_config_path() -> Result<PathBuf> {
+        let dirs = project_dirs()?;
+        Ok(dirs.config_dir().join("config.toml"))
+    }
+
+    pub fn default_state_dir() -> Result<PathBuf> {
+        let dirs = project_dirs()?;
+        Ok(dirs.data_dir().join("tasks"))
+    }
+
+    pub fn state_dir(&self) -> Result<PathBuf> {
+        match &self.state_dir {
+            Some(dir) => Ok(dir.clone()),
+            None => Self::default_state_dir(),
+        }
+    }
+
+    pub fn hf_cache_dir(&self) -> Result<PathBuf> {
+        if let Some(dir) = &self.hub.hf_cache {
+            return Ok(dir.clone());
+        }
+        let base = BaseDirs::new()
+            .ok_or_else(|| Error::Config("cannot determine home directory".to_string()))?;
+        Ok(base
+            .home_dir()
+            .join(".cache")
+            .join("huggingface")
+            .join("hub"))
+    }
+
+    pub fn modelscope_cache_dir(&self) -> Result<PathBuf> {
+        if let Some(dir) = &self.hub.modelscope_cache {
+            return Ok(dir.clone());
+        }
+        Ok(project_dirs()?.cache_dir().join("modelscope"))
+    }
+
+    pub fn hf_endpoint(&self) -> String {
+        self.hub
+            .hf_endpoint
+            .clone()
+            .unwrap_or_else(|| "https://huggingface.co".to_string())
+    }
+
+    pub fn modelscope_endpoint(&self) -> String {
+        self.hub
+            .modelscope_endpoint
+            .clone()
+            .unwrap_or_else(|| "https://modelscope.cn".to_string())
+    }
+
+    /// Resolve the config path from an explicit argument, `SHAUL_CONFIG`, or
+    /// the platform default.
+    pub fn resolve_path(explicit: Option<&Path>) -> Result<PathBuf> {
+        if let Some(path) = explicit {
+            return Ok(path.to_path_buf());
+        }
+        if let Ok(path) = std::env::var("SHAUL_CONFIG")
+            && !path.trim().is_empty()
+        {
+            return Ok(PathBuf::from(path));
+        }
+        Self::default_config_path()
+    }
+
+    /// Load defaults, then environment variables, then the config file. CLI
+    /// flags are applied by the caller afterwards.
+    pub fn load(explicit: Option<&Path>) -> Result<(Self, PathBuf)> {
+        let path = Self::resolve_path(explicit)?;
+        let mut config = Self::default();
+        config.apply_env()?;
+        if path.exists() {
+            let text = std::fs::read_to_string(&path)?;
+            let partial: PartialConfig = toml::from_str(&text)?;
+            partial.apply(&mut config)?;
+        }
+        Ok((config, path))
+    }
+
+    /// Load only defaults + file. Used by `config set` so environment values
+    /// are not baked into the file.
+    pub fn load_file_only(path: &Path) -> Result<Self> {
+        let mut config = Self::default();
+        if path.exists() {
+            let text = std::fs::read_to_string(path)?;
+            let partial: PartialConfig = toml::from_str(&text)?;
+            partial.apply(&mut config)?;
+        }
+        Ok(config)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = toml::to_string_pretty(self)?;
+        std::fs::write(path, text)?;
+        Ok(())
+    }
+
+    pub fn apply_env(&mut self) -> Result<()> {
+        if let Some(value) = env("SHAUL_DIR") {
+            self.download.dir = PathBuf::from(value);
+        }
+        if let Some(value) = env_parse::<usize>("SHAUL_CONNECTIONS")? {
+            self.download.connections = value;
+        }
+        if let Some(value) = env_parse::<usize>("SHAUL_PER_HOST")? {
+            self.download.per_host = value;
+        }
+        if let Some(value) = env_parse::<usize>("SHAUL_GLOBAL")? {
+            self.download.global = value;
+        }
+        if let Some(value) = env("SHAUL_SEGMENT_SIZE") {
+            self.download.segment_size = parse_bytes(&value)?;
+        }
+        if let Some(value) = env_parse::<bool>("SHAUL_RESUME")? {
+            self.download.resume = value;
+        }
+        if let Some(value) = env("SHAUL_VERIFY") {
+            self.download.verify = parse_verify_mode(&value)?;
+        }
+        if let Some(value) = env_parse::<bool>("SHAUL_EXTRACT")? {
+            self.download.extract = value;
+        }
+        if let Some(value) = env("SHAUL_EXTRACT_DIR") {
+            self.download.extract_dir = Some(PathBuf::from(value));
+        }
+        if let Some(value) = env_parse::<bool>("SHAUL_DELETE_ARCHIVE")? {
+            self.download.delete_archive = value;
+        }
+        if let Some(value) = env("SHAUL_STATE_DIR") {
+            self.state_dir = Some(PathBuf::from(value));
+        }
+        if let Some(value) = env_parse::<u64>("SHAUL_TIMEOUT_SECS")? {
+            self.network.timeout_secs = value;
+        }
+        if let Some(value) = env_parse::<u64>("SHAUL_CONNECT_TIMEOUT_SECS")? {
+            self.network.connect_timeout_secs = value;
+        }
+        if let Some(value) = env_parse::<u32>("SHAUL_RETRIES")? {
+            self.network.retries = value;
+        }
+        if let Some(value) = env("SHAUL_USER_AGENT") {
+            self.network.user_agent = value;
+        }
+        if let Some(value) = env_parse::<bool>("SHAUL_ALLOW_CROSS_ORIGIN_AUTH")? {
+            self.network.allow_cross_origin_auth = value;
+        }
+
+        if let Some(value) = env("HF_HOME") {
+            self.hub.hf_cache = Some(PathBuf::from(value).join("hub"));
+        }
+        if let Some(value) = env("HF_HUB_CACHE") {
+            self.hub.hf_cache = Some(PathBuf::from(value));
+        }
+        if let Some(value) = env("SHAUL_HF_CACHE") {
+            self.hub.hf_cache = Some(PathBuf::from(value));
+        }
+        if let Some(value) = env("HF_ENDPOINT") {
+            self.hub.hf_endpoint = Some(value);
+        }
+        if let Some(value) = env("SHAUL_HF_ENDPOINT") {
+            self.hub.hf_endpoint = Some(value);
+        }
+        if let Some(value) = env("MODELSCOPE_CACHE") {
+            self.hub.modelscope_cache = Some(PathBuf::from(value));
+        }
+        if let Some(value) = env("SHAUL_MODELSCOPE_CACHE") {
+            self.hub.modelscope_cache = Some(PathBuf::from(value));
+        }
+        if let Some(value) = env("MODELSCOPE_ENDPOINT").or_else(|| env("MODELSCOPE_DOMAIN")) {
+            self.hub.modelscope_endpoint = Some(value);
+        }
+        if let Some(value) = env("SHAUL_MODELSCOPE_ENDPOINT") {
+            self.hub.modelscope_endpoint = Some(value);
+        }
+        if let Some(value) = env_parse::<bool>("SHAUL_HUB_USE_CACHE")? {
+            self.hub.use_cache = value;
+        }
+
+        if let Some(value) = env_parse::<bool>("SHAUL_BT_DHT")? {
+            self.bt.dht = value;
+        }
+        if let Some(value) = env_parse::<bool>("SHAUL_BT_TRACKERS")? {
+            self.bt.trackers = value;
+        }
+        if let Some(value) = env_parse::<bool>("SHAUL_BT_LISTEN")? {
+            self.bt.listen = value;
+        }
+        if let Some(value) = env_parse::<bool>("SHAUL_BT_PERSISTENCE")? {
+            self.bt.persistence = value;
+        }
+        if let Some(value) = env_parse::<usize>("SHAUL_BT_PEER_LIMIT")? {
+            self.bt.peer_limit = Some(value);
+        }
+        if let Some(value) = env("SHAUL_BT_INITIAL_PEERS") {
+            self.bt.initial_peers = value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+        Ok(())
+    }
+
+    pub fn header_defaults(&self) -> Result<Vec<Header>> {
+        self.headers
+            .iter()
+            .map(|(name, value)| Header::new(name, value))
+            .collect()
+    }
+
+    pub fn resolve(&self, destination: &Path, options: &TaskOptions) -> Result<ResolvedOptions> {
+        let mut request = options.request.merged(&self.header_defaults()?);
+        request.allow_cross_origin_auth |= self.network.allow_cross_origin_auth;
+        Ok(ResolvedOptions {
+            destination: destination.to_path_buf(),
+            output: options.output.clone(),
+            connections: options
+                .connections
+                .unwrap_or(self.download.connections)
+                .max(1),
+            per_host: self.download.per_host.max(1),
+            global: self.download.global.max(1),
+            segment_size: self.download.segment_size.max(64 * 1024),
+            resume: options.resume.unwrap_or(self.download.resume),
+            verify: options.verify.unwrap_or(self.download.verify),
+            checksum: options.checksum.clone(),
+            extract: options.extract.unwrap_or(self.download.extract),
+            extract_dir: options
+                .extract_dir
+                .clone()
+                .or_else(|| self.download.extract_dir.clone()),
+            delete_archive: options
+                .delete_archive
+                .unwrap_or(self.download.delete_archive),
+            cache: options.cache.unwrap_or(self.hub.use_cache),
+            include: options.include.clone(),
+            exclude: options.exclude.clone(),
+            request,
+            overwrite: options.overwrite,
+            rename_on_conflict: options.rename_on_conflict,
+            retries: self.network.retries,
+            timeout: Duration::from_secs(self.network.timeout_secs.max(1)),
+            connect_timeout: Duration::from_secs(self.network.connect_timeout_secs.max(1)),
+            user_agent: self.network.user_agent.clone(),
+        })
+    }
+
+    pub fn get_value(&self, key: &str) -> Result<String> {
+        let value = match key {
+            "download.dir" => self.download.dir.display().to_string(),
+            "download.connections" => self.download.connections.to_string(),
+            "download.per_host" => self.download.per_host.to_string(),
+            "download.global" => self.download.global.to_string(),
+            "download.segment_size" => self.download.segment_size.to_string(),
+            "download.resume" => self.download.resume.to_string(),
+            "download.verify" => verify_mode_str(self.download.verify).to_string(),
+            "download.extract" => self.download.extract.to_string(),
+            "download.extract_dir" => self
+                .download
+                .extract_dir
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            "download.delete_archive" => self.download.delete_archive.to_string(),
+            "network.timeout_secs" => self.network.timeout_secs.to_string(),
+            "network.connect_timeout_secs" => self.network.connect_timeout_secs.to_string(),
+            "network.retries" => self.network.retries.to_string(),
+            "network.user_agent" => self.network.user_agent.clone(),
+            "network.allow_cross_origin_auth" => self.network.allow_cross_origin_auth.to_string(),
+            "hub.use_cache" => self.hub.use_cache.to_string(),
+            "hub.hf_cache" => self.hf_cache_dir()?.display().to_string(),
+            "hub.modelscope_cache" => self.modelscope_cache_dir()?.display().to_string(),
+            "hub.hf_endpoint" => self.hf_endpoint(),
+            "hub.modelscope_endpoint" => self.modelscope_endpoint(),
+            "bt.dht" => self.bt.dht.to_string(),
+            "bt.trackers" => self.bt.trackers.to_string(),
+            "bt.listen" => self.bt.listen.to_string(),
+            "bt.persistence" => self.bt.persistence.to_string(),
+            "bt.peer_limit" => self
+                .bt
+                .peer_limit
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            "bt.initial_peers" => self.bt.initial_peers.join(","),
+            "state_dir" => self
+                .state_dir
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default(),
+            _ if key.starts_with("headers.") => {
+                let name = &key["headers.".len()..];
+                self.headers.get(name).cloned().unwrap_or_default()
+            }
+            _ => return Err(Error::Config(format!("unknown config key: {key}"))),
+        };
+        Ok(value)
+    }
+
+    pub fn set_value(&mut self, key: &str, value: &str) -> Result<()> {
+        match key {
+            "download.dir" => self.download.dir = PathBuf::from(value),
+            "download.connections" => self.download.connections = parse_value(value)?,
+            "download.per_host" => self.download.per_host = parse_value(value)?,
+            "download.global" => self.download.global = parse_value(value)?,
+            "download.segment_size" => self.download.segment_size = parse_bytes(value)?,
+            "download.resume" => self.download.resume = parse_value(value)?,
+            "download.verify" => self.download.verify = parse_verify_mode(value)?,
+            "download.extract" => self.download.extract = parse_value(value)?,
+            "download.extract_dir" => {
+                self.download.extract_dir = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(value))
+                }
+            }
+            "download.delete_archive" => self.download.delete_archive = parse_value(value)?,
+            "network.timeout_secs" => self.network.timeout_secs = parse_value(value)?,
+            "network.connect_timeout_secs" => {
+                self.network.connect_timeout_secs = parse_value(value)?
+            }
+            "network.retries" => self.network.retries = parse_value(value)?,
+            "network.user_agent" => self.network.user_agent = value.to_string(),
+            "network.allow_cross_origin_auth" => {
+                self.network.allow_cross_origin_auth = parse_value(value)?
+            }
+            "hub.use_cache" => self.hub.use_cache = parse_value(value)?,
+            "hub.hf_cache" => {
+                self.hub.hf_cache = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(value))
+                }
+            }
+            "hub.modelscope_cache" => {
+                self.hub.modelscope_cache = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(value))
+                }
+            }
+            "hub.hf_endpoint" => {
+                self.hub.hf_endpoint = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                }
+            }
+            "hub.modelscope_endpoint" => {
+                self.hub.modelscope_endpoint = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                }
+            }
+            "bt.dht" => self.bt.dht = parse_value(value)?,
+            "bt.trackers" => self.bt.trackers = parse_value(value)?,
+            "bt.listen" => self.bt.listen = parse_value(value)?,
+            "bt.persistence" => self.bt.persistence = parse_value(value)?,
+            "bt.peer_limit" => {
+                self.bt.peer_limit = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(parse_value(value)?)
+                }
+            }
+            "bt.initial_peers" => {
+                self.bt.initial_peers = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+                    .collect();
+            }
+            "state_dir" => {
+                self.state_dir = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(value))
+                }
+            }
+            _ if key.starts_with("headers.") => {
+                let name = key["headers.".len()..].to_string();
+                Header::new(&name, value)?;
+                if value.trim().is_empty() {
+                    self.headers.remove(&name);
+                } else {
+                    self.headers.insert(name, value.to_string());
+                }
+            }
+            _ => return Err(Error::Config(format!("unknown config key: {key}"))),
+        }
+        Ok(())
+    }
+}
+
+fn project_dirs() -> Result<ProjectDirs> {
+    ProjectDirs::from("", "", "shaul")
+        .ok_or_else(|| Error::Config("cannot determine platform config directory".to_string()))
+}
+
+fn env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn env_parse<T: FromStr>(name: &str) -> Result<Option<T>> {
+    match env(name) {
+        Some(value) => value
+            .parse::<T>()
+            .map(Some)
+            .map_err(|_| Error::Config(format!("invalid value for {name}: {value}"))),
+        None => Ok(None),
+    }
+}
+
+fn parse_value<T: FromStr>(value: &str) -> Result<T> {
+    value
+        .parse::<T>()
+        .map_err(|_| Error::Config(format!("invalid value: {value}")))
+}
+
+pub fn parse_verify_mode(value: &str) -> Result<VerifyMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(VerifyMode::Auto),
+        "require" | "on" | "true" | "yes" | "1" => Ok(VerifyMode::Require),
+        "disabled" | "off" | "false" | "no" | "0" | "none" => Ok(VerifyMode::Disabled),
+        _ => Err(Error::Config(format!("invalid verify mode: {value}"))),
+    }
+}
+
+pub fn verify_mode_str(mode: VerifyMode) -> &'static str {
+    match mode {
+        VerifyMode::Auto => "auto",
+        VerifyMode::Require => "require",
+        VerifyMode::Disabled => "disabled",
+    }
+}
+
+/// Parse byte sizes such as `8MiB`, `256K`, `1G` or a plain byte count.
+pub fn parse_bytes(value: &str) -> Result<u64> {
+    let value = value.trim();
+    let lower = value.to_ascii_lowercase();
+    let (number, multiplier) = if let Some(number) = lower.strip_suffix("kib") {
+        (number, 1024)
+    } else if let Some(number) = lower.strip_suffix("mib") {
+        (number, 1024 * 1024)
+    } else if let Some(number) = lower.strip_suffix("gib") {
+        (number, 1024 * 1024 * 1024)
+    } else if let Some(number) = lower.strip_suffix("kb") {
+        (number, 1000)
+    } else if let Some(number) = lower.strip_suffix("mb") {
+        (number, 1000 * 1000)
+    } else if let Some(number) = lower.strip_suffix("gb") {
+        (number, 1000 * 1000 * 1000)
+    } else if let Some(number) = lower.strip_suffix('k') {
+        (number, 1024)
+    } else if let Some(number) = lower.strip_suffix('m') {
+        (number, 1024 * 1024)
+    } else if let Some(number) = lower.strip_suffix('g') {
+        (number, 1024 * 1024 * 1024)
+    } else {
+        (lower.as_str(), 1)
+    };
+    let number = number.trim();
+    let parsed = number
+        .parse::<f64>()
+        .map_err(|_| Error::Config(format!("invalid byte size: {value}")))?;
+    if !parsed.is_finite() || parsed < 0.0 {
+        return Err(Error::Config(format!("invalid byte size: {value}")));
+    }
+    Ok((parsed * multiplier as f64) as u64)
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialConfig {
+    #[serde(default)]
+    download: Option<PartialDownload>,
+    #[serde(default)]
+    network: Option<PartialNetwork>,
+    #[serde(default)]
+    hub: Option<PartialHub>,
+    #[serde(default)]
+    bt: Option<PartialBt>,
+    #[serde(default)]
+    state_dir: Option<PathBuf>,
+    #[serde(default)]
+    headers: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialDownload {
+    #[serde(default)]
+    dir: Option<PathBuf>,
+    #[serde(default)]
+    connections: Option<usize>,
+    #[serde(default)]
+    per_host: Option<usize>,
+    #[serde(default)]
+    global: Option<usize>,
+    #[serde(default)]
+    segment_size: Option<u64>,
+    #[serde(default)]
+    resume: Option<bool>,
+    #[serde(default)]
+    verify: Option<VerifyMode>,
+    #[serde(default)]
+    extract: Option<bool>,
+    #[serde(default)]
+    extract_dir: Option<PathBuf>,
+    #[serde(default)]
+    delete_archive: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialNetwork {
+    #[serde(default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    connect_timeout_secs: Option<u64>,
+    #[serde(default)]
+    retries: Option<u32>,
+    #[serde(default)]
+    user_agent: Option<String>,
+    #[serde(default)]
+    allow_cross_origin_auth: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialHub {
+    #[serde(default)]
+    use_cache: Option<bool>,
+    #[serde(default)]
+    hf_cache: Option<PathBuf>,
+    #[serde(default)]
+    modelscope_cache: Option<PathBuf>,
+    #[serde(default)]
+    hf_endpoint: Option<String>,
+    #[serde(default)]
+    modelscope_endpoint: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PartialBt {
+    #[serde(default)]
+    dht: Option<bool>,
+    #[serde(default)]
+    trackers: Option<bool>,
+    #[serde(default)]
+    listen: Option<bool>,
+    #[serde(default)]
+    persistence: Option<bool>,
+    #[serde(default)]
+    peer_limit: Option<usize>,
+    #[serde(default)]
+    initial_peers: Option<Vec<String>>,
+}
+
+impl PartialConfig {
+    fn apply(self, config: &mut Config) -> Result<()> {
+        if let Some(download) = self.download {
+            if let Some(value) = download.dir {
+                config.download.dir = value;
+            }
+            if let Some(value) = download.connections {
+                config.download.connections = value;
+            }
+            if let Some(value) = download.per_host {
+                config.download.per_host = value;
+            }
+            if let Some(value) = download.global {
+                config.download.global = value;
+            }
+            if let Some(value) = download.segment_size {
+                config.download.segment_size = value;
+            }
+            if let Some(value) = download.resume {
+                config.download.resume = value;
+            }
+            if let Some(value) = download.verify {
+                config.download.verify = value;
+            }
+            if let Some(value) = download.extract {
+                config.download.extract = value;
+            }
+            if let Some(value) = download.extract_dir {
+                config.download.extract_dir = Some(value);
+            }
+            if let Some(value) = download.delete_archive {
+                config.download.delete_archive = value;
+            }
+        }
+        if let Some(network) = self.network {
+            if let Some(value) = network.timeout_secs {
+                config.network.timeout_secs = value;
+            }
+            if let Some(value) = network.connect_timeout_secs {
+                config.network.connect_timeout_secs = value;
+            }
+            if let Some(value) = network.retries {
+                config.network.retries = value;
+            }
+            if let Some(value) = network.user_agent {
+                config.network.user_agent = value;
+            }
+            if let Some(value) = network.allow_cross_origin_auth {
+                config.network.allow_cross_origin_auth = value;
+            }
+        }
+        if let Some(hub) = self.hub {
+            if let Some(value) = hub.use_cache {
+                config.hub.use_cache = value;
+            }
+            if let Some(value) = hub.hf_cache {
+                config.hub.hf_cache = Some(value);
+            }
+            if let Some(value) = hub.modelscope_cache {
+                config.hub.modelscope_cache = Some(value);
+            }
+            if let Some(value) = hub.hf_endpoint {
+                config.hub.hf_endpoint = Some(value);
+            }
+            if let Some(value) = hub.modelscope_endpoint {
+                config.hub.modelscope_endpoint = Some(value);
+            }
+        }
+        if let Some(bt) = self.bt {
+            if let Some(value) = bt.dht {
+                config.bt.dht = value;
+            }
+            if let Some(value) = bt.trackers {
+                config.bt.trackers = value;
+            }
+            if let Some(value) = bt.listen {
+                config.bt.listen = value;
+            }
+            if let Some(value) = bt.persistence {
+                config.bt.persistence = value;
+            }
+            if let Some(value) = bt.peer_limit {
+                config.bt.peer_limit = Some(value);
+            }
+            if let Some(value) = bt.initial_peers {
+                config.bt.initial_peers = value;
+            }
+        }
+        if let Some(value) = self.state_dir {
+            config.state_dir = Some(value);
+        }
+        if let Some(headers) = self.headers {
+            for (name, value) in headers {
+                Header::new(&name, &value)?;
+                config.headers.insert(name, value);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_overrides_environment_layer() {
+        let mut config = Config::default();
+        config.download.connections = 3; // pretend env set this
+        let partial: PartialConfig = toml::from_str("[download]\nconnections = 11\n").unwrap();
+        partial.apply(&mut config).unwrap();
+        assert_eq!(config.download.connections, 11);
+    }
+
+    #[test]
+    fn parses_byte_sizes() {
+        assert_eq!(parse_bytes("8MiB").unwrap(), 8 * 1024 * 1024);
+        assert_eq!(parse_bytes("1.5G").unwrap(), 1_610_612_736);
+    }
+
+    #[test]
+    fn gets_and_sets_values() {
+        let mut config = Config::default();
+        config.set_value("download.connections", "12").unwrap();
+        assert_eq!(config.get_value("download.connections").unwrap(), "12");
+        config.set_value("headers.X-Test", "yes").unwrap();
+        assert_eq!(config.get_value("headers.X-Test").unwrap(), "yes");
+    }
+}

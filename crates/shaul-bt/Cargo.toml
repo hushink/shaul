@@ -1,0 +1,23 @@
+[package]
+name = "shaul-bt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "BitTorrent parser and leech-only backend for shaul (via librqbit)"
+
+[dependencies]
+async-trait.workspace = true
+globset.workspace = true
+librqbit.workspace = true
+shaul-core = { path = "../shaul-core" }
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio.workspace = true

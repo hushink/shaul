@@ -1,0 +1,12 @@
+/target
+/target-*
+/.idea/
+/.venv/
+/dist/
+/sys1.toml
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.shaul.part
+.shaul/

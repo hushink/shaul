@@ -1,0 +1,29 @@
+[package]
+name = "shaul"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Embeddable multi-protocol download engine"
+
+[dependencies]
+shaul-bt = { path = "../shaul-bt", optional = true }
+shaul-core = { path = "../shaul-core" }
+shaul-hub = { path = "../shaul-hub" }
+shaul-http = { path = "../shaul-http" }
+
+[features]
+default = []
+bt = ["dep:shaul-bt"]
+
+[dev-dependencies]
+flate2.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+url.workspace = true

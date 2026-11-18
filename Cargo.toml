@@ -1,0 +1,47 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+bytes = "1"
+clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4.6"
+digest = "0.11"
+directories = "6"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+fs2 = "0.4"
+futures-util = "0.3"
+globset = "0.4"
+hex = "0.4"
+http = "1"
+indicatif = "0.18"
+librqbit = { version = "9.1", default-features = false, features = ["rust-tls"] }
+md-5 = "0.11"
+percent-encoding = "2"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
+ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+sha1 = "0.11"
+sha2 = "0.11"
+tar = "0.4"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "signal", "macros", "sync", "time", "fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = { version = "2", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[workspace.package]
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.92"
+authors = ["weilanzhuan@gmail.com"]
+license = "Apache-2.0"
+repository = "https://github.com/hushink/shaul"

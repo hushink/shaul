@@ -1,0 +1,109 @@
+# 下载领域模型
+
+本项目统一描述"用户想下载什么、由谁执行、下载状态如何组织"的词汇。公开 API、文档与代码标识符以此为准。
+
+## Language
+
+**Link**:
+用户提交的原始下载输入，可以是 URL、磁力链、种子文件或 Hub 仓库引用。
+_Avoid_: Source, target, input
+
+**Resource**:
+链接解析器对 Link 的解释结果，描述可下载内容及其端点、鉴权、期望大小/摘要与版本。
+_Avoid_: ParsedLink, target, download info
+
+**LinkParser**:
+把 Link 解析为 Resource 的组件；允许发起网络请求补全元数据。
+_Avoid_: Resolver, extractor
+
+**DownloadBackend**:
+执行某一类协议下载的组件，消费 Resource 并产出 FileItem。
+_Avoid_: Downloader, provider, engine
+
+**Router**:
+按 Resource 类型与 DownloadBackend 自声明能力选择后端的组件，支持优先级与失败回退。
+_Avoid_: Dispatcher, selector, registry
+
+**DownloadEngine**:
+持有 Router、任务状态与调度的运行时，是库用户创建和驱动下载的入口。
+_Avoid_: Manager, client, downloader
+
+**Task**:
+一次用户下载意图，是取消、暂停与恢复的单位；一个 Task 可包含多个 FileItem。
+_Avoid_: Job, download, item
+
+**FileItem**:
+Task 内的单个输出文件，是落盘与内容校验的单位。
+_Avoid_: File, entry, subtask
+
+**Segment**:
+FileItem 的一段 HTTP 字节区间，是并发传输与续传记录的单位。
+_Avoid_: Chunk, part, block
+
+**Piece**:
+BitTorrent 的校验单元，一个 FileItem 可能跨多个 Piece。
+_Avoid_: Chunk, block
+
+**Resume**:
+从已持久化的部分完成状态继续下载；默认开启，可在引擎或任务级关闭。
+_Avoid_: Continue, restart
+
+**Validator**:
+服务器提供的资源版本判据（如 ETag、Last-Modified、总大小），用于判断 Resume 是否仍然有效。
+_Avoid_: Check, fingerprint
+
+**Direct link**:
+直接指向文件字节的 HTTP(S) URL，由默认后端处理。
+_Avoid_: Normal link, raw URL
+
+**Hub**:
+托管模型与数据集的平台（Hugging Face、ModelScope）；其下载需要鉴权、文件清单与版本概念。
+_Avoid_: Registry, store
+
+**Revision**:
+Hub 仓库的版本标识，可以是分支、tag 或 commit。
+_Avoid_: Version, branch
+
+**Snapshot**:
+Hub 仓库在某个 Revision 下的文件路径视图，是 Hub Task 的下载单位。
+_Avoid_: Checkout, tree
+
+**Blob**:
+缓存中按内容哈希命名的文件；Snapshot 与目标目录通过链接或复制引用它。
+_Avoid_: Object, chunk
+
+**Magnet**:
+由 info hash 与可选 trackers/名称组成的 BitTorrent 链接；元数据需要从 peer 获取。
+_Avoid_: Magnet link, URI
+
+**Torrent file**:
+包含 BitTorrent metainfo 的种子文件；可以直接解析文件清单。
+_Avoid_: Seed, metainfo file
+
+**Leech**:
+只下载、下载期间按协议响应上传、完成后不常驻做种的模式。
+_Avoid_: Download-only, client
+
+**Checksum**:
+期望的内容校验值（如 SHA-256），可选择性地与下载结果比对。
+_Avoid_: Hash, digest, fingerprint
+
+**Verification**:
+将 FileItem 内容与 Checksum 比对的过程；默认在存在 Checksum 时开启。
+_Avoid_: Validation, hash check
+
+**Extraction**:
+下载完成后把压缩包 FileItem 展开到目录的可选后处理。
+_Avoid_: Unpack, decompress
+
+**Finalizer**:
+Task 标记完成前按固定顺序执行的收尾步骤（合并、校验、解压、原子落盘）。
+_Avoid_: Post-processor, hook
+
+**Auth**:
+用户为 Task 提供的鉴权信息，如 Bearer token、Basic 凭据或自定义鉴权头。
+_Avoid_: Credentials, token
+
+**Header override**:
+用户为 Task 指定的额外 HTTP 请求头，优先级高于后端默认值；跨域重定向默认不转发敏感头。
+_Avoid_: Custom headers
