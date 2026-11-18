@@ -9,7 +9,7 @@ shaul-bt = { version = "1.0.0", path = "crates/shaul-bt" }
 shaul-core = { version = "1.0.0", path = "crates/shaul-core" }
 shaul-hub = { version = "1.0.0", path = "crates/shaul-hub" }
 shaul-http = { version = "1.0.0", path = "crates/shaul-http" }
-base64 = "0.22"
+base64 = "0.23"
 bytes = "1"
 clap = { version = "4.6", features = ["derive", "env", "wrap_help"] }
 clap_complete = "4.6"
