@@ -1,6 +1,9 @@
 [workspace]
 # Publish only after the release PR is merged, not on every push to main.
 release_always = false
+# Do not cut a release for test/docs/chore-only commits. Dependency bumps
+# (Dependabot writes `chore(deps): ...`) still need releases.
+release_commits = '^(feat|fix|perf|refactor|chore\(deps\))'
 # One consolidated changelog for the whole workspace; all crates share the
 # workspace version. Internal crates do not get their own CHANGELOG files.
 changelog_path = "CHANGELOG.md"

@@ -118,6 +118,9 @@ release-plz 对 `shaul-cli` 关闭了 `git_release_enable`，但保留 tag 创�
 
 ## 版本规则
 
+- 只有 `feat`、`fix`、`perf`、`refactor`、`chore(deps)` 提交会触发 release
+  PR；`test`、`docs`、`ci`、普通 `chore` 不会发版。CI 专用改动请用 `ci:`
+  而不是 `fix(ci):`。
 - 常规提交：`fix:` → patch，`feat:` → minor，`feat!:`/`BREAKING CHANGE:`
   → major。
 - 首次 1.0 发布前，workspace 版本已手动设为 `1.0.0`；release-plz 对未发布
