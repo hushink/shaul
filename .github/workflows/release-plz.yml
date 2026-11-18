@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  id-token: read
 
 jobs:
   release-plz-release:
@@ -17,6 +16,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      # Allows a later migration to crates.io trusted publishing.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
