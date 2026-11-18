@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/hushink/shaul/compare/shaul-v1.0.0...shaul-v1.0.1) - 2026-11-18
+
+### Other
+
+- update Cargo.toml dependencies
+- update Cargo.lock dependencies
+
 ## [1.0.0](https://github.com/hushink/shaul/releases/tag/shaul-v1.0.0) - 2026-11-18
 
 ### Added
