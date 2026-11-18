@@ -13,3 +13,7 @@ installers = ["shell", "powershell"]
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Only the CLI tag belongs to dist; release-plz owns the library tags.
 tag-namespace = "shaul-cli"
+
+# Pin the actions used by the generated workflow (v7.0.1).
+[dist.github-action-commits]
+"actions/checkout" = "3d3c42e5aac5ba805825da76410c181273ba90b1"

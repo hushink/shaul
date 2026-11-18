@@ -23,5 +23,9 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    # This action is referenced by toolchain version (e.g. @1.92.0), which
+    # Dependabot mistakes for an action release. The MSRV is managed manually.
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"
     commit-message:
       prefix: "chore(ci)"
