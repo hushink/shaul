@@ -145,6 +145,14 @@ pub fn redacted_task(task: &shaul::Task) -> shaul::Task {
         task.link = link;
     }
     redact_request(&mut task.options.request);
+    for file in &mut task.files {
+        if let Some(url) = &mut file.url
+            && matches!(url.scheme(), "http" | "https")
+        {
+            url.set_query(None);
+            url.set_fragment(None);
+        }
+    }
     if let Some(resource) = &mut task.resource {
         redact_request(&mut resource.request);
         for value in resource.metadata.values_mut() {
