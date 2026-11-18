@@ -161,7 +161,7 @@ async fn main() -> shaul::Result<()> {
 dir = "."
 connections = 8
 per_host = 16
-global = 64
+global = 64             # 预留；尚未强制执行
 segment_size = 8388608
 resume = true
 verify = "auto"        # auto | require | disabled

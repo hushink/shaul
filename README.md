@@ -171,7 +171,7 @@ overrides it. `shaul config init|show|get|set|edit` manage the file.
 dir = "."
 connections = 8
 per_host = 16
-global = 64
+global = 64             # reserved; not enforced yet
 segment_size = 8388608
 resume = true
 verify = "auto"        # auto | require | disabled

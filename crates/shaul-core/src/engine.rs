@@ -453,13 +453,17 @@ impl DownloadEngine {
 
     /// Marks a task cancelled and cancels its in-flight transfer, if any. A
     /// cancelled task is not restarted by [`DownloadEngine::run_task`]; use
-    /// [`DownloadEngine::resume`] to move it back to pending.
+    /// [`DownloadEngine::resume`] to move it back to pending. Cancelling an
+    /// already completed task is an error.
     pub async fn cancel(&self, id: TaskId) -> Result<Task> {
         let task = self
             .store
             .update(
                 id,
                 Box::new(|task| {
+                    if task.state == TaskState::Completed {
+                        return Err(Error::InvalidState("task already completed".to_string()));
+                    }
                     task.state = TaskState::Cancelled;
                     Ok(())
                 }),

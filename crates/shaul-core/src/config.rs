@@ -43,7 +43,8 @@ pub struct DownloadConfig {
     pub connections: usize,
     /// Maximum number of idle connections kept per host in the HTTP pool.
     pub per_host: usize,
-    /// Maximum total number of concurrent connections across all tasks.
+    /// Global connection budget. The HTTP backend currently enforces per-task
+    /// `connections`; this value is reserved for a scheduler-wide limit.
     pub global: usize,
     /// Size in bytes of each ranged HTTP segment.
     pub segment_size: u64,
@@ -168,7 +169,8 @@ pub struct ResolvedOptions {
     pub connections: usize,
     /// Effective HTTP idle-connection limit per host.
     pub per_host: usize,
-    /// Effective global connection budget.
+    /// Global connection budget carried from configuration; currently reserved
+    /// for a scheduler-wide limit.
     pub global: usize,
     /// Byte size of each ranged HTTP segment.
     pub segment_size: u64,

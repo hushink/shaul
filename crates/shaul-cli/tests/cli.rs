@@ -260,6 +260,17 @@ fn run_worker_processes_a_queued_task() {
     let output = run(shaul().args(["--config", config, "--json", "status", &id]));
     assert_eq!(json_stdout(&output)["state"], "completed");
     assert_eq!(fs::read(&output_path).unwrap(), data);
+
+    let output = shaul()
+        .args(["--config", config, "cancel", &id])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("already completed"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
