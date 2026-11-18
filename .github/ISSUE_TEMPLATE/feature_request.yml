@@ -1,0 +1,48 @@
+name: Feature request
+description: Suggest a capability or improvement for shaul
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the solution. Features that are already
+        listed as "not planned" in the README roadmap still need a use case.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what is missing or awkward today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: CLI flags, config keys, library API, or backend behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Direct HTTP
+        - Hugging Face / ModelScope
+        - BitTorrent
+        - CLI / queue / config
+        - Library API / extension points
+        - Packaging / platforms
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I checked the roadmap and existing issues.
+          required: true

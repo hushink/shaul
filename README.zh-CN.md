@@ -1,12 +1,18 @@
 # shaul
 
+[![CI](https://github.com/hushink/shaul/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square)](https://github.com/hushink/shaul/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/shaul.svg?style=flat-square)](https://crates.io/crates/shaul)
+[![docs.rs](https://docs.rs/shaul/badge.svg?style=flat-square)](https://docs.rs/shaul)
+[![MSRV](https://img.shields.io/badge/MSRV-1.92-blue?style=flat-square)](https://github.com/hushink/shaul/blob/main/Cargo.toml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+
 可续传、可插拔的 Rust 下载引擎 —— 同时提供库与 CLI。
 
 [English](README.md)
 
-> **状态：0.3.0** —— 已实现直链 HTTP、Hugging Face、ModelScope 与
-> BitTorrent（磁力链、裸 info hash、本地 `.torrent` 文件）。在 1.0 API 冻结
-> 之前，crate 不会发布到 crates.io。
+> **状态：1.0.0** —— 直链 HTTP、Hugging Face、ModelScope 与 BitTorrent
+> 已实现并发布到 [crates.io](https://crates.io/crates/shaul)。1.x 稳定性
+> 规则见 [API 审计](docs/api-audit.md)。
 
 ## 为什么做 shaul
 
@@ -67,7 +73,9 @@ Workspace crate：
 ### CLI
 
 ```console
-$ cargo install --path crates/shaul-cli
+$ cargo install shaul-cli
+# 预编译包与安装脚本：shaul-cli 的 GitHub Releases
+# （从下一个 CLI 版本起提供）
 
 # 直链
 $ shaul download https://example.com/model.bin \

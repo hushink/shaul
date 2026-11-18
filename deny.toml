@@ -1,0 +1,45 @@
+[advisories]
+# Add explicit RUSTSEC IDs here only with a documented rationale.
+ignore = [
+    # librqbit-utp 0.7.0 pins ringbuf ^0.4.7; 0.5.2 contains the fix but is
+    # semver-incompatible. The vulnerable path requires a panic in a buffered
+    # packet's Drop; shaul uses librqbit's TCP/uTP stack without custom drops.
+    # Remove this once librqbit-utp updates ringbuf.
+    { id = "RUSTSEC-2026-0293", reason = "librqbit-utp pins ringbuf 0.4; unreachable Drop-panic path in shaul's usage; tracking upstream" },
+    # chrono is pulled in by librqbit-dht. It is unmaintained, not vulnerable;
+    # there is no safe upgrade until librqbit migrates.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained chrono via librqbit-dht; no safe upgrade until upstream migrates" },
+]
+
+[licenses]
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

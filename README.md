@@ -1,12 +1,18 @@
 # shaul
 
+[![CI](https://github.com/hushink/shaul/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square)](https://github.com/hushink/shaul/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/shaul.svg?style=flat-square)](https://crates.io/crates/shaul)
+[![docs.rs](https://docs.rs/shaul/badge.svg?style=flat-square)](https://docs.rs/shaul)
+[![MSRV](https://img.shields.io/badge/MSRV-1.92-blue?style=flat-square)](https://github.com/hushink/shaul/blob/main/Cargo.toml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
+
 A resumable, pluggable download engine for Rust — library and CLI.
 
 [简体中文](README.zh-CN.md)
 
-> **Status: 0.3.0** — direct HTTP, Hugging Face, ModelScope and BitTorrent
-> (magnet, bare info hash and local `.torrent` files) are implemented. The
-> crates are intentionally not published to crates.io until the 1.0 API freeze.
+> **Status: 1.0.0** — HTTP, Hugging Face, ModelScope and BitTorrent are
+> implemented and published to [crates.io](https://crates.io/crates/shaul).
+> See the [API audit](docs/api-audit.md) for the 1.x stability policy.
 
 ## Why shaul
 
@@ -75,7 +81,9 @@ through to downloading an HTML page. See [GLOSSARY.md](GLOSSARY.md) and
 ### CLI
 
 ```console
-$ cargo install --path crates/shaul-cli
+$ cargo install shaul-cli
+# Prebuilt archives and installers: shaul-cli GitHub releases
+# (available from the next CLI release onward)
 
 # Direct link
 $ shaul download https://example.com/model.bin \

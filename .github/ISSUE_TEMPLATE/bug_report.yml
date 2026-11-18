@@ -1,0 +1,79 @@
+name: Bug report
+description: Report a reproducible problem with shaul
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Remove tokens, cookies and private URLs from
+        all logs before submitting. Security issues must use the private
+        advisory link instead of this form.
+  - type: input
+    id: version
+    attributes:
+      label: shaul version
+      description: Output of `shaul --version`, or the crate version and commit.
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other / cross-compiled
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - Direct HTTP
+        - Hugging Face
+        - ModelScope
+        - BitTorrent
+        - CLI / queue / config
+        - Library API
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or API call
+      description: Minimal command, link type, and relevant config (redacted).
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the full error message and whether it is reproducible.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Redact tokens, cookies and private URLs.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I am using the latest 1.x release.
+          required: true
+        - label: I removed credentials and private URLs from logs.
+          required: true
