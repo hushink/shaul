@@ -17,41 +17,66 @@ use crate::task::{TaskOptions, VerifyMode};
 #[derive(Default)]
 #[non_exhaustive]
 pub struct Config {
+    /// Download behavior and defaults.
     pub download: DownloadConfig,
+    /// HTTP timeout, retry and user-agent settings.
     pub network: NetworkConfig,
+    /// Hub provider cache and endpoint settings.
     pub hub: HubConfig,
+    /// BitTorrent backend settings.
     pub bt: BtConfig,
+    /// Directory for task sidecars; defaults to the platform data directory.
     pub state_dir: Option<PathBuf>,
+    /// Default headers applied to every request; values may use `${env:NAME}`
+    /// placeholders.
     pub headers: BTreeMap<String, String>,
 }
 
+/// Defaults for how files are downloaded, resumed, verified and extracted.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct DownloadConfig {
+    /// Default destination directory.
     pub dir: PathBuf,
+    /// Default number of parallel connections per task.
     pub connections: usize,
+    /// Maximum number of idle connections kept per host in the HTTP pool.
     pub per_host: usize,
+    /// Maximum total number of concurrent connections across all tasks.
     pub global: usize,
+    /// Size in bytes of each ranged HTTP segment.
     pub segment_size: u64,
+    /// Resume interrupted downloads from checkpoints by default.
     pub resume: bool,
+    /// Default checksum verification policy.
     pub verify: VerifyMode,
+    /// Extract archives after download by default.
     pub extract: bool,
+    /// Default extraction directory; `None` extracts under the destination.
     pub extract_dir: Option<PathBuf>,
+    /// Delete archives after successful extraction by default.
     pub delete_archive: bool,
 }
 
+/// HTTP networking defaults: timeouts, retries, user agent and auth policy.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct NetworkConfig {
+    /// Total request timeout in seconds.
     pub timeout_secs: u64,
+    /// Connection timeout in seconds.
     pub connect_timeout_secs: u64,
+    /// Number of retry attempts for failed transfers.
     pub retries: u32,
+    /// `User-Agent` header sent with every request.
     pub user_agent: String,
+    /// Allow authentication headers to follow cross-origin redirects.
     pub allow_cross_origin_auth: bool,
 }
 
+/// Hugging Face and ModelScope cache and endpoint settings.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 #[derive(Default)]
@@ -60,20 +85,30 @@ pub struct HubConfig {
     /// Populate a provider cache while downloading. HF uses the Python
     /// compatible `models--org--repo` layout.
     pub use_cache: bool,
+    /// Override for the Hugging Face cache root.
     pub hf_cache: Option<PathBuf>,
+    /// Override for the ModelScope cache root.
     pub modelscope_cache: Option<PathBuf>,
+    /// Override for the Hugging Face endpoint; defaults to the public site.
     pub hf_endpoint: Option<String>,
+    /// Override for the ModelScope endpoint; defaults to the public site.
     pub modelscope_endpoint: Option<String>,
 }
 
+/// BitTorrent backend settings.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct BtConfig {
+    /// Enable DHT peer discovery.
     pub dht: bool,
+    /// Use the trackers announced by the torrent.
     pub trackers: bool,
+    /// Listen for incoming peer connections.
     pub listen: bool,
+    /// Persist session state and fastresume data under the state directory.
     pub persistence: bool,
+    /// Optional limit on connected peers.
     pub peer_limit: Option<usize>,
     /// `ip:port` endpoints used directly as initial peers.
     pub initial_peers: Vec<String>,
@@ -125,41 +160,67 @@ impl Default for NetworkConfig {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ResolvedOptions {
+    /// Root directory for the task's output files.
     pub destination: PathBuf,
+    /// Explicit output path, if one was requested.
     pub output: Option<PathBuf>,
+    /// Effective connection count for this task.
     pub connections: usize,
+    /// Effective HTTP idle-connection limit per host.
     pub per_host: usize,
+    /// Effective global connection budget.
     pub global: usize,
+    /// Byte size of each ranged HTTP segment.
     pub segment_size: u64,
+    /// Whether resume is enabled for this task.
     pub resume: bool,
+    /// Effective checksum verification policy.
     pub verify: VerifyMode,
+    /// Expected checksum supplied by the task, if any.
     pub checksum: Option<crate::checksum::Checksum>,
+    /// Whether archives should be extracted after download.
     pub extract: bool,
+    /// Directory to extract archives into; `None` means the destination.
     pub extract_dir: Option<PathBuf>,
+    /// Whether to delete the archive after extraction.
     pub delete_archive: bool,
+    /// Whether to populate the provider cache for Hub tasks.
     pub cache: bool,
+    /// Include glob filters passed from the task.
     pub include: Vec<String>,
+    /// Exclude glob filters passed from the task.
     pub exclude: Vec<String>,
+    /// Merged request options: config headers plus task overrides.
     pub request: RequestOptions,
+    /// Whether existing destination files are replaced.
     pub overwrite: bool,
+    /// Whether conflicting destinations are renamed.
     pub rename_on_conflict: bool,
+    /// Effective retry count for failed transfers.
     pub retries: u32,
+    /// Effective total request timeout.
     pub timeout: Duration,
+    /// Effective connection timeout.
     pub connect_timeout: Duration,
+    /// Effective `User-Agent` header.
     pub user_agent: String,
 }
 
 impl Config {
+    /// Platform default config file path (`config.toml` in the user config
+    /// directory).
     pub fn default_config_path() -> Result<PathBuf> {
         let dirs = project_dirs()?;
         Ok(dirs.config_dir().join("config.toml"))
     }
 
+    /// Platform default directory for task sidecars.
     pub fn default_state_dir() -> Result<PathBuf> {
         let dirs = project_dirs()?;
         Ok(dirs.data_dir().join("tasks"))
     }
 
+    /// Configured state directory, or the platform default.
     pub fn state_dir(&self) -> Result<PathBuf> {
         match &self.state_dir {
             Some(dir) => Ok(dir.clone()),
@@ -167,6 +228,8 @@ impl Config {
         }
     }
 
+    /// Resolved Hugging Face cache root: configured override or
+    /// `~/.cache/huggingface/hub`.
     pub fn hf_cache_dir(&self) -> Result<PathBuf> {
         if let Some(dir) = &self.hub.hf_cache {
             return Ok(dir.clone());
@@ -180,6 +243,8 @@ impl Config {
             .join("hub"))
     }
 
+    /// Resolved ModelScope cache root: configured override or the platform
+    /// cache directory.
     pub fn modelscope_cache_dir(&self) -> Result<PathBuf> {
         if let Some(dir) = &self.hub.modelscope_cache {
             return Ok(dir.clone());
@@ -187,6 +252,7 @@ impl Config {
         Ok(project_dirs()?.cache_dir().join("modelscope"))
     }
 
+    /// Configured Hugging Face endpoint or the public default.
     pub fn hf_endpoint(&self) -> String {
         self.hub
             .hf_endpoint
@@ -194,6 +260,7 @@ impl Config {
             .unwrap_or_else(|| "https://huggingface.co".to_string())
     }
 
+    /// Configured ModelScope endpoint or the public default.
     pub fn modelscope_endpoint(&self) -> String {
         self.hub
             .modelscope_endpoint
@@ -241,6 +308,7 @@ impl Config {
         Ok(config)
     }
 
+    /// Serialize the config as TOML, creating parent directories as needed.
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -252,6 +320,8 @@ impl Config {
         Ok(())
     }
 
+    /// Apply `SHAUL_*` and provider environment variables on top of the
+    /// current values.
     pub fn apply_env(&mut self) -> Result<()> {
         if let Some(value) = env("SHAUL_DIR") {
             self.download.dir = PathBuf::from(value);
@@ -359,6 +429,7 @@ impl Config {
         Ok(())
     }
 
+    /// Parse the configured default headers into validated [`Header`] values.
     pub fn header_defaults(&self) -> Result<Vec<Header>> {
         self.headers
             .iter()
@@ -366,6 +437,8 @@ impl Config {
             .collect()
     }
 
+    /// Combine config defaults with per-task options into fully resolved
+    /// settings.
     pub fn resolve(&self, destination: &Path, options: &TaskOptions) -> Result<ResolvedOptions> {
         let mut request = options.request.merged(&self.header_defaults()?);
         request.allow_cross_origin_auth |= self.network.allow_cross_origin_auth;
@@ -403,6 +476,7 @@ impl Config {
         })
     }
 
+    /// Read a config value by its dotted key, as used by `config get`.
     pub fn get_value(&self, key: &str) -> Result<String> {
         let value = match key {
             "download.dir" => self.download.dir.display().to_string(),
@@ -454,6 +528,7 @@ impl Config {
         Ok(value)
     }
 
+    /// Set a config value by its dotted key, as used by `config set`.
     pub fn set_value(&mut self, key: &str, value: &str) -> Result<()> {
         match key {
             "download.dir" => self.download.dir = PathBuf::from(value),
@@ -579,6 +654,7 @@ fn parse_value<T: FromStr>(value: &str) -> Result<T> {
         .map_err(|_| Error::Config(format!("invalid value: {value}")))
 }
 
+/// Parse a verify mode name or one of its boolean-like aliases.
 pub fn parse_verify_mode(value: &str) -> Result<VerifyMode> {
     match value.trim().to_ascii_lowercase().as_str() {
         "auto" => Ok(VerifyMode::Auto),
@@ -588,6 +664,7 @@ pub fn parse_verify_mode(value: &str) -> Result<VerifyMode> {
     }
 }
 
+/// Canonical string form of a verify mode.
 pub fn verify_mode_str(mode: VerifyMode) -> &'static str {
     match mode {
         VerifyMode::Auto => "auto",

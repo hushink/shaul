@@ -11,6 +11,7 @@ use crate::error::{Error, Result};
 pub struct Link(String);
 
 impl Link {
+    /// Trims and validates raw input, rejecting empty links.
     pub fn new(raw: impl Into<String>) -> Result<Self> {
         let raw = raw.into();
         let trimmed = raw.trim();
@@ -20,6 +21,7 @@ impl Link {
         Ok(Self(trimmed.to_string()))
     }
 
+    /// Borrows the stored link text.
     pub fn as_str(&self) -> &str {
         &self.0
     }

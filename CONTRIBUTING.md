@@ -13,8 +13,12 @@ Thanks for helping improve shaul.
 $ cargo fmt --all --check
 $ cargo clippy --workspace --all-targets --all-features -- -D warnings
 $ cargo test --workspace --all-features
+$ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 $ cargo deny check
 ```
+
+All public items must be documented; every crate enables
+`#![warn(missing_docs)]`.
 
 The test suite is self-contained: it spins up local HTTP servers and a local
 BitTorrent peer. Do not add tests that require external network access.

@@ -20,22 +20,26 @@ struct HubSpec {
     implicit_include: Option<String>,
 }
 
+/// Parser for Hugging Face repository, file and HTTPS links.
 pub struct HuggingFaceParser {
     client: Arc<HubClient>,
 }
 
 impl HuggingFaceParser {
+    /// Create a parser using the supplied Hub client.
     pub fn new(client: Arc<HubClient>) -> Self {
         Self { client }
     }
 }
 
 impl ModelScopeParser {
+    /// Create a parser using the supplied Hub client.
     pub fn new(client: Arc<HubClient>) -> Self {
         Self { client }
     }
 }
 
+/// Parser for ModelScope repository and HTTPS links.
 pub struct ModelScopeParser {
     client: Arc<HubClient>,
 }

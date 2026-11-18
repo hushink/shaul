@@ -1,4 +1,7 @@
+//! Command-line interface for shaul.
+
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod args;
 mod render;

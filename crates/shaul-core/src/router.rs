@@ -6,10 +6,14 @@ use crate::link::Link;
 use crate::parser::{LinkParser, ParseOptions, ParserRegistry};
 use crate::resource::Resource;
 
+/// A parsed resource together with the parser and backend selected for it.
 #[derive(Clone)]
 pub struct RoutedResource {
+    /// The protocol-agnostic resource produced by the parser.
     pub resource: Resource,
+    /// The first registered backend whose `supports` accepted the resource.
     pub backend: Arc<dyn DownloadBackend>,
+    /// Name of the parser that produced the resource.
     pub parser: &'static str,
 }
 
@@ -21,14 +25,19 @@ pub struct Router {
 }
 
 impl Router {
+    /// Creates a router from parser and backend lists. Both lists are ordered:
+    /// the first parser that claims a link and the first backend that supports
+    /// the resulting resource win.
     pub fn new(parsers: ParserRegistry, backends: Vec<Arc<dyn DownloadBackend>>) -> Self {
         Self { parsers, backends }
     }
 
+    /// Returns the parser registry used by [`Router::resolve`].
     pub fn parsers(&self) -> &ParserRegistry {
         &self.parsers
     }
 
+    /// Returns the backends in priority order.
     pub fn backends(&self) -> &[Arc<dyn DownloadBackend>] {
         &self.backends
     }
@@ -52,6 +61,8 @@ impl Router {
         Err(Error::NoParser(link.to_string()))
     }
 
+    /// Returns the first registered backend that supports `resource`, or
+    /// [`Error::NoBackend`] when none does.
     pub fn backend_for(&self, resource: &Resource) -> Result<Arc<dyn DownloadBackend>> {
         self.backends
             .iter()
@@ -61,10 +72,14 @@ impl Router {
     }
 }
 
+/// Erases a concrete parser into the trait object accepted by
+/// [`ParserRegistry::register`](crate::parser::ParserRegistry::register).
 pub fn parser_arc(parser: impl LinkParser + 'static) -> Arc<dyn LinkParser> {
     Arc::new(parser)
 }
 
+/// Erases a concrete backend into the trait object accepted by
+/// [`Router::new`].
 pub fn backend_arc(backend: impl DownloadBackend + 'static) -> Arc<dyn DownloadBackend> {
     Arc::new(backend)
 }

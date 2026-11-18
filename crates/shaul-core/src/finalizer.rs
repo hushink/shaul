@@ -11,23 +11,35 @@ use crate::error::{Error, Result};
 use crate::event::{EventKind, EventSink};
 use crate::task::{TaskId, VerifyMode};
 
+/// Outcome accumulated by a finalizer or by a whole pipeline.
 #[derive(Clone, Debug, Default)]
 pub struct FinalizeResult {
+    /// Whether the file's checksum was verified.
     pub checksum_verified: bool,
+    /// Directory the archive was extracted into, if extraction ran.
     pub extracted_to: Option<PathBuf>,
 }
 
+/// Read-only inputs available to each finalizer.
 pub struct FinalizeContext<'a> {
+    /// Task that produced the file.
     pub task_id: TaskId,
+    /// Directory the task was asked to download into.
     pub destination: &'a Path,
+    /// The completed file and how it was written.
     pub file: &'a FileOutcome,
+    /// Resolved options controlling verification and extraction.
     pub options: &'a ResolvedOptions,
+    /// Sink for verification, extraction and warning events.
     pub events: &'a EventSink,
 }
 
+/// A single post-download step, run once all bytes have been written.
 #[async_trait]
 pub trait Finalizer: Send + Sync {
+    /// Stable name used in diagnostics.
     fn name(&self) -> &'static str;
+    /// Runs this step for the completed file.
     async fn finalize(&self, context: &FinalizeContext<'_>) -> Result<FinalizeResult>;
 }
 
@@ -46,10 +58,13 @@ impl Default for FinalizerPipeline {
 }
 
 impl FinalizerPipeline {
+    /// Builds a pipeline that runs the given finalizers in order.
     pub fn new(finalizers: Vec<Arc<dyn Finalizer>>) -> Self {
         Self { finalizers }
     }
 
+    /// Runs every finalizer in order and merges their results, stopping at the
+    /// first error.
     pub async fn run(&self, context: &FinalizeContext<'_>) -> Result<FinalizeResult> {
         let mut result = FinalizeResult::default();
         for finalizer in &self.finalizers {
@@ -63,6 +78,8 @@ impl FinalizerPipeline {
     }
 }
 
+/// Verifies the downloaded file against the expected checksum, honoring
+/// [`VerifyMode`].
 pub struct VerifyFinalizer;
 
 #[async_trait]
@@ -119,6 +136,7 @@ impl Finalizer for VerifyFinalizer {
     }
 }
 
+/// Extracts supported archives according to the resolved extraction options.
 pub struct ExtractFinalizer;
 
 #[async_trait]

@@ -94,6 +94,11 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
 7. **跨平台 CI**
    - `.github/workflows/ci.yml` 覆盖 Linux/Windows/macOS 测试、rustfmt、
      clippy、rustdoc、feature 组合、release build 与 MSRV 1.92。
+8. **文档完整性**
+   - 所有 crate 启用 `#![warn(missing_docs)]`；CI 的 `rustdoc -D warnings`
+     会阻止新增未文档化的公开 API。
+   - 扩展指南、FAQ 与可编译的 `custom_parser` 示例见
+     [docs/extending.md](extending.md) 和 [docs/faq.md](faq.md)。
 
 ## 4. semver 规则
 

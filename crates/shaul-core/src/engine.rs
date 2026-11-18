@@ -24,6 +24,9 @@ use crate::task::{
     FileItem, FileState, Task, TaskId, TaskOptions, TaskResume, TaskState, part_path,
 };
 
+/// Coordinates the task lifecycle: resolving links, adding and running tasks,
+/// pausing, resuming, cancelling and requeueing tasks left behind by a crashed
+/// process.
 pub struct DownloadEngine {
     router: Arc<Router>,
     store: Arc<dyn TaskStore>,
@@ -34,6 +37,9 @@ pub struct DownloadEngine {
 }
 
 impl DownloadEngine {
+    /// Creates an engine over the given router, task store and configuration.
+    /// Subscribe with [`DownloadEngine::subscribe`] before adding tasks to
+    /// observe their events.
     pub fn new(router: Arc<Router>, store: Arc<dyn TaskStore>, config: Config) -> Self {
         let (events, _) = EventSink::channel(4096);
         Self {
@@ -46,26 +52,37 @@ impl DownloadEngine {
         }
     }
 
+    /// Subscribes to the engine's event stream. Only events emitted after the
+    /// call are received.
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<crate::event::DownloadEvent> {
         self.events.subscribe()
     }
 
+    /// Returns the configuration used to resolve task options.
     pub fn config(&self) -> &Config {
         &self.config
     }
 
+    /// Returns the event sink backends use to report progress.
     pub fn events(&self) -> &EventSink {
         &self.events
     }
 
+    /// Returns the task store backing the engine.
     pub fn store(&self) -> &Arc<dyn TaskStore> {
         &self.store
     }
 
+    /// Parses `link` and selects a backend without creating a task.
     pub async fn resolve(&self, link: &Link, options: &ParseOptions) -> Result<RoutedResource> {
         self.router.resolve(link, options).await
     }
 
+    /// Resolves `link` and persists a new pending task.
+    ///
+    /// Unless [`TaskOptions::force`] is set, an active (pending, running or
+    /// paused) task with the same canonical link and destination is returned
+    /// instead of creating a duplicate.
     pub async fn add(
         &self,
         link: Link,
@@ -100,10 +117,17 @@ impl DownloadEngine {
         Ok(task)
     }
 
+    /// Runs a task to a terminal state without an external cancellation token.
     pub async fn run_task(&self, id: TaskId) -> Result<Task> {
         self.run_task_with_cancel(id, None).await
     }
 
+    /// Runs a task, optionally linked to an external cancellation token.
+    ///
+    /// A task that is already completed is returned unchanged, while running a
+    /// cancelled task is an error. A pause or cancel requested through the
+    /// store (for example by another process) is observed while the transfer
+    /// runs and stops it.
     pub async fn run_task_with_cancel(
         &self,
         id: TaskId,
@@ -356,6 +380,9 @@ impl DownloadEngine {
         }
     }
 
+    /// Runs every task currently in `Pending` state, at most `jobs` at a time
+    /// (`jobs` is clamped to at least one). All tasks share `cancel`; tasks
+    /// whose run fails are omitted from the returned list.
     pub async fn run_pending(&self, jobs: usize, cancel: CancellationToken) -> Result<Vec<Task>> {
         let tasks = self.store.list().await?;
         let ids: Vec<TaskId> = tasks
@@ -400,6 +427,9 @@ impl DownloadEngine {
         Ok(requeued)
     }
 
+    /// Marks a task paused and cancels its in-flight transfer, if any. It can
+    /// later be restarted with [`DownloadEngine::resume`] or `run_task`;
+    /// pausing a completed task is an error.
     pub async fn pause(&self, id: TaskId) -> Result<Task> {
         let task = self
             .store
@@ -421,6 +451,9 @@ impl DownloadEngine {
         Ok(task)
     }
 
+    /// Marks a task cancelled and cancels its in-flight transfer, if any. A
+    /// cancelled task is not restarted by [`DownloadEngine::run_task`]; use
+    /// [`DownloadEngine::resume`] to move it back to pending.
     pub async fn cancel(&self, id: TaskId) -> Result<Task> {
         let task = self
             .store
@@ -439,6 +472,9 @@ impl DownloadEngine {
         Ok(task)
     }
 
+    /// Moves a task back to `Pending` and clears its error so the next run
+    /// retries it, reusing any saved resume manifest. Resuming an already
+    /// completed task is an error.
     pub async fn resume(&self, id: TaskId) -> Result<Task> {
         let task = self
             .store
@@ -461,10 +497,12 @@ impl DownloadEngine {
         Ok(task)
     }
 
+    /// Returns all tasks known to the store, oldest first.
     pub async fn list(&self) -> Result<Vec<Task>> {
         self.store.list().await
     }
 
+    /// Loads a single task by id.
     pub async fn status(&self, id: TaskId) -> Result<Task> {
         self.store.load(id).await
     }

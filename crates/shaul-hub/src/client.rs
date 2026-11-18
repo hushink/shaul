@@ -18,12 +18,16 @@ use url::Url;
 pub struct HubEntry {
     /// Repository-relative path.
     pub path: String,
+    /// File size reported by the provider, when available.
     pub size: Option<u64>,
+    /// Provider checksum (for example an LFS SHA-256), when available.
     pub checksum: Option<Checksum>,
     /// Cache hints such as `hub.blob`.
     pub metadata: BTreeMap<String, String>,
 }
 
+/// HTTP client, endpoint and cache configuration shared by Hub parsers and
+/// the Hub backend.
 #[derive(Clone)]
 pub struct HubClient {
     client: Client,
@@ -36,6 +40,7 @@ pub struct HubClient {
 }
 
 impl HubClient {
+    /// Build a client from global configuration.
     pub fn new(config: &Config) -> Result<Self> {
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::limited(10))
@@ -56,18 +61,22 @@ impl HubClient {
         })
     }
 
+    /// Configured Hugging Face endpoint.
     pub fn hf_endpoint(&self) -> &Url {
         &self.hf_endpoint
     }
 
+    /// Configured ModelScope endpoint.
     pub fn ms_endpoint(&self) -> &Url {
         &self.ms_endpoint
     }
 
+    /// Resolved Hugging Face cache root.
     pub fn hf_cache(&self) -> &std::path::Path {
         &self.hf_cache
     }
 
+    /// Resolved ModelScope cache root.
     pub fn ms_cache(&self) -> &std::path::Path {
         &self.ms_cache
     }
@@ -122,6 +131,7 @@ impl HubClient {
         Ok(options)
     }
 
+    /// Build a Hugging Face `/resolve` URL for a repository file.
     pub fn hf_resolve_url(
         &self,
         repo: &str,
@@ -153,6 +163,7 @@ impl HubClient {
         Ok(url)
     }
 
+    /// Build a ModelScope file download URL.
     pub fn modelscope_download_url(
         &self,
         repo: &str,
@@ -184,6 +195,7 @@ impl HubClient {
         Ok(url)
     }
 
+    /// Cache directory for a provider repository.
     pub fn cache_repo_dir(
         &self,
         provider: HubProvider,
@@ -208,6 +220,7 @@ impl HubClient {
         root.join(format!("{prefix}--{repo}"))
     }
 
+    /// List files in a Hugging Face repository revision.
     pub async fn hf_tree(
         &self,
         repo: &str,
@@ -273,6 +286,7 @@ impl HubClient {
         Ok(entries)
     }
 
+    /// List files in a ModelScope repository revision.
     pub async fn modelscope_files(
         &self,
         repo: &str,

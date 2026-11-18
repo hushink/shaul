@@ -12,6 +12,7 @@ use shaul_http::HttpBackend;
 use crate::cache;
 use crate::client::HubClient;
 
+/// Backend for Hugging Face and ModelScope repository snapshots.
 #[derive(Clone)]
 pub struct HubBackend {
     client: Arc<HubClient>,
@@ -19,6 +20,8 @@ pub struct HubBackend {
 }
 
 impl HubBackend {
+    /// Build a Hub backend, reusing the shared segmented HTTP backend for file
+    /// transfers.
     pub fn new(client: Arc<HubClient>, config: &Config) -> Result<Self> {
         Ok(Self {
             client,

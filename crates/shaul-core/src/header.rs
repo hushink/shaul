@@ -8,11 +8,16 @@ use crate::error::{Error, Result};
 /// A validated HTTP header pair that can be persisted in a task sidecar.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Header {
+    /// Header name, trimmed and validated as an HTTP header name.
     pub name: String,
+    /// Header value, trimmed. May contain `${env:NAME}` placeholders that
+    /// backends expand when building the request.
     pub value: String,
 }
 
 impl Header {
+    /// Trim and validate the pair, rejecting malformed HTTP header names and
+    /// values with [`Error::Config`].
     pub fn new(name: impl AsRef<str>, value: impl AsRef<str>) -> Result<Self> {
         let name = name.as_ref().trim().to_string();
         let value = value.as_ref().trim().to_string();
@@ -23,6 +28,9 @@ impl Header {
         Ok(Self { name, value })
     }
 
+    /// Whether the header is one of the credential-bearing names
+    /// (`authorization`, `cookie`, `proxy-authorization`, `x-api-key`),
+    /// compared case-insensitively.
     pub fn is_sensitive(&self) -> bool {
         let name = self.name.to_ascii_lowercase();
         matches!(
@@ -31,6 +39,8 @@ impl Header {
         )
     }
 
+    /// Clone the header, replacing the value with `<redacted>` when
+    /// [`is_sensitive`](Self::is_sensitive) is true.
     pub fn redacted(&self) -> Self {
         if self.is_sensitive() {
             Self {
@@ -71,18 +81,32 @@ pub fn expand_env(value: &str) -> Result<String> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Auth {
-    Bearer { token: String },
-    Basic { username: String, password: String },
+    /// Bearer-token authentication.
+    Bearer {
+        /// Token sent as the `Authorization: Bearer` credential.
+        token: String,
+    },
+    /// HTTP Basic authentication.
+    Basic {
+        /// User name for the Basic credentials.
+        username: String,
+        /// Password for the Basic credentials.
+        password: String,
+    },
+    /// An arbitrary header supplied as the credential, for schemes that do
+    /// not fit the variants above.
     Header(Header),
 }
 
 impl Auth {
+    /// Construct a [`Auth::Bearer`] from a token.
     pub fn bearer(token: impl Into<String>) -> Self {
         Self::Bearer {
             token: token.into(),
         }
     }
 
+    /// Construct an [`Auth::Basic`] from a username and password.
     pub fn basic(username: impl Into<String>, password: impl Into<String>) -> Self {
         Self::Basic {
             username: username.into(),
@@ -90,6 +114,8 @@ impl Auth {
         }
     }
 
+    /// Short label naming the scheme without revealing its secret: `bearer`,
+    /// `basic:<username>`, or `header:<name>`.
     pub fn describe(&self) -> String {
         match self {
             Auth::Bearer { .. } => "bearer".to_string(),
@@ -102,15 +128,21 @@ impl Auth {
 /// Per-task request overrides applied by every backend.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestOptions {
+    /// Additional headers applied to every request of the task.
     #[serde(default)]
     pub headers: Vec<Header>,
+    /// Authentication that backends translate into request headers.
     #[serde(default)]
     pub auth: Option<Auth>,
+    /// Whether credential headers may follow redirects to another origin.
+    /// Defaults to `false`, which strips them on cross-origin redirects.
     #[serde(default)]
     pub allow_cross_origin_auth: bool,
 }
 
 impl RequestOptions {
+    /// Whether there is nothing to apply: no headers, no auth, and
+    /// cross-origin auth not enabled.
     pub fn is_empty(&self) -> bool {
         self.headers.is_empty() && self.auth.is_none() && !self.allow_cross_origin_auth
     }

@@ -7,27 +7,41 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 use crate::path::archive_stem;
 
+/// Archive formats recognized by [`detect_archive`] and handled by
+/// [`extract_archive`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ArchiveKind {
+    /// ZIP archive.
     Zip,
+    /// Uncompressed tar archive.
     Tar,
+    /// Gzip-compressed tar archive.
     TarGz,
+    /// Zstandard-compressed tar archive.
     TarZst,
+    /// Single gzip-compressed file.
     Gzip,
+    /// Single zstd-compressed file.
     Zstd,
 }
 
 impl ArchiveKind {
+    /// Returns `true` for formats that wrap one file rather than a directory
+    /// tree.
     pub fn is_single_file(self) -> bool {
         matches!(self, Self::Gzip | Self::Zstd)
     }
 }
 
+/// Summary of an extraction.
 #[derive(Clone, Debug)]
 pub struct ExtractReport {
+    /// Path the archive contents were written to.
     pub target: PathBuf,
+    /// Number of file entries extracted.
     pub files_extracted: u64,
+    /// Non-fatal issues, such as skipped symlinks.
     pub warnings: Vec<String>,
 }
 

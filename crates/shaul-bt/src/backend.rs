@@ -17,6 +17,8 @@ use shaul_core::{
 };
 use tokio::sync::OnceCell;
 
+/// BitTorrent download backend. The librqbit session starts lazily on the
+/// first task; completed torrents are paused and never seeded.
 #[derive(Clone)]
 pub struct BtBackend {
     session: Arc<OnceCell<Arc<Session>>>,
@@ -37,6 +39,7 @@ struct BtOptions {
 }
 
 impl BtBackend {
+    /// Create a backend using the BitTorrent settings from `config`.
     pub fn new(config: &Config) -> Result<Self> {
         let state_dir = config.state_dir()?.join("bt");
         std::fs::create_dir_all(&state_dir)?;

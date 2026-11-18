@@ -9,14 +9,27 @@ use crate::error::{Error, Result};
 use crate::task::{Task, TaskId};
 use crate::util::now_ms;
 
+/// In-place mutation applied by [`TaskStore::update`] while the task is
+/// locked. Returning an error aborts the update without saving.
 pub type TaskUpdate = Box<dyn for<'a> FnOnce(&'a mut Task) -> Result<()> + Send + 'static>;
 
+/// Persistence interface for tasks.
+///
+/// Implementations must make [`TaskStore::update`] atomic with respect to
+/// concurrent writers, including other processes sharing the same state
+/// directory.
 #[async_trait]
 pub trait TaskStore: Send + Sync {
+    /// Inserts or replaces the stored task.
     async fn save(&self, task: &Task) -> Result<()>;
+    /// Loads a task by id, or fails with [`Error::TaskNotFound`] when absent.
     async fn load(&self, id: TaskId) -> Result<Task>;
+    /// Returns all stored tasks ordered by creation time.
     async fn list(&self) -> Result<Vec<Task>>;
+    /// Deletes a task. Deleting a task that does not exist is not an error.
     async fn delete(&self, id: TaskId) -> Result<()>;
+    /// Applies `update` to the stored task under a lock and returns the saved
+    /// result.
     async fn update(&self, id: TaskId, update: TaskUpdate) -> Result<Task>;
 }
 
@@ -28,12 +41,15 @@ pub struct SidecarStore {
 }
 
 impl SidecarStore {
+    /// Creates a store rooted at `root`, creating the directory if it does not
+    /// exist yet.
     pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
         let root = root.into();
         std::fs::create_dir_all(&root)?;
         Ok(Self { root })
     }
 
+    /// Returns the directory holding task sidecars and the store lock file.
     pub fn root(&self) -> &Path {
         &self.root
     }

@@ -10,17 +10,23 @@ use sha2::{Sha256, Sha512};
 
 use crate::error::{Error, Result};
 
+/// Digest algorithms supported for checksum verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum ChecksumAlgorithm {
+    /// SHA-256, 64 hex characters.
     Sha256,
+    /// SHA-512, 128 hex characters.
     Sha512,
+    /// SHA-1, 40 hex characters.
     Sha1,
+    /// MD5, 32 hex characters.
     Md5,
 }
 
 impl ChecksumAlgorithm {
+    /// Length of the digest in hex characters.
     pub fn hex_len(self) -> usize {
         match self {
             Self::Sha256 => 64,
@@ -30,6 +36,7 @@ impl ChecksumAlgorithm {
         }
     }
 
+    /// Lowercase algorithm name as used in checksum strings.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Sha256 => "sha256",
@@ -78,11 +85,14 @@ impl fmt::Display for ChecksumAlgorithm {
 /// An expected content digest, for example `sha256:abc...`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Checksum {
+    /// Algorithm that produced the digest.
     pub algorithm: ChecksumAlgorithm,
+    /// Lowercase hexadecimal digest.
     pub hex: String,
 }
 
 impl Checksum {
+    /// Validates `hex` against `algorithm` and builds a checksum.
     pub fn new(algorithm: ChecksumAlgorithm, hex: impl AsRef<str>) -> Result<Self> {
         let hex = hex.as_ref().trim().trim_matches('"');
         let hex = hex.strip_prefix("0x").unwrap_or(hex).to_ascii_lowercase();
@@ -124,6 +134,8 @@ impl Checksum {
         Self::new(algorithm, value).ok()
     }
 
+    /// Returns whether both checksums use the same algorithm and digest,
+    /// ignoring hex case.
     pub fn matches(&self, actual: &Checksum) -> bool {
         self.algorithm == actual.algorithm && self.hex.eq_ignore_ascii_case(&actual.hex)
     }
@@ -153,6 +165,10 @@ pub async fn compute_file_checksum(
         .map_err(|error| Error::Other(format!("checksum task failed: {error}")))?
 }
 
+/// Compute a file digest on the calling thread.
+///
+/// Use [`compute_file_checksum`] inside async code so the read does not block
+/// the runtime.
 pub fn compute_file_checksum_blocking(
     path: &Path,
     algorithm: ChecksumAlgorithm,

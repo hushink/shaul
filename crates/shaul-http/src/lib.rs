@@ -1,9 +1,12 @@
 //! Direct-link HTTP backend for shaul.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
+/// Segmented direct-link download backend.
 pub mod backend;
 mod filename;
+/// Parser for direct HTTP/HTTPS links.
 pub mod parser;
 
 pub use backend::HttpBackend;

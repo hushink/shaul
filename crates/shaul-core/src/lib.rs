@@ -5,24 +5,44 @@
 //! [`DownloadEngine`] over [`Task`] / [`FileItem`] / segments.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
+/// Archive detection and safe extraction.
 pub mod archive;
+/// Download backend trait plus the request/outcome types exchanged with it.
 pub mod backend;
+/// Blocking facade over the asynchronous engine.
 pub mod blocking;
+/// Checksum algorithms, checksum parsing and file digest computation.
 pub mod checksum;
+/// Configuration files, sections and resolved download options.
 pub mod config;
+/// Asynchronous engine that drives tasks through parsers, backends and
+/// finalizers.
 pub mod engine;
+/// Central error type and result alias.
 pub mod error;
+/// Progress event types and event sinks.
 pub mod event;
+/// Post-download verification and extraction pipeline.
 pub mod finalizer;
+/// Validated HTTP headers, authentication and request options.
 pub mod header;
+/// Raw user input and its validation.
 pub mod link;
+/// Link parser trait, registry and parse options.
 pub mod parser;
+/// File-name sanitization and safe path joining.
 pub mod path;
+/// Byte-range arithmetic used for segmentation and resume.
 pub mod range;
+/// Backend-agnostic descriptions of the resource to download.
 pub mod resource;
+/// Routing of links to parsers and resources to backends.
 pub mod router;
+/// Task persistence traits and the JSON sidecar store.
 pub mod store;
+/// Task, file and resume state bookkeeping.
 pub mod task;
 mod util;
 

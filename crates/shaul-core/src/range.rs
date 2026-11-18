@@ -6,12 +6,14 @@ use crate::error::{Error, Result};
 /// manifests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ByteRange {
+    /// First byte included in the range.
     pub start: u64,
     /// Exclusive.
     pub end: u64,
 }
 
 impl ByteRange {
+    /// Creates a half-open range, rejecting `start >= end`.
     pub fn new(start: u64, end: u64) -> Result<Self> {
         if start >= end {
             return Err(Error::Other(format!("invalid byte range {start}..{end}")));
@@ -19,14 +21,17 @@ impl ByteRange {
         Ok(Self { start, end })
     }
 
+    /// Number of bytes covered by the range.
     pub fn len(&self) -> u64 {
         self.end - self.start
     }
 
+    /// Returns `true` when the range covers no bytes.
     pub fn is_empty(&self) -> bool {
         self.start >= self.end
     }
 
+    /// Returns `true` if `other` lies entirely inside this range.
     pub fn contains(&self, other: &ByteRange) -> bool {
         self.start <= other.start && other.end <= self.end
     }
@@ -74,6 +79,7 @@ pub fn missing_ranges(total: u64, completed: &[ByteRange]) -> Vec<ByteRange> {
     missing
 }
 
+/// Total number of bytes covered, counting overlapping ranges once.
 pub fn completed_bytes(completed: &[ByteRange]) -> u64 {
     merge_ranges(completed.to_vec())
         .iter()

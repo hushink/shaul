@@ -55,12 +55,15 @@ const RESERVED_HEADERS: &[&str] = &[
     "transfer-encoding",
 ];
 
+/// Segmented, resumable HTTP/HTTPS download backend.
 #[derive(Clone)]
 pub struct HttpBackend {
     client: Client,
 }
 
 impl HttpBackend {
+    /// Build a backend using the connection limits and user agent from
+    /// `config`.
     pub fn new(config: &Config) -> Result<Self> {
         let client = Client::builder()
             .redirect(Policy::none())
