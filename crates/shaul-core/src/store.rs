@@ -211,4 +211,21 @@ mod tests {
         assert_eq!(updated.state, TaskState::Paused);
         assert_eq!(store.list().await.unwrap().len(), 1);
     }
+
+    #[tokio::test]
+    async fn listing_skips_corrupt_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SidecarStore::new(dir.path()).unwrap();
+        let task = Task::new(
+            Link::new("https://example.com/file").unwrap(),
+            dir.path().to_path_buf(),
+            TaskOptions::default(),
+        );
+        store.save(&task).await.unwrap();
+        std::fs::write(dir.path().join("corrupt.json"), b"{not valid json").unwrap();
+
+        let tasks = store.list().await.unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, task.id);
+    }
 }

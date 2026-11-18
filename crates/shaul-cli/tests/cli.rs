@@ -2,8 +2,11 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -259,6 +262,57 @@ fn run_worker_processes_a_queued_task() {
     assert_eq!(fs::read(&output_path).unwrap(), data);
 }
 
+#[test]
+fn killed_worker_resumes_from_checkpoint() {
+    let data: Vec<u8> = (0..512 * 1024).map(|index| (index % 241) as u8).collect();
+    let (url, requests, release_full) = spawn_slow_file_server(data.clone());
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let output_path = dir.path().join("resumed.bin");
+    let config = path.to_str().unwrap();
+
+    run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "add",
+        &url,
+        "--output",
+        output_path.to_str().unwrap(),
+    ]));
+
+    let mut child = shaul()
+        .args(["--config", config, "run", "--once"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    wait_until(
+        || requests.load(Ordering::SeqCst) > 0,
+        "worker did not reach the test server",
+    );
+    thread::sleep(Duration::from_millis(300));
+    child.kill().unwrap();
+    let _ = child.wait();
+
+    // Let the next request receive the complete body. The stale Running task is
+    // requeued by `run --once` on the next worker start.
+    release_full.store(true, Ordering::SeqCst);
+    run(shaul().args(["--config", config, "run", "--once"]));
+
+    assert_eq!(fs::read(&output_path).unwrap(), data);
+}
+
+fn wait_until(mut predicate: impl FnMut() -> bool, message: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !predicate() {
+        assert!(Instant::now() < deadline, "{message}");
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Minimal HTTP/1.1 server that ignores Range and always returns the full body.
 fn spawn_file_server(data: Vec<u8>) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -285,4 +339,49 @@ fn spawn_file_server(data: Vec<u8>) -> (String, thread::JoinHandle<()>) {
         }
     });
     (format!("http://{address}/file.bin"), handle)
+}
+
+/// Sends half of the body and stalls until `release_full` is set, then serves
+/// complete responses. Used to simulate a worker killed mid-transfer.
+fn spawn_slow_file_server(data: Vec<u8>) -> (String, Arc<AtomicUsize>, Arc<AtomicBool>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let release_full = Arc::new(AtomicBool::new(false));
+    let seen = requests.clone();
+    let release = release_full.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            let data = data.clone();
+            let seen = seen.clone();
+            let release = release.clone();
+            thread::spawn(move || {
+                let mut request = [0_u8; 16 * 1024];
+                let _ = stream.read(&mut request);
+                seen.fetch_add(1, Ordering::SeqCst);
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\n\
+                     Content-Length: {}\r\n\
+                     Content-Type: application/octet-stream\r\n\
+                     Content-Disposition: attachment; filename=\"file.bin\"\r\n\
+                     Connection: close\r\n\
+                     \r\n",
+                    data.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                if release.load(Ordering::SeqCst) {
+                    let _ = stream.write_all(&data);
+                    let _ = stream.flush();
+                } else {
+                    let _ = stream.write_all(&data[..data.len() / 2]);
+                    let _ = stream.flush();
+                    thread::sleep(Duration::from_secs(30));
+                }
+            });
+        }
+    });
+    (format!("http://{address}/file.bin"), requests, release_full)
 }
