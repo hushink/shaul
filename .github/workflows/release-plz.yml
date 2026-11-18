@@ -24,12 +24,24 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      # Bootstrap only: new crates must be published once with an API token.
+      # Once all crates exist and trusted publishing is configured, delete the
+      # CARGO_REGISTRY_TOKEN secret. This step then leaves the variable unset
+      # and release-plz obtains a short-lived token via GitHub OIDC.
+      - name: Select crates.io credentials
+        env:
+          CARGO_REGISTRY_TOKEN_SECRET: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -n "${CARGO_REGISTRY_TOKEN_SECRET}" ]; then
+            printf 'CARGO_REGISTRY_TOKEN=%s\n' "${CARGO_REGISTRY_TOKEN_SECRET}" >> "$GITHUB_ENV"
+          else
+            echo "CARGO_REGISTRY_TOKEN is unset; using crates.io trusted publishing."
+          fi
       - uses: release-plz/action@v0.5.148
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   release-plz-pr:
     name: release-plz PR
@@ -53,4 +65,3 @@ jobs:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

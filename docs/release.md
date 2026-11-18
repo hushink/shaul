@@ -22,15 +22,49 @@
 
 ### Secrets
 
-- `CARGO_REGISTRY_TOKEN`：crates.io token，scope 至少包含 `publish-new` 和
-  `publish-update`。
-  - 首次发布必须使用 token：crates.io 的 trusted publishing 不能创建新 crate。
-  - 六个 crate 都发布过之后，可迁移到 trusted publishing。
-- `RELEASE_PLZ_TOKEN`（可选）：fine-grained PAT，授予当前仓库的
-  **Contents: read/write** 和 **Pull requests: read/write**。
-  - 不配置时 workflow 回退到 `GITHUB_TOKEN`。
-  - 使用 `GITHUB_TOKEN` 创建的 release PR 不会触发 `pull_request` CI；
-    需要手动 close/reopen PR，或配置该 PAT。
+#### 首次发布：一次性 bootstrap token
+
+crates.io 不允许通过 trusted publishing 创建全新 crate。六个 crate 都是首次
+发布，因此 1.0.0 必须先用一次性 API token bootstrap：
+
+1. crates.io → Account Settings → API Tokens → New Token；
+2. scope 勾选 `publish-new` 和 `publish-update`；
+3. 添加为 GitHub 仓库 secret `CARGO_REGISTRY_TOKEN`；
+4. 合并 release PR。workflow 检测到该 secret 后会注入
+   `CARGO_REGISTRY_TOKEN`，release-plz 发布六个 crate 并创建 tag/GitHub
+   Release；
+5. 确认六个 crate 在 crates.io 可见后，立即撤销这个 API token；
+6. 删除 GitHub secret `CARGO_REGISTRY_TOKEN`。
+
+#### 切换到 trusted publishing（首次发布后）
+
+1. 在 crates.io 为每个 crate 配置 trusted publisher：
+   - Repository owner：`hushink`
+   - Repository name：`shaul`
+   - Workflow filename：`release-plz.yml`
+   - Environment：留空（workflow 未使用 environment）
+2. 删除仓库 secret `CARGO_REGISTRY_TOKEN`。
+3. workflow 的 `Select crates.io credentials` 步骤检测不到 token，会保持
+   `CARGO_REGISTRY_TOKEN` 未设置。
+4. release job 已声明 `id-token: write`；release-plz 会通过 GitHub OIDC
+   向 crates.io 换取短期 token，无需长期 secret。
+
+注意：使用 trusted publishing 时不要在 workflow 中设置空字符串的
+`CARGO_REGISTRY_TOKEN`，也不要使用 `rust-lang/crates-io-auth-action`；
+release-plz 自己实现这套换取流程。
+
+`CARGO_REGISTRY_TOKEN` secret 只存在于 GitHub Secrets；workflow 仅在 release
+job 内把它写入 `$GITHUB_ENV`，不会写入文件或日志。
+
+#### 可选：RELEASE_PLZ_TOKEN
+
+fine-grained PAT，授予当前仓库的 **Contents: read/write** 和
+**Pull requests: read/write**。
+
+- 不配置时 workflow 回退到 `GITHUB_TOKEN`。
+- 使用 `GITHUB_TOKEN` 创建的 release PR 不会自动触发 `pull_request` CI；
+  需要手动 close/reopen PR，或配置该 PAT。
+- 该 token 只影响 GitHub 操作，与 crates.io 发布凭据无关。
 
 ### GitHub Actions 设置
 
