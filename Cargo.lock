@@ -2890,7 +2890,7 @@ dependencies = [
 
 [[package]]
 name = "shaul"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "async-trait",
  "flate2",
@@ -2909,7 +2909,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-bt"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "async-trait",
  "globset",
@@ -2924,7 +2924,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-cli"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "clap",
  "clap_complete",
@@ -2947,7 +2947,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-core"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "async-trait",
  "digest",
@@ -2978,7 +2978,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-http"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "async-trait",
  "base64",
@@ -3001,7 +3001,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-hub"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "async-trait",
  "directories",
