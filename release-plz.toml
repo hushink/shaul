@@ -6,8 +6,8 @@ release_always = false
 changelog_path = "CHANGELOG.md"
 changelog_update = false
 git_release_enable = true
-# Enable once the 1.0.0 tag exists as a semver baseline.
-semver_check = false
+# The 1.0.0 release is the semver baseline for API-breaking-change checks.
+semver_check = true
 publish_timeout = "15m"
 pr_labels = ["release"]
 

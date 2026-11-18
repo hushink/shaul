@@ -3,6 +3,7 @@
 - 审计日期：2026-11-18
 - 基线：`0.3.0`（commit `9e7226f`）
 - 目标：`1.0.0` 的公开 API 稳定性契约
+- 状态：`1.0.0` 已于 2026-11-18 发布到 crates.io；后续按本文的 semver 规则维护
 - 范围：`shaul-core`、`shaul-http`、`shaul-hub`、`shaul-bt`、`shaul`、`shaul-cli`
 
 本文只记录**对外承诺**和**已知风险**，不重复 README 的功能说明。CLI 参数与

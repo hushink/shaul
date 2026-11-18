@@ -247,7 +247,10 @@ sensitive headers and strips HTTP query strings from task views.
 ## Roadmap
 
 - **0.3** — done: BitTorrent backend via `librqbit`, leech-only.
-- **1.0** — API freeze, documentation, cross-platform hardening.
+- **1.0** — done: 1.0 API freeze, per-crate READMEs, cross-platform CI and
+  release-plz publishing.
+- **1.x** — additive features and fixes; see the semver policy in
+  [docs/api-audit.md](docs/api-audit.md).
 
 Not planned yet: daemon/RPC, seeding, aria2 control-file compatibility,
 7z/rar/xz extraction, native Xet transport.

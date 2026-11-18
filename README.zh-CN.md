@@ -228,7 +228,9 @@ header，并在任务视图中去掉 HTTP 链接的查询串。
 ## 路线图
 
 - **0.3** —— 已完成：通过 `librqbit` 实现 BitTorrent 后端（只做 leech）。
-- **1.0** —— API 冻结、文档、跨平台加固。
+- **1.0** —— 已完成：API 冻结、各 crate README、跨平台 CI 与 release-plz 发布。
+- **1.x** —— 增量功能与修复；semver 规则见
+  [docs/api-audit.md](docs/api-audit.md)。
 
 暂不做：daemon/RPC、做种、aria2 控制文件兼容、7z/rar/xz 解压、原生 Xet 传输。
 
