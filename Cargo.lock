@@ -2892,6 +2892,7 @@ dependencies = [
 name = "shaul"
 version = "1.0.2"
 dependencies = [
+ "async-trait",
  "flate2",
  "hex",
  "serde_json",

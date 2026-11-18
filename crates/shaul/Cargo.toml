@@ -20,6 +20,7 @@ default = []
 bt = ["dep:shaul-bt"]
 
 [dev-dependencies]
+async-trait.workspace = true
 flate2.workspace = true
 hex.workspace = true
 serde_json.workspace = true

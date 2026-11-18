@@ -155,6 +155,8 @@ runtime, use `shaul::BlockingEngine`.
 
 To add a new protocol, implement `LinkParser` and/or `DownloadBackend`, then
 assemble a `Router` with `ParserRegistry` and the backends in priority order.
+See the [extension guide](docs/extending.md) and the
+[`custom_parser` example](crates/shaul/examples/custom_parser.rs).
 Extension is compile-time: no unstable dynamic-plugin ABI is involved.
 
 ## Configuration
@@ -281,6 +283,16 @@ The 1.0 stability audit — semver rules, MSRV policy, constructible types and
 known risks — lives in [docs/api-audit.md](docs/api-audit.md). All crates use
 `#![forbid(unsafe_code)]`. Cross-platform CI covers Linux, Windows and macOS,
 plus rustfmt, clippy, rustdoc, feature combinations and MSRV 1.92.
+
+## Documentation
+
+- [Extension guide](docs/extending.md) — custom parsers/backends, routing and
+  testing
+- [FAQ](docs/faq.md) — resume, verification, extraction, Hub caches and the
+  queue
+- [API audit](docs/api-audit.md) — 1.x semver policy and known risks
+- [Release process](docs/release.md) — trusted publishing and CLI binaries
+- [Architecture decisions](docs/adr) and [glossary](GLOSSARY.md)
 
 ## License
 

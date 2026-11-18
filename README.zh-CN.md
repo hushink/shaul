@@ -145,7 +145,9 @@ async fn main() -> shaul::Result<()> {
 事件；不想自己持有 Tokio runtime 时可用 `shaul::BlockingEngine`。
 
 新增协议时，实现 `LinkParser` 和/或 `DownloadBackend`，再用 `ParserRegistry`
-与后端优先级组装 `Router`。扩展是编译期完成的，不涉及不稳定的动态插件 ABI。
+与后端优先级组装 `Router`。参考 [扩展开发指南](docs/extending.md) 与
+[`custom_parser` 示例](crates/shaul/examples/custom_parser.rs)。扩展是编译期
+完成的，不涉及不稳定的动态插件 ABI。
 
 ## 配置
 
@@ -259,6 +261,14 @@ tar.gz/zip 解压、HF/MS 仓库下载、include 过滤、鉴权失败、缓存�
 [docs/api-audit.md](docs/api-audit.md)。所有 crate 都启用了
 `#![forbid(unsafe_code)]`。跨平台 CI 覆盖 Linux、Windows、macOS，以及
 rustfmt、clippy、rustdoc、feature 组合和 MSRV 1.92。
+
+## 文档
+
+- [扩展开发指南](docs/extending.md) —— 自定义 Parser/Backend、路由与测试
+- [FAQ](docs/faq.md) —— 续传、校验、解压、Hub 缓存与队列
+- [API 审计](docs/api-audit.md) —— 1.x semver 规则与已知风险
+- [发布流程](docs/release.md) —— trusted publishing 与 CLI 二进制
+- [架构决策](docs/adr) 与 [术语表](GLOSSARY.md)
 
 ## 许可证
 
