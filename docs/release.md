@@ -2,7 +2,7 @@
 
 发布由 `.github/workflows/release-plz.yml` 驱动，配置在 `release-plz.toml`。
 
-当前状态：1.0.1 已发布；六个 crate 已配置 crates.io trusted publishing，
+当前状态：1.0.2 已发布；六个 crate 已配置 crates.io trusted publishing，
 `CARGO_REGISTRY_TOKEN` secret 已删除。后续发布直接使用 GitHub OIDC 获取短期
 token。
 
@@ -105,9 +105,8 @@ release-plz 对 `shaul-cli` 关闭了 `git_release_enable`，但保留 tag 创�
 `gh workflow run` 触发 cargo-dist。`workflow_dispatch` 不受
 “`GITHUB_TOKEN` 创建的事件不触发新 workflow”这一限制，因此不需要 PAT。
 
-已有 `shaul-cli-v1.0.0` Release 早于该流程，因此没有二进制附件；从下一个
-CLI release 开始生效。若要补 1.0.0 二进制，需要按目标平台手动构建后
-`gh release upload` 到现有 Release，或重新创建该 Release。
+`shaul-cli-v1.0.0` Release 早于该流程，因此没有二进制附件；从
+`shaul-cli-v1.0.1` 起，Release 会附带预编译包、校验和及安装脚本。
 
 ### GitHub Actions 设置
 

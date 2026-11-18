@@ -10,7 +10,7 @@ A resumable, pluggable download engine for Rust — library and CLI.
 
 [简体中文](README.zh-CN.md)
 
-> **Status: 1.0.1** — HTTP, Hugging Face, ModelScope and BitTorrent are
+> **Status: 1.0.2** — HTTP, Hugging Face, ModelScope and BitTorrent are
 > implemented and published to [crates.io](https://crates.io/crates/shaul).
 > See the [API audit](docs/api-audit.md) for the 1.x stability policy.
 
@@ -181,7 +181,7 @@ delete_archive = false
 timeout_secs = 60
 connect_timeout_secs = 15
 retries = 5
-user_agent = "shaul/1.0.1"
+user_agent = "shaul/1.0.2"
 allow_cross_origin_auth = false
 
 [hub]

@@ -10,7 +10,7 @@
 
 [English](README.md)
 
-> **状态：1.0.1** —— 直链 HTTP、Hugging Face、ModelScope 与 BitTorrent
+> **状态：1.0.2** —— 直链 HTTP、Hugging Face、ModelScope 与 BitTorrent
 > 已实现并发布到 [crates.io](https://crates.io/crates/shaul)。1.x 稳定性
 > 规则见 [API 审计](docs/api-audit.md)。
 
@@ -171,7 +171,7 @@ delete_archive = false
 timeout_secs = 60
 connect_timeout_secs = 15
 retries = 5
-user_agent = "shaul/1.0.1"
+user_agent = "shaul/1.0.2"
 allow_cross_origin_auth = false
 
 [hub]
