@@ -2,9 +2,9 @@
 
 发布由 `.github/workflows/release-plz.yml` 驱动，配置在 `release-plz.toml`。
 
-当前状态：1.0.0 已通过一次性 bootstrap token 发布；六个 crate 已配置
-crates.io trusted publishing，`CARGO_REGISTRY_TOKEN` secret 已删除。后续发布
-直接使用 GitHub OIDC 获取短期 token。
+当前状态：1.0.1 已发布；六个 crate 已配置 crates.io trusted publishing，
+`CARGO_REGISTRY_TOKEN` secret 已删除。后续发布直接使用 GitHub OIDC 获取短期
+token。
 
 ## 流程
 
