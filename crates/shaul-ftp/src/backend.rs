@@ -105,6 +105,11 @@ impl DownloadBackend for FtpBackend {
         let (mut stream, size, last_modified) =
             connect_and_probe(&request, &host, port, &remote_path).await?;
         let total = size;
+        if request.options.disk_space_check
+            && let Some(total) = total
+        {
+            shaul_core::ensure_free_space(&request.destination, total)?;
+        }
         if request.options.content_cache
             && let (Some(checksum), Some(size)) = (checksum.as_ref(), total)
             && let Ok(cache) = ContentCache::new(&request.options.content_cache_dir)

@@ -39,7 +39,8 @@
 `FtpBackend`/`FtpParser`（启用 `ftp` 时）、
 `EventKind`/`DownloadEvent`/`EventSink`、`Checksum`/`ChecksumAlgorithm`、
 `Error`/`Result`、`TaskStore`/`SidecarStore`、`Finalizer` 管线、
-`Telemetry`/`NoopTelemetry`/`metrics`、`ContentCache`/`CacheStats`。
+`Telemetry`/`NoopTelemetry`/`metrics`、`ContentCache`/`CacheStats`/
+`CachePruneReport`、`ensure_free_space`。
 
 这些项遵循第 4 节的 semver 规则。
 
@@ -114,6 +115,8 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    - `ArchiveExtractor` / `ExtractorRegistry` / `ExtractorFinalizer` /
      `FinalizerPipeline::with_extractor_registry` 允许注册自定义解压格式；
      7z/rar/xz 不内置，由第三方实现。`ExtractFinalizer` 的内置行为保持不变。
+     内置 zip/tar/gzip/zstd 解压限制为 100,000 个条目和 100 GiB 展开大小；
+     自定义 extractor 需自行实现同等的 bomb 防护。
    - `tracing` span（`shaul.engine.*`、`shaul.http.*`、`shaul.hub.*`、
      `shaul.bittorrent.*`）和事件流是对外可观测接口；用户自行安装 tracing
      subscriber，并通过 `subscribe()` 消费任务事件。
@@ -137,11 +140,16 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      按高优先级、创建时间、任务 id 依次排序；默认优先级为 0。
    - `EventKind::Retry` 和 `metrics::RETRIES` 暴露重试尝试；指数 backoff
      增加最多 25% jitter（服务器 `Retry-After` 仍优先）。
-   - `ContentCache` / `CacheStats` 提供按 checksum + size 寻址的内容缓存；
-     `download.content_cache`、`download.content_cache_dir`、
-     `TaskOptions.content_cache`、`SHAUL_CONTENT_CACHE` 与
-     `SHAUL_CONTENT_CACHE_DIR` 控制启用与位置。默认关闭；命中后重新校验，
-     校验失败自动回退网络。`ContentCache::clear`/`stats` 供运维命令使用。
+   - `ContentCache` / `CacheStats` / `CachePruneReport` 提供按 checksum +
+     size 寻址的内容缓存；`download.content_cache`、
+     `download.content_cache_dir`、`TaskOptions.content_cache`、
+     `SHAUL_CONTENT_CACHE` 与 `SHAUL_CONTENT_CACHE_DIR` 控制启用与位置。
+     默认关闭；命中后重新校验，校验失败自动回退网络。
+     `ContentCache::clear`/`stats`/`prune`/`prune_preview` 供运维命令使用。
+   - `download.disk_space_check` 在已知全部文件大小且目标文件系统空间不足时
+     提前失败；`SHAUL_DISK_SPACE_CHECK` 可覆盖。默认开启。
+     `ensure_free_space(destination, required)` 是供自定义 backend 复用的
+     公开检查函数；无法获取空间信息时按未知处理，不阻塞下载。
    - `metrics::ACTIVE_CONNECTIONS`、`QUEUE_DEPTH`、`CACHE_HITS`、
      `CACHE_MISSES`、`CACHE_BYTES`、`CACHE_INSERTS` 扩展观测面。
    - `DownloadEngine` 在 `BackendCapabilities::resume = false` 或用户关闭

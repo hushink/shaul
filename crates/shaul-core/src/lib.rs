@@ -19,6 +19,8 @@ pub mod cache;
 pub mod checksum;
 /// Configuration files, sections and resolved download options.
 pub mod config;
+/// Destination filesystem checks.
+pub mod disk;
 /// Asynchronous engine that drives tasks through parsers, backends and
 /// finalizers.
 pub mod engine;
@@ -58,9 +60,10 @@ pub use backend::{
     ResumeCheckpoint,
 };
 pub use blocking::BlockingEngine;
-pub use cache::{CacheStats, ContentCache};
+pub use cache::{CachePruneReport, CacheStats, ContentCache};
 pub use checksum::{Checksum, ChecksumAlgorithm, compute_file_checksum};
 pub use config::{BtConfig, Config, DownloadConfig, HubConfig, NetworkConfig, ResolvedOptions};
+pub use disk::ensure_free_space;
 pub use engine::DownloadEngine;
 pub use error::{Error, Result};
 pub use event::{DownloadEvent, EventKind, EventSink};

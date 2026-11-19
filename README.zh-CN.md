@@ -20,7 +20,7 @@
 现有 Rust 下载 crate 多数只是单流 HTTP 封装。shaul 用一套小而明确的领域模型，
 把协议细节藏在可替换的后端之后：
 
-- **HTTP 分片下载**：工作窃取式分片队列 + 每文件连接数上限。
+- **HTTP 分片下载**：工作窃取式分片队列、自适应分片大小 + 每文件连接数上限。
 - **正确的断点续传**：带版本号的 sidecar、`ETag`/`Last-Modified`/大小
   validator、`If-Range`，以及服务器忽略 `Range`（200 而非 206，包括
   ModelScope 的 `200 + Content-Range`）时的安全回退。
@@ -209,6 +209,7 @@ rate_limit = 0         # 全局共享字节/秒；0 = 不限速
 file_jobs = 1          # 单任务内并发下载的文件数
 content_cache = false  # 按 checksum + size 复用已校验文件
 # content_cache_dir = "/path/to/shaul/content"
+disk_space_check = true # 目标磁盘空间不足时提前失败
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
@@ -247,8 +248,9 @@ persistence = true
 ```
 
 网络相关环境变量包括 `SHAUL_RATE_LIMIT`、`SHAUL_FILE_JOBS`、
-`SHAUL_CONTENT_CACHE`、`SHAUL_CONTENT_CACHE_DIR`、`SHAUL_PER_HOST_ACTIVE`、
-`SHAUL_GLOBAL`、`SHAUL_PROXY`、`SHAUL_NO_PROXY`，以及常规的
+`SHAUL_CONTENT_CACHE`、`SHAUL_CONTENT_CACHE_DIR`、`SHAUL_DISK_SPACE_CHECK`、
+`SHAUL_PER_HOST_ACTIVE`、`SHAUL_GLOBAL`、`SHAUL_PROXY`、`SHAUL_NO_PROXY`，
+以及常规的
 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`。显式配置优先于
 环境变量。
 
@@ -333,6 +335,7 @@ rustfmt、clippy、rustdoc、feature 组合和 MSRV 1.92。
 - [库使用指南](docs/library.md) —— 嵌入、事件、队列、阻塞 API 与可观测性
 - [续传与加固](docs/resume.md) —— 后端续传契约、回退行为与残余风险
 - [路线图](docs/roadmap.md) —— 1.x 能力、扩展边界与发布门槛
+- [Xet spike](docs/xet-spike.md) —— 许可证/API 结论与推迟决策
 - [扩展开发指南](docs/extending.md) —— 自定义 Parser/Backend、路由与测试
 - [FAQ](docs/faq.md) —— 续传、校验、解压、Hub 缓存与队列
 - [API 审计](docs/api-audit.md) —— 1.x semver 规则与已知风险

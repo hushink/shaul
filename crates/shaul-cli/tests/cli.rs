@@ -440,8 +440,18 @@ fn content_cache_is_populated_and_can_be_cleaned() {
     let output = run(shaul().args(["--config", config, "--json", "stats"]));
     assert_eq!(json_stdout(&output)["cache"]["entries"], 1);
 
-    let output = run(shaul().args(["--config", config, "--json", "clean", "--cache"]));
-    assert_eq!(json_stdout(&output)["cache_entries"], 1);
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "clean",
+        "--cache",
+        "--cache-max-size",
+        "0",
+    ]));
+    let cleaned = json_stdout(&output);
+    assert_eq!(cleaned["cache_entries"], 1);
+    assert_eq!(cleaned["cache_entries_remaining"], 0);
     let output = run(shaul().args(["--config", config, "--json", "stats"]));
     assert_eq!(json_stdout(&output)["cache"]["entries"], 0);
 }
@@ -492,6 +502,42 @@ fn content_cache_hit_avoids_the_response_body() {
         "--force",
     ]));
     assert_eq!(fs::read(&second).unwrap(), data);
+}
+
+#[test]
+fn clean_removes_orphan_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = toml_path(dir.path().join("content-cache"));
+    let path = write_config(&dir, &format!("content_cache_dir = \"{cache}\"\n"));
+    let config = path.to_str().unwrap();
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "add",
+        "https://example.com/file.bin",
+    ]));
+    let id = json_stdout(&output)[0]["id"].as_str().unwrap().to_string();
+    run(shaul().args(["--config", config, "cancel", &id]));
+
+    let part = dir.path().join("downloads").join("file.bin.shaul.part");
+    fs::create_dir_all(part.parent().unwrap()).unwrap();
+    fs::write(&part, b"partial").unwrap();
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "clean",
+        "--orphans",
+        "--dry-run",
+    ]));
+    assert_eq!(json_stdout(&output)["orphan_parts"], 1);
+    assert!(part.exists());
+
+    let output = run(shaul().args(["--config", config, "--json", "clean", "--orphans"]));
+    assert_eq!(json_stdout(&output)["orphan_parts"], 1);
+    assert!(!part.exists());
 }
 
 #[test]

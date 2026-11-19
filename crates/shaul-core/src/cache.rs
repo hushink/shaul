@@ -6,6 +6,7 @@
 //! used, so a corrupted cache entry cannot silently satisfy a download.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 use uuid::Uuid;
@@ -29,6 +30,19 @@ pub struct CacheStats {
     /// Number of incomplete temporary files left behind by an interrupted
     /// insertion.
     pub temp_files: u64,
+}
+
+/// Result of pruning a content cache by age and/or total size.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct CachePruneReport {
+    /// Number of entries removed.
+    pub entries_removed: u64,
+    /// Bytes removed.
+    pub bytes_removed: u64,
+    /// Entries left after pruning.
+    pub entries_remaining: u64,
+    /// Bytes left after pruning.
+    pub bytes_remaining: u64,
 }
 
 impl ContentCache {
@@ -195,6 +209,33 @@ impl ContentCache {
             .await
             .map_err(|error| Error::Other(format!("cache prune task failed: {error}")))?
     }
+
+    /// Removes entries older than `older_than` and, when `max_bytes` is set,
+    /// the oldest remaining entries until the cache fits the limit. Passing
+    /// both as `None` only reports current totals.
+    pub async fn prune(
+        &self,
+        older_than: Option<Duration>,
+        max_bytes: Option<u64>,
+    ) -> Result<CachePruneReport> {
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || prune_blocking(&root, older_than, max_bytes, true))
+            .await
+            .map_err(|error| Error::Other(format!("cache prune task failed: {error}")))?
+    }
+
+    /// Reports what [`ContentCache::prune`] would remove without deleting
+    /// anything.
+    pub async fn prune_preview(
+        &self,
+        older_than: Option<Duration>,
+        max_bytes: Option<u64>,
+    ) -> Result<CachePruneReport> {
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || prune_blocking(&root, older_than, max_bytes, false))
+            .await
+            .map_err(|error| Error::Other(format!("cache prune preview task failed: {error}")))?
+    }
 }
 
 fn validate_checksum(checksum: &Checksum) -> Result<()> {
@@ -262,6 +303,111 @@ fn clear_blocking(root: &Path) -> Result<u64> {
         }
     }
     Ok(stats.bytes)
+}
+
+fn prune_blocking(
+    root: &Path,
+    older_than: Option<Duration>,
+    max_bytes: Option<u64>,
+    apply: bool,
+) -> Result<CachePruneReport> {
+    let mut entries = Vec::new();
+    collect_entries(root, &mut entries)?;
+    let now = SystemTime::now();
+    let mut remove = vec![false; entries.len()];
+
+    if let Some(age) = older_than {
+        for (index, entry) in entries.iter().enumerate() {
+            if entry
+                .modified
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|elapsed| elapsed >= age)
+            {
+                remove[index] = true;
+            }
+        }
+    }
+
+    let mut remaining: u64 = entries
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !remove[*index])
+        .map(|(_, entry)| entry.size)
+        .sum();
+    if let Some(max_bytes) = max_bytes {
+        let mut candidates: Vec<usize> = entries
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !remove[*index])
+            .map(|(index, _)| index)
+            .collect();
+        candidates.sort_by_key(|index| entries[*index].modified.unwrap_or(SystemTime::UNIX_EPOCH));
+        for index in candidates {
+            if remaining <= max_bytes {
+                break;
+            }
+            remove[index] = true;
+            remaining = remaining.saturating_sub(entries[index].size);
+        }
+    }
+
+    let mut report = CachePruneReport::default();
+    for (index, entry) in entries.iter().enumerate() {
+        if !remove[index] {
+            continue;
+        }
+        if apply
+            && let Err(error) = std::fs::remove_file(&entry.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(Error::Io(error));
+        }
+        report.entries_removed += 1;
+        report.bytes_removed += entry.size;
+    }
+
+    let total_entries = entries.len() as u64;
+    let total_bytes: u64 = entries.iter().map(|entry| entry.size).sum();
+    report.entries_remaining = total_entries.saturating_sub(report.entries_removed);
+    report.bytes_remaining = total_bytes.saturating_sub(report.bytes_removed);
+    Ok(report)
+}
+
+struct CacheEntryMeta {
+    path: PathBuf,
+    size: u64,
+    modified: Option<SystemTime>,
+}
+
+fn collect_entries(root: &Path, entries: &mut Vec<CacheEntryMeta>) -> Result<()> {
+    let read_dir = match std::fs::read_dir(root) {
+        Ok(read_dir) => read_dir,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::Io(error)),
+    };
+    for entry in read_dir {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+        if metadata.is_dir() {
+            collect_entries(&path, entries)?;
+        } else if metadata.is_file()
+            && !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(".tmp-"))
+        {
+            entries.push(CacheEntryMeta {
+                modified: metadata.modified().ok(),
+                path,
+                size: metadata.len(),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn prune_temp_blocking(root: &Path) -> Result<u64> {
@@ -346,6 +492,34 @@ mod tests {
         tokio::fs::write(&entry, b"bad!").await.unwrap();
         assert!(cache.lookup_verified(&checksum, 4).await.unwrap().is_none());
         assert!(!entry.exists());
+    }
+
+    #[tokio::test]
+    async fn prunes_oldest_entries_to_a_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ContentCache::new(dir.path()).unwrap();
+        let old_path = dir.path().join("old");
+        let new_path = dir.path().join("new");
+        std::fs::write(&old_path, b"0123456789").unwrap();
+        std::fs::write(&new_path, b"12345").unwrap();
+        let old_time = SystemTime::now() - Duration::from_secs(3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&old_path)
+            .unwrap()
+            .set_modified(old_time)
+            .unwrap();
+
+        let preview = cache.prune_preview(None, Some(10)).await.unwrap();
+        assert_eq!(preview.entries_removed, 1);
+        assert!(old_path.exists(), "preview must not delete entries");
+        let report = cache.prune(None, Some(10)).await.unwrap();
+        assert_eq!(report.entries_removed, 1);
+        assert_eq!(report.bytes_removed, 10);
+        assert_eq!(report.entries_remaining, 1);
+        assert_eq!(report.bytes_remaining, 5);
+        assert!(!old_path.exists());
+        assert!(new_path.exists());
     }
 
     #[tokio::test]

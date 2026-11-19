@@ -219,6 +219,9 @@ Rules:
   `sanitize_relative_path` and `safe_join` are available for this.
 - Extract into a temporary directory and rename into place; do not leave a
   half-written target on failure.
+- Apply your own entry-count, expanded-size and compression-ratio limits. The
+  built-in extractor caps archives at 100,000 entries and 100 GiB expanded per
+  archive; custom formats are responsible for their own bomb protection.
 - The trait is synchronous and runs inside `spawn_blocking`. Do not block the
   async runtime directly.
 

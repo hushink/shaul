@@ -361,6 +361,15 @@ impl HttpBackend {
             resolve_final_path(request, file, probe.filename.as_deref(), &default_name)?;
 
         let stored = task_resume.files.get(&key).cloned();
+        if request.options.disk_space_check
+            && let Some(total) = total
+        {
+            let completed = stored
+                .as_ref()
+                .map(FileResume::completed_bytes)
+                .unwrap_or(0);
+            shaul_core::ensure_free_space(&request.destination, total.saturating_sub(completed))?;
+        }
         let final_for_manifest = path_for_manifest(&request.destination, &final_path);
         let stored_matches_path = stored
             .as_ref()
@@ -397,13 +406,22 @@ impl HttpBackend {
         let part_name = part_path(&final_path);
         let part_for_manifest = path_for_manifest(&request.destination, &part_name);
 
+        let segment_size = total
+            .map(|total| {
+                effective_segment_size(
+                    total,
+                    request.options.segment_size,
+                    request.options.connections,
+                )
+            })
+            .unwrap_or(request.options.segment_size);
         let mut file_resume = FileResume {
             url: key.clone(),
             final_path: path_for_manifest(&request.destination, &final_path),
             part_path: part_for_manifest.clone(),
             validator: validator.clone(),
             total_size: total,
-            segment_size: request.options.segment_size,
+            segment_size,
             completed: if resume_valid {
                 stored
                     .as_ref()
@@ -501,6 +519,7 @@ impl HttpBackend {
                 task_resume.clone(),
                 progress.clone(),
                 total,
+                segment_size,
                 &rate,
             )
             .await
@@ -754,6 +773,7 @@ impl HttpBackend {
         task_resume: TaskResume,
         progress: Arc<AtomicU64>,
         total: Option<u64>,
+        segment_size: u64,
         rate: &RateLimiters,
     ) -> Result<FileResume> {
         let total =
@@ -761,7 +781,7 @@ impl HttpBackend {
         let missing = missing_ranges(total, &file_resume.completed);
         let mut chunks = Vec::new();
         for range in missing {
-            chunks.extend(split_range(range, request.options.segment_size));
+            chunks.extend(split_range(range, segment_size));
         }
         if chunks.is_empty() {
             return Ok(file_resume);
@@ -1975,6 +1995,14 @@ fn spawn_progress_reporter(
     })
 }
 
+fn effective_segment_size(total: u64, requested: u64, connections: usize) -> u64 {
+    const MIN: u64 = 64 * 1024;
+    let requested = requested.max(MIN);
+    let fanout = (connections.max(1) as u64).saturating_mul(4);
+    let target = total / fanout.max(1);
+    requested.min(target.max(MIN))
+}
+
 struct TrackedPermit {
     _permit: ConnectionPermit,
     active: Arc<AtomicU64>,
@@ -2043,6 +2071,14 @@ mod tests {
             &validator(None, None),
             true
         ));
+    }
+
+    #[test]
+    fn segment_size_adapts_to_small_files() {
+        let mib = 1024 * 1024;
+        assert_eq!(effective_segment_size(16 * mib, 8 * mib, 8), 512 * 1024);
+        assert_eq!(effective_segment_size(8 * 1024 * mib, 8 * mib, 8), 8 * mib);
+        assert_eq!(effective_segment_size(1, 8 * mib, 8), 64 * 1024);
     }
 
     #[test]

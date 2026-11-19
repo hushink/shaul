@@ -8,6 +8,9 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 use crate::path::archive_stem;
 
+const MAX_ARCHIVE_ENTRIES: u64 = 100_000;
+const MAX_EXTRACTED_BYTES: u64 = 100 * 1024 * 1024 * 1024;
+
 /// Archive formats recognized by [`detect_archive`] and handled by
 /// [`extract_archive`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -298,13 +301,17 @@ fn extract_single_file(
             .open(&temp_file)?;
         match kind {
             ArchiveKind::Gzip => {
-                let mut decoder = flate2::read::GzDecoder::new(input);
-                std::io::copy(&mut decoder, &mut output)?;
+                let decoder = flate2::read::GzDecoder::new(input);
+                let mut limited = decoder.take(MAX_EXTRACTED_BYTES + 1);
+                let copied = std::io::copy(&mut limited, &mut output)?;
+                ensure_extracted_bytes(copied)?;
             }
             ArchiveKind::Zstd => {
-                let mut decoder = ruzstd::decoding::StreamingDecoder::new(input)
+                let decoder = ruzstd::decoding::StreamingDecoder::new(input)
                     .map_err(|error| Error::Extraction(format!("zstd: {error}")))?;
-                std::io::copy(&mut decoder, &mut output)?;
+                let mut limited = decoder.take(MAX_EXTRACTED_BYTES + 1);
+                let copied = std::io::copy(&mut limited, &mut output)?;
+                ensure_extracted_bytes(copied)?;
             }
             other => {
                 return Err(Error::Extraction(format!(
@@ -401,7 +408,9 @@ fn extract_zip(path: &Path, target: &Path, warnings: &mut Vec<String>) -> Result
     let file = File::open(path)?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|error| Error::Extraction(format!("zip: {error}")))?;
+    ensure_archive_entries(archive.len() as u64)?;
     let mut files = 0u64;
+    let mut extracted_bytes = 0u64;
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -436,8 +445,11 @@ fn extract_zip(path: &Path, target: &Path, warnings: &mut Vec<String>) -> Result
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let remaining = MAX_EXTRACTED_BYTES.saturating_sub(extracted_bytes);
         let mut writer = File::create(&output)?;
-        std::io::copy(&mut entry, &mut writer)?;
+        let copied = std::io::copy(&mut (&mut entry).take(remaining + 1), &mut writer)?;
+        ensure_extracted_bytes(extracted_bytes.saturating_add(copied))?;
+        extracted_bytes += copied;
         files += 1;
     }
     Ok(files)
@@ -465,10 +477,14 @@ fn extract_tar(
     };
     let mut archive = tar::Archive::new(reader);
     let mut files = 0u64;
+    let mut entries_seen = 0u64;
+    let mut extracted_bytes = 0u64;
     for entry in archive
         .entries()
         .map_err(|error| Error::Extraction(format!("tar: {error}")))?
     {
+        entries_seen += 1;
+        ensure_archive_entries(entries_seen)?;
         let mut entry = entry.map_err(|error| Error::Extraction(format!("tar entry: {error}")))?;
         let entry_type = entry.header().entry_type();
         if entry_type.is_symlink()
@@ -502,12 +518,33 @@ fn extract_tar(
         if let Some(parent) = output.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        let size = entry.header().size().unwrap_or(0);
+        extracted_bytes = extracted_bytes.saturating_add(size);
+        ensure_extracted_bytes(extracted_bytes)?;
         entry
             .unpack(&output)
             .map_err(|error| Error::Extraction(format!("tar unpack: {error}")))?;
         files += 1;
     }
     Ok(files)
+}
+
+fn ensure_archive_entries(entries: u64) -> Result<()> {
+    if entries > MAX_ARCHIVE_ENTRIES {
+        return Err(Error::Extraction(format!(
+            "archive has more than {MAX_ARCHIVE_ENTRIES} entries"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_extracted_bytes(bytes: u64) -> Result<()> {
+    if bytes > MAX_EXTRACTED_BYTES {
+        return Err(Error::Extraction(format!(
+            "archive expands beyond {MAX_EXTRACTED_BYTES} bytes"
+        )));
+    }
+    Ok(())
 }
 
 fn path_is_safe(path: &Path) -> bool {
@@ -523,6 +560,14 @@ mod tests {
     use super::*;
     use flate2::Compression;
     use flate2::write::GzEncoder;
+
+    #[test]
+    fn rejects_archives_over_extraction_limits() {
+        assert!(ensure_archive_entries(MAX_ARCHIVE_ENTRIES).is_ok());
+        assert!(ensure_archive_entries(MAX_ARCHIVE_ENTRIES + 1).is_err());
+        assert!(ensure_extracted_bytes(MAX_EXTRACTED_BYTES).is_ok());
+        assert!(ensure_extracted_bytes(MAX_EXTRACTED_BYTES + 1).is_err());
+    }
 
     #[test]
     fn extracts_tar_gz() {

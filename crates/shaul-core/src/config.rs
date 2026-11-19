@@ -57,6 +57,9 @@ pub struct DownloadConfig {
     pub content_cache: bool,
     /// Override for the content-addressed cache root.
     pub content_cache_dir: Option<PathBuf>,
+    /// Refuse a task before transfer when the destination filesystem has less
+    /// free space than the known remaining size.
+    pub disk_space_check: bool,
     /// Size in bytes of each ranged HTTP segment.
     pub segment_size: u64,
     /// Resume interrupted downloads from checkpoints by default.
@@ -156,6 +159,7 @@ impl Default for DownloadConfig {
             file_jobs: 1,
             content_cache: false,
             content_cache_dir: None,
+            disk_space_check: true,
             segment_size: 8 * 1024 * 1024,
             resume: true,
             verify: VerifyMode::Auto,
@@ -208,6 +212,8 @@ pub struct ResolvedOptions {
     pub content_cache: bool,
     /// Root of the content-addressed cache.
     pub content_cache_dir: PathBuf,
+    /// Whether to preflight the destination filesystem's free space.
+    pub disk_space_check: bool,
     /// Alternate HTTP(S) URLs for the same file.
     pub mirrors: Vec<url::Url>,
     /// Byte size of each ranged HTTP segment.
@@ -401,6 +407,9 @@ impl Config {
         if let Some(value) = env("SHAUL_CONTENT_CACHE_DIR") {
             self.download.content_cache_dir = Some(PathBuf::from(value));
         }
+        if let Some(value) = env_parse::<bool>("SHAUL_DISK_SPACE_CHECK")? {
+            self.download.disk_space_check = value;
+        }
         if let Some(value) = env("SHAUL_SEGMENT_SIZE") {
             self.download.segment_size = parse_bytes(&value)?;
         }
@@ -539,6 +548,7 @@ impl Config {
             file_jobs: options.file_jobs.unwrap_or(self.download.file_jobs).max(1),
             content_cache: options.content_cache.unwrap_or(self.download.content_cache),
             content_cache_dir: self.content_cache_dir()?,
+            disk_space_check: self.download.disk_space_check,
             mirrors: options.mirrors.clone(),
             segment_size: self.download.segment_size.max(64 * 1024),
             resume: options.resume.unwrap_or(self.download.resume),
@@ -581,6 +591,7 @@ impl Config {
             "download.file_jobs" => self.download.file_jobs.to_string(),
             "download.content_cache" => self.download.content_cache.to_string(),
             "download.content_cache_dir" => self.content_cache_dir()?.display().to_string(),
+            "download.disk_space_check" => self.download.disk_space_check.to_string(),
             "download.segment_size" => self.download.segment_size.to_string(),
             "download.resume" => self.download.resume.to_string(),
             "download.verify" => verify_mode_str(self.download.verify).to_string(),
@@ -654,6 +665,7 @@ impl Config {
                     Some(PathBuf::from(value))
                 }
             }
+            "download.disk_space_check" => self.download.disk_space_check = parse_value(value)?,
             "download.segment_size" => self.download.segment_size = parse_bytes(value)?,
             "download.resume" => self.download.resume = parse_value(value)?,
             "download.verify" => self.download.verify = parse_verify_mode(value)?,
@@ -878,6 +890,8 @@ struct PartialDownload {
     #[serde(default)]
     content_cache_dir: Option<PathBuf>,
     #[serde(default)]
+    disk_space_check: Option<bool>,
+    #[serde(default)]
     segment_size: Option<u64>,
     #[serde(default)]
     resume: Option<bool>,
@@ -969,6 +983,9 @@ impl PartialConfig {
             if let Some(value) = download.content_cache_dir {
                 config.download.content_cache_dir =
                     (!value.as_os_str().is_empty()).then_some(value);
+            }
+            if let Some(value) = download.disk_space_check {
+                config.download.disk_space_check = value;
             }
             if let Some(value) = download.segment_size {
                 config.download.segment_size = value;

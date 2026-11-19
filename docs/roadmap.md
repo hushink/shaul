@@ -170,14 +170,19 @@ pub struct ExtractorFinalizer { /* registry */ }
 - [x] 仅在 verify finalizer 成功后写入缓存；`--no-verify` 不缓存。
 - [x] 硬链接优先，失败时复制并原子替换。
 - [x] `shaul stats` / `shaul clean --cache` 统计与清理。
+- [x] `ContentCache::prune` / `prune_preview`，支持按时间和总大小淘汰。
+- [x] 目标磁盘空间预检（`download.disk_space_check`，默认开启）。
+- [x] 自适应 HTTP 分片大小，小文件中提高并发切分利用率。
+- [x] `shaul clean --orphans` 清理已完成/取消任务遗留的 `.part`。
+- [x] 内置解压的条目数/展开大小上限（100,000 条目、100 GiB）。
 
 ### 运维命令
 
 - [x] `shaul doctor`：配置、状态目录、下载目录、缓存目录、代理与 provider
   token 检查。
 - [x] `shaul stats`：任务状态、字节数、队列深度、缓存条目/字节。
-- [x] `shaul clean`：按完成/取消/失败状态清理 sidecar，`--cache` 清理缓存，
-  `--dry-run` 预览。
+- [x] `shaul clean`：按完成/取消/失败状态清理 sidecar，`--cache` 清理/按
+  时间或大小淘汰缓存，`--orphans` 清理残留 `.part`，`--dry-run` 预览。
 - [x] CLI 与库能力对齐：诊断和缓存能力通过公开 `Config`、`TaskOptions` 与
   `ContentCache` 暴露。
 
@@ -195,11 +200,15 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ### 可选 Xet 后端
 
+- [x] 完成 spike：`hf-xet` 为 Apache-2.0，可满足许可证要求，但 Rust API
+  仍在稳定过程中，依赖体积大，且需要 CAS fixture 才能做无外网 e2e。
+  结论：1.2.0 暂不引入，保留 HTTP resolve 回退；详见
+  [xet-spike.md](xet-spike.md)。
 - 新建可选 crate `shaul-xet`，facade 增加 `xet` feature，默认关闭。
 - 解析 `X-Xet-Hash`、`X-Xet-Cas-Url`、`X-Xet-Token-Expiration`、`X-Xet-Refresh-Route`。
 - 支持 CAS 下载、短期 token 刷新；失败回退到普通 HTTP resolve。
-- 先做 3–5 天 spike，验证 `hf-xet` API、许可证、依赖体积和 Windows 构建。
-- spike 不通过则推迟到 2.0，不阻塞 1.x 其他能力。
+- 后续实现前先建立本地 CAS fixture，确保测试不依赖外网。
+- 如果上游 API 或 Windows 构建仍不稳定，则推迟到 2.0，不阻塞 1.x 其他能力。
 
 ### 通用 CAS 缓存
 

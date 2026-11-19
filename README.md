@@ -21,8 +21,8 @@ Most Rust download crates are thin, single-stream HTTP helpers. shaul is built
 around a small domain model that keeps protocol details behind replaceable
 backends:
 
-- **Segmented HTTP downloads** with a work-stealing range queue and a
-  per-file connection budget.
+- **Segmented HTTP downloads** with a work-stealing range queue, adaptive
+  segment sizing and a per-file connection budget.
 - **Correct resume**: versioned sidecar checkpoints,
   `ETag`/`Last-Modified`/size validators, `If-Range`, and a safe fallback when a
   server ignores `Range` (200 instead of 206, including ModelScope's
@@ -224,6 +224,7 @@ rate_limit = 0         # bytes/sec shared by all tasks; 0 = unlimited
 file_jobs = 1          # files downloaded concurrently within one task
 content_cache = false  # reuse verified files by checksum + size
 # content_cache_dir = "/path/to/shaul/content"
+disk_space_check = true # fail early when the destination disk is too small
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
@@ -262,8 +263,9 @@ persistence = true
 ```
 
 Network environment variables include `SHAUL_RATE_LIMIT`, `SHAUL_FILE_JOBS`,
-`SHAUL_CONTENT_CACHE`, `SHAUL_CONTENT_CACHE_DIR`, `SHAUL_PER_HOST_ACTIVE`,
-`SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`, and the conventional
+`SHAUL_CONTENT_CACHE`, `SHAUL_CONTENT_CACHE_DIR`, `SHAUL_DISK_SPACE_CHECK`,
+`SHAUL_PER_HOST_ACTIVE`, `SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`, and
+the conventional
 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` names. Explicit
 settings win over environment values.
 
@@ -368,6 +370,7 @@ plus rustfmt, clippy, rustdoc, feature combinations and MSRV 1.92.
   and residual risks
 - [Roadmap](docs/roadmap.md) — 1.x capabilities, extension boundaries and
   release gates
+- [Xet spike](docs/xet-spike.md) — license/API findings and defer decision
 - [Extension guide](docs/extending.md) — custom parsers/backends, routing and
   testing
 - [FAQ](docs/faq.md) — resume, verification, extraction, Hub caches and the

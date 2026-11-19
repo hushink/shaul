@@ -26,7 +26,10 @@ Yes. Disable it per task with `--no-resume` or in config with
 the file safely instead of appending to stale data.
 
 Services that ignore `Range` are handled with a single-stream fallback;
-`200 + Content-Range` is treated as a partial response. If the selected backend
+`200 + Content-Range` is treated as a partial response. Segment size shrinks
+adaptively for small files so all configured connections can participate,
++while large files keep the configured `download.segment_size` as an upper
++bound. If the selected backend
 declares that it cannot resume, the engine discards the saved manifest and
 starts from zero. FTP automatically restarts from zero when the server rejects
 `REST`. See [resume and hardening](resume.md).
@@ -45,7 +48,9 @@ starts from zero. FTP automatically restarts from zero when the server rejects
 
 After verification. Archives are extracted into a temporary directory and
 atomically moved into place. Path traversal and symlink entries are rejected
-or skipped. Supported formats: zip, tar, tar.gz, tar.zst, gzip and zstd.
+or skipped. Built-in extraction rejects archives with more than 100,000
+entries or more than 100 GiB of expanded content. Supported formats: zip, tar,
+tar.gz, tar.zst, gzip and zstd.
 
 Use `--extract-dir` for a custom destination and `--delete-archive` to remove
 the archive after extraction. Extraction is off by default.
@@ -83,9 +88,11 @@ downloads are not cached. `shaul stats` reports entries/bytes and
   content cache.
 - `clean --finished` removes completed/cancelled/failed sidecars;
   `--completed`, `--cancelled` and `--failed` select individual states;
-  `--cache` removes content-cache entries. Add `--dry-run` to preview and
-  `--json` for machine-readable output. Destination files are never deleted by
-  `clean`.
+  `--orphans` removes `.shaul.part` files left by completed/cancelled tasks;
+  `--cache` removes content-cache entries. With `--cache`, add
+  `--cache-older-than 30d` and/or `--cache-max-size 50GiB` to prune instead of
+  clearing everything. Add `--dry-run` to preview and `--json` for
+  machine-readable output. Destination files are never deleted by `clean`.
 
 ## Can a Hub snapshot download files in parallel?
 
@@ -136,10 +143,10 @@ default priority is 0.
 `shaul config path` prints the resolved file. `--config PATH` or
 `SHAUL_CONFIG` overrides the location. Common environment variables include
 `SHAUL_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_RATE_LIMIT`, `SHAUL_FILE_JOBS`,
-`SHAUL_CONTENT_CACHE`, `SHAUL_CONTENT_CACHE_DIR`, `SHAUL_PER_HOST_ACTIVE`,
-`SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`, `SHAUL_STATE_DIR`,
-`SHAUL_VERIFY`, `HF_TOKEN` and `MODELSCOPE_API_TOKEN`; see the README for the
-full list.
+`SHAUL_CONTENT_CACHE`, `SHAUL_CONTENT_CACHE_DIR`, `SHAUL_DISK_SPACE_CHECK`,
+`SHAUL_PER_HOST_ACTIVE`, `SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`,
+`SHAUL_STATE_DIR`, `SHAUL_VERIFY`, `HF_TOKEN` and `MODELSCOPE_API_TOKEN`; see
+the README for the full list.
 
 ## How do I enable logs and metrics?
 
@@ -199,6 +206,9 @@ task views, and provider tokens are never included.
   `shaul info <link>` and the provider token.
 - A `checksum mismatch` means the bytes differ from the expected digest; the
   file is not finalized.
+- `insufficient disk space` means the preflight found less free space than the
+  known remaining size. Free space, disable `download.disk_space_check`, or
+  download to another filesystem.
 
 ## Which platforms are supported?
 

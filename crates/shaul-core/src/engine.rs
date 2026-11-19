@@ -12,6 +12,7 @@ use crate::backend::{
     DownloadBackend, DownloadOutcome, DownloadRequest, FileOutcome, ResumeCheckpoint,
 };
 use crate::config::{Config, ResolvedOptions};
+use crate::disk::ensure_free_space;
 use crate::error::{Error, Result};
 use crate::event::{EventKind, EventSink};
 use crate::finalizer::{FinalizeContext, FinalizerPipeline};
@@ -343,6 +344,14 @@ impl DownloadEngine {
     ) -> Result<Task> {
         let mut verification_retries = 0u32;
         loop {
+            if options.disk_space_check
+                && let Some(required) = required_download_bytes(request)
+                && let Err(error) = ensure_free_space(&request.destination, required)
+            {
+                let message = error.to_string();
+                self.fail(request.task_id, error).await?;
+                return Err(Error::Backend(message));
+            }
             let outcome = backend.download(request.clone()).await;
             match outcome {
                 Ok(DownloadOutcome::Completed(files)) => {
@@ -653,6 +662,26 @@ impl DownloadEngine {
     pub async fn status(&self, id: TaskId) -> Result<Task> {
         self.store.load(id).await
     }
+}
+
+fn required_download_bytes(request: &DownloadRequest) -> Option<u64> {
+    let total = request
+        .resource
+        .files
+        .iter()
+        .try_fold(0u64, |sum, file| file.size.map(|size| sum + size))?;
+    let completed = request
+        .resume
+        .as_ref()
+        .map(|resume| {
+            resume
+                .files
+                .values()
+                .map(crate::task::FileResume::completed_bytes)
+                .sum::<u64>()
+        })
+        .unwrap_or(0);
+    Some(total.saturating_sub(completed))
 }
 
 fn pending_task_ids(mut tasks: Vec<Task>) -> Vec<TaskId> {

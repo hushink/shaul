@@ -97,6 +97,7 @@ fn configure() -> shaul::Result<(Config, TaskOptions)> {
     config.download.per_host_active = 8; // active HTTP file transfers per host
     config.download.content_cache = true; // reuse verified files by checksum+size
     config.download.content_cache_dir = Some("/var/cache/shaul/content".into());
+    config.download.disk_space_check = true; // fail before a known-too-large transfer
 
     let options = TaskOptions {
         rate_limit: Some(1024 * 1024), // additional per-task cap
@@ -116,6 +117,8 @@ full URLs for the same file and is used only after the primary fails.
 `global` and `per_host_active` cap active HTTP file-transfer requests. The
 proxy covers HTTP and Hub metadata/file requests; BitTorrent DHT/UDP traffic is
 not proxied and BitTorrent rate limiting is not part of this slice.
+`disk_space_check` preflights the destination filesystem when every file size
+is known and fails the task before transferring if free space is insufficient.
 
 ### Content-addressed cache
 
@@ -137,8 +140,9 @@ fn inspect_cache(config: &Config) -> shaul::Result<()> {
 Entries are keyed by `<algorithm>/<digest>`. A hit is re-hashed before use; a
 corrupt or truncated entry is removed and the transfer falls back to the
 network. Files are inserted only after the verify finalizer succeeds, so
-`--no-verify` downloads are never cached. `ContentCache::stats` and
-`ContentCache::clear` are available for maintenance tooling.
+`--no-verify` downloads are never cached. `ContentCache::stats`,
+`ContentCache::prune` and `ContentCache::clear` are available for maintenance
+tooling; the CLI exposes them through `shaul stats` and `shaul clean --cache`.
 
 ## One task at a time
 

@@ -290,6 +290,17 @@ pub struct CleanArgs {
     /// Remove every content-cache entry
     #[arg(long)]
     pub cache: bool,
+    /// With --cache, remove entries older than this duration (for example
+    /// `30d`, `12h`). Without --cache-max-size, only age is used.
+    #[arg(long, value_name = "DURATION", requires = "cache")]
+    pub cache_older_than: Option<String>,
+    /// With --cache, keep the cache under this total size, removing the
+    /// oldest entries first (for example `50GiB`).
+    #[arg(long, value_name = "SIZE", requires = "cache")]
+    pub cache_max_size: Option<String>,
+    /// Remove `.shaul.part` files left by completed or cancelled tasks
+    #[arg(long)]
+    pub orphans: bool,
     /// Show what would be removed without deleting anything
     #[arg(long)]
     pub dry_run: bool,
