@@ -1,3 +1,4 @@
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -79,17 +80,6 @@ pub enum EventKind {
         downloaded_bytes: u64,
         /// Expected size in bytes, when known.
         total_bytes: Option<u64>,
-    },
-    /// A transfer attempt failed and the backend will retry it.
-    Retry {
-        /// Task being retried.
-        task_id: TaskId,
-        /// Destination-relative path of the file, using `/` separators.
-        file: String,
-        /// One-based retry attempt number.
-        attempt: u32,
-        /// Why the previous attempt failed.
-        error: String,
     },
     /// A file finished downloading and passed the engine's finalizers.
     FileCompleted {
@@ -180,6 +170,19 @@ pub enum EventKind {
         /// Task that was cancelled.
         task_id: TaskId,
     },
+    // New variants must be appended so existing enum discriminants stay
+    // stable for callers that cast `EventKind` values.
+    /// A transfer attempt failed and the backend will retry it.
+    Retry {
+        /// Task being retried.
+        task_id: TaskId,
+        /// Destination-relative path of the file, using `/` separators.
+        file: String,
+        /// One-based retry attempt number.
+        attempt: u32,
+        /// Why the previous attempt failed.
+        error: String,
+    },
 }
 
 /// Cloneable handle used to broadcast [`DownloadEvent`]s to subscribers.
@@ -187,10 +190,22 @@ pub enum EventKind {
 /// Clones share the same broadcast channel. Delivery is best effort: emitting
 /// with no subscribers is a no-op, and a receiver that falls behind may miss
 /// some events.
-#[derive(Clone)]
 pub struct EventSink {
     sender: broadcast::Sender<DownloadEvent>,
-    telemetry: Arc<dyn Telemetry>,
+    // `Arc<dyn Telemetry>` is not `UnwindSafe` because the trait has no
+    // unwind-safety bound. The sink never observes telemetry while unwinding;
+    // asserting that here keeps `EventSink` and `FinalizeContext` unwind-safe
+    // for existing callers without narrowing `Telemetry`.
+    telemetry: AssertUnwindSafe<Arc<dyn Telemetry>>,
+}
+
+impl Clone for EventSink {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            telemetry: AssertUnwindSafe(Arc::clone(&self.telemetry.0)),
+        }
+    }
 }
 
 impl EventSink {
@@ -201,7 +216,7 @@ impl EventSink {
         (
             Self {
                 sender,
-                telemetry: Arc::new(NoopTelemetry),
+                telemetry: AssertUnwindSafe(Arc::new(NoopTelemetry)),
             },
             receiver,
         )
@@ -210,19 +225,19 @@ impl EventSink {
     /// Attach a telemetry sink used for events that also carry a count, such
     /// as [`EventKind::Retry`].
     pub fn with_telemetry(mut self, telemetry: Arc<dyn Telemetry>) -> Self {
-        self.telemetry = telemetry;
+        self.telemetry = AssertUnwindSafe(telemetry);
         self
     }
 
     /// Replace the telemetry sink on an existing handle.
     pub fn set_telemetry(&mut self, telemetry: Arc<dyn Telemetry>) {
-        self.telemetry = telemetry;
+        self.telemetry = AssertUnwindSafe(telemetry);
     }
 
     /// Broadcast a new event stamped with the current time.
     pub fn emit(&self, kind: EventKind) {
         if matches!(&kind, EventKind::Retry { .. }) {
-            self.telemetry.counter(metrics::RETRIES, 1, &[]);
+            self.telemetry.0.counter(metrics::RETRIES, 1, &[]);
         }
         let _ = self.sender.send(DownloadEvent::new(kind));
     }
@@ -255,6 +270,12 @@ mod tests {
                 self.0.fetch_add(value as usize, Ordering::SeqCst);
             }
         }
+    }
+
+    #[test]
+    fn event_sink_remains_unwind_safe() {
+        fn assert_unwind_safe<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+        assert_unwind_safe::<EventSink>();
     }
 
     #[test]

@@ -140,6 +140,16 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    - `DownloadEngine` 在 `BackendCapabilities::resume = false` 或用户关闭
      resume 时清空 `DownloadRequest::resume` 并强制 `options.resume = false`；
      FTP 在服务器拒绝 `REST` 时自动断线重连并从零开始。
+10. **semver 检查与刻意例外**
+   - `shaul-core/Cargo.toml` 将 `constructible_struct_adds_field` 配置为
+     `warn` + `required-update = "minor"`。这是第 4 节 `TaskOptions` /
+     `RequestOptions` 例外的机器可读表达：新增字段仍会在检查报告中提示，
+     但不会把 1.x 版本强制提升为 major。
+   - `EventKind::Retry` 追加在枚举末尾，避免已有变体的判别值变化；
+     今后新增变体也必须追加。
+   - `EventSink` 内部用 `AssertUnwindSafe` 保存 `Arc<dyn Telemetry>`，
+     保持 1.0 已有的 `UnwindSafe` / `RefUnwindSafe` 自动 trait 实现。
+     遥测回调不会在 unwinding 期间被观察。
 
 ## 4. semver 规则
 

@@ -37,3 +37,10 @@ zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[package.metadata.cargo-semver-checks.lints]
+# `TaskOptions` is intentionally exhaustively constructible so callers can
+# write ergonomic literals. Adding fields is documented as a minor change when
+# callers use `..Default::default()`, as all examples do. Keep the lint visible
+# but do not let it force a major release.
+constructible_struct_adds_field = { level = "warn", required-update = "minor" }
