@@ -198,6 +198,8 @@ pub struct ResolvedOptions {
     pub task_rate_limit: Option<u64>,
     /// Number of files downloaded concurrently within this task.
     pub file_jobs: usize,
+    /// Alternate HTTP(S) URLs for the same file.
+    pub mirrors: Vec<url::Url>,
     /// Byte size of each ranged HTTP segment.
     pub segment_size: u64,
     /// Whether resume is enabled for this task.
@@ -508,6 +510,7 @@ impl Config {
             rate_limit: self.download.rate_limit.filter(|value| *value > 0),
             task_rate_limit: options.rate_limit.filter(|value| *value > 0),
             file_jobs: options.file_jobs.unwrap_or(self.download.file_jobs).max(1),
+            mirrors: options.mirrors.clone(),
             segment_size: self.download.segment_size.max(64 * 1024),
             resume: options.resume.unwrap_or(self.download.resume),
             verify: options.verify.unwrap_or(self.download.verify),

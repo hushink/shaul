@@ -138,9 +138,10 @@ string is accepted as a bare BitTorrent v1 info hash.
 Useful flags: `--dir`, `--output` (single-file direct links), `--checksum`,
 `--verify/--no-verify`, `--extract/--no-extract`, `--extract-dir`,
 `--delete-archive`, `--header`, `--header-file`, `--bearer-token`, `--basic`,
-`--proxy`, `--no-proxy`, `--limit`, `--file-jobs`, `--global-connections`,
-`--per-host-active`, `--input-file`, `--revision`, `--include`, `--exclude`,
-`--cache/--no-cache`, `--json`, `--force`, `--overwrite`, `--rename`. `--limit` on `download`/`add` caps that
+`--proxy`, `--no-proxy`, `--limit`, `--file-jobs`, `--mirror`,
+`--global-connections`, `--per-host-active`, `--input-file`, `--revision`,
+`--include`, `--exclude`, `--cache/--no-cache`, `--json`, `--force`,
+`--overwrite`, `--rename`. `--limit` on `download`/`add` caps that
 task; `shaul run --limit` caps the worker globally.
 
 ### Library

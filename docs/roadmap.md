@@ -138,9 +138,12 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ### 镜像回退
 
+状态：`main` 已实现 fallback，待 1.2 发布。
+
 - `TaskOptions.mirrors: Vec<Url>`，CLI `--mirror`（可重复）。
-- 超时、5xx、传输中断时尝试镜像；镜像必须通过 size/validator 兼容性检查。
-- 不允许静默下载不同内容；跨域继续剥离认证头。
+- 主 URL 失败时尝试镜像；镜像必须通过 size/validator 兼容性检查。
+- 不会静默下载不同内容；镜像兼容性不足时发出 Warning 并拒绝。
+- 跨域继续剥离认证头。
 - 先做 fallback，稳定后再评估多源竞速。
 
 ### 队列与重试

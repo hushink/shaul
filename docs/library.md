@@ -100,6 +100,8 @@ fn configure() -> shaul::Result<(Config, TaskOptions)> {
     let options = TaskOptions {
         rate_limit: Some(1024 * 1024), // additional per-task cap
         file_jobs: Some(4),
+        // Alternate full URLs for the same file, tried after the primary fails.
+        mirrors: vec!["https://mirror.example.com/file.bin".parse().unwrap()],
         ..TaskOptions::default()
     };
     Ok((config, options))

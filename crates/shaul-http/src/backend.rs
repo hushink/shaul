@@ -126,17 +126,88 @@ impl HttpBackend {
     /// Download one resource file, sharing the caller's task resume. This is
     /// public so protocol-specific backends (Hub) can reuse the segmented,
     /// resumable HTTP transfer without duplicating it.
-    #[tracing::instrument(
-        name = "shaul.http.file",
-        level = "debug",
-        skip(self, request, file, task_resume),
-        fields(task_id = %request.task_id, file = %file.path)
-    )]
     pub async fn download_file(
         &self,
         request: &DownloadRequest,
         file: &ResourceFile,
         task_resume: &mut TaskResume,
+    ) -> Result<FileOutcome> {
+        let checksum = request
+            .options
+            .checksum
+            .clone()
+            .or_else(|| file.checksum.clone());
+        let mut reference: Option<Validator> = None;
+        let mut last_error: Option<Error> = None;
+        let mut urls = vec![file.url.clone()];
+        for mirror in &request.options.mirrors {
+            if !matches!(mirror.scheme(), "http" | "https") {
+                warning(request, format!("ignoring non-HTTP mirror URL: {mirror}"));
+                continue;
+            }
+            if !urls.contains(mirror) {
+                urls.push(mirror.clone());
+            }
+        }
+
+        for (index, url) in urls.iter().enumerate() {
+            let mut candidate = file.clone();
+            candidate.url = url.clone();
+            let probe = match self.probe(request, &candidate).await {
+                Ok(probe) => probe,
+                Err(error) if error.is_cancelled() => return Err(error),
+                Err(error) => {
+                    warning(request, format!("download URL {url} failed: {error}"));
+                    last_error = Some(error);
+                    continue;
+                }
+            };
+            let validator = probe.validator();
+            if let Some(reference) = &reference {
+                if !mirror_compatible(reference, &validator, checksum.is_some()) {
+                    warning(
+                        request,
+                        format!("mirror {url} is incompatible with the primary response"),
+                    );
+                    last_error = Some(Error::Backend(format!(
+                        "mirror {url} is incompatible with the primary response"
+                    )));
+                    continue;
+                }
+            } else {
+                reference = Some(validator.clone());
+            }
+            if index > 0 {
+                warning(request, format!("falling back to mirror {url}"));
+            }
+            match self
+                .download_file_with_probe(request, &candidate, task_resume, probe)
+                .await
+            {
+                Ok(outcome) => return Ok(outcome),
+                Err(error) if error.is_cancelled() => return Err(error),
+                Err(error) => {
+                    warning(request, format!("download URL {url} failed: {error}"));
+                    last_error = Some(error);
+                }
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| Error::Backend("no HTTP download URL was available".to_string())))
+    }
+
+    #[tracing::instrument(
+        name = "shaul.http.file",
+        level = "debug",
+        skip(self, request, file, task_resume, probe),
+        fields(task_id = %request.task_id, file = %file.path)
+    )]
+    async fn download_file_with_probe(
+        &self,
+        request: &DownloadRequest,
+        file: &ResourceFile,
+        task_resume: &mut TaskResume,
+        probe: Probe,
     ) -> Result<FileOutcome> {
         let key = file.url.as_str().to_string();
 
@@ -188,7 +259,6 @@ impl HttpBackend {
             }
         }
 
-        let probe = self.probe(request, file).await?;
         let total = probe.total_size;
         let validator = probe.validator();
         let checksum = request
@@ -1314,6 +1384,30 @@ impl ResumeCheckpoint for FileCheckpoint {
     }
 }
 
+fn warning(request: &DownloadRequest, message: impl Into<String>) {
+    request.events.emit(EventKind::Warning {
+        task_id: Some(request.task_id),
+        message: message.into(),
+    });
+}
+
+fn mirror_compatible(reference: &Validator, mirror: &Validator, checksum_known: bool) -> bool {
+    match (reference.size, mirror.size) {
+        (Some(reference), Some(mirror)) if reference != mirror => return false,
+        (None, _) | (_, None) if !checksum_known => return false,
+        _ => {}
+    }
+    if !checksum_known
+        && let (Some(reference), Some(mirror)) = (&reference.etag, &mirror.etag)
+        && !reference.starts_with("W/")
+        && !mirror.starts_with("W/")
+        && reference != mirror
+    {
+        return false;
+    }
+    true
+}
+
 struct Probe {
     final_url: Url,
     total_size: Option<u64>,
@@ -1744,4 +1838,59 @@ fn spawn_progress_reporter(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn validator(size: Option<u64>, etag: Option<&str>) -> Validator {
+        Validator {
+            etag: etag.map(str::to_string),
+            last_modified: None,
+            size,
+        }
+    }
+
+    #[test]
+    fn mirror_compatibility_requires_matching_size() {
+        assert!(mirror_compatible(
+            &validator(Some(10), Some("\"a\"")),
+            &validator(Some(10), Some("\"a\"")),
+            false
+        ));
+        assert!(!mirror_compatible(
+            &validator(Some(10), None),
+            &validator(Some(11), None),
+            true
+        ));
+    }
+
+    #[test]
+    fn mirror_compatibility_uses_checksum_when_size_is_unknown() {
+        assert!(!mirror_compatible(
+            &validator(None, None),
+            &validator(None, None),
+            false
+        ));
+        assert!(mirror_compatible(
+            &validator(None, None),
+            &validator(None, None),
+            true
+        ));
+    }
+
+    #[test]
+    fn mirror_compatibility_rejects_different_strong_etags() {
+        assert!(!mirror_compatible(
+            &validator(Some(10), Some("\"a\"")),
+            &validator(Some(10), Some("\"b\"")),
+            false
+        ));
+        assert!(mirror_compatible(
+            &validator(Some(10), Some("\"a\"")),
+            &validator(Some(10), Some("\"b\"")),
+            true
+        ));
+    }
 }

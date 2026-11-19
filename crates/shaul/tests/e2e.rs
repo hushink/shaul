@@ -22,6 +22,8 @@ enum RangeMode {
     Supported,
     Ignored,
     IgnoredAfterProbe,
+    /// Serve the probe, then fail all transfer requests.
+    FailAfterProbe,
     /// Some real servers (ModelScope) answer a ranged request with 200 plus
     /// a Content-Range header instead of 206.
     Partial200,
@@ -302,8 +304,13 @@ async fn handle(
     let range = headers.get("range").cloned();
     let effective_mode = match mode {
         RangeMode::IgnoredAfterProbe if index > 0 => RangeMode::Ignored,
+        RangeMode::FailAfterProbe if index > 0 => RangeMode::FailAfterProbe,
         other => other,
     };
+    if effective_mode == RangeMode::FailAfterProbe {
+        respond(&mut socket, "500 Internal Server Error", vec![], b"failed").await;
+        return;
+    }
 
     let common = vec![
         ("ETag".to_string(), etag),
@@ -922,6 +929,69 @@ async fn enforces_the_per_host_connection_budget() {
         server.max_active() <= 1,
         "per-host budget exceeded: {} concurrent requests",
         server.max_active()
+    );
+}
+
+#[tokio::test]
+async fn falls_back_to_a_compatible_mirror() {
+    let data = test_data(256 * 1024);
+    let mirror = TestServer::spawn(data.clone(), RangeMode::Supported, None, "mirror.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.network.retries = 0;
+    config.network.connect_timeout_secs = 1;
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let task = engine
+        .add(
+            Link::new("http://127.0.0.1:1/unreachable.bin").unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                mirrors: vec![Url::parse(&mirror.file_url()).unwrap()],
+                connections: Some(2),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("mirror.bin"))
+            .await
+            .unwrap(),
+        data
+    );
+}
+
+#[tokio::test]
+async fn falls_back_after_the_primary_transfer_fails() {
+    let data = test_data(256 * 1024);
+    let primary =
+        TestServer::spawn(data.clone(), RangeMode::FailAfterProbe, None, "primary.bin").await;
+    let mirror = TestServer::spawn(data.clone(), RangeMode::Supported, None, "mirror.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.network.retries = 0;
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let task = engine
+        .add(
+            Link::new(primary.file_url()).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                mirrors: vec![Url::parse(&mirror.file_url()).unwrap()],
+                connections: Some(2),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("mirror.bin"))
+            .await
+            .unwrap(),
+        data
     );
 }
 

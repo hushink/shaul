@@ -190,6 +190,10 @@ pub struct TaskOptions {
     /// Number of files downloaded concurrently within this task.
     #[serde(default)]
     pub file_jobs: Option<usize>,
+    /// Alternate HTTP(S) URLs for the same file. They are tried after the
+    /// primary URL fails and must pass a size/validator compatibility check.
+    #[serde(default)]
+    pub mirrors: Vec<Url>,
     /// Whether to resume from existing partial data.
     #[serde(default)]
     pub resume: Option<bool>,

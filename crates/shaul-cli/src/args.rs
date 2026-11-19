@@ -130,6 +130,10 @@ pub struct DownloadArgs {
     #[arg(long, value_name = "N")]
     pub file_jobs: Option<usize>,
 
+    /// Alternate HTTP(S) URL for the same file (repeatable)
+    #[arg(long, value_name = "URL")]
+    pub mirror: Vec<String>,
+
     /// Enable resume (default)
     #[arg(long, conflicts_with = "no_resume")]
     pub resume: bool,
@@ -342,11 +346,27 @@ impl DownloadArgs {
             .as_deref()
             .map(shaul::config::parse_bytes)
             .transpose()?;
+        let mirrors = self
+            .mirror
+            .iter()
+            .map(|value| {
+                let url = url::Url::parse(value).map_err(|error| {
+                    Error::Config(format!("invalid mirror URL {value}: {error}"))
+                })?;
+                if !matches!(url.scheme(), "http" | "https") {
+                    return Err(Error::Config(format!(
+                        "mirror URL must use http or https: {value}"
+                    )));
+                }
+                Ok(url)
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(TaskOptions {
             output: self.output.clone(),
             connections: self.connections,
             rate_limit,
             file_jobs: self.file_jobs.map(|value| value.max(1)),
+            mirrors,
             resume,
             verify,
             checksum,

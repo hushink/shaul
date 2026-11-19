@@ -128,9 +128,10 @@ v1 info hash 处理。
 常用参数：`--dir`、`--output`（单文件直链）、`--checksum`、
 `--verify/--no-verify`、`--extract/--no-extract`、`--extract-dir`、
 `--delete-archive`、`--header`、`--header-file`、`--bearer-token`、`--basic`、
-`--proxy`、`--no-proxy`、`--limit`、`--file-jobs`、`--global-connections`、
-`--per-host-active`、`--input-file`、`--revision`、`--include`、`--exclude`、
-`--cache/--no-cache`、`--json`、`--force`、`--overwrite`、`--rename`。`download`/`add` 的 `--limit` 限制单个任务；
+`--proxy`、`--no-proxy`、`--limit`、`--file-jobs`、`--mirror`、
+`--global-connections`、`--per-host-active`、`--input-file`、`--revision`、
+`--include`、`--exclude`、`--cache/--no-cache`、`--json`、`--force`、
+`--overwrite`、`--rename`。`download`/`add` 的 `--limit` 限制单个任务；
 `shaul run --limit` 限制 worker 的全局速率。
 
 ### 库

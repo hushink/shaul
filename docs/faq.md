@@ -65,6 +65,14 @@ multi-file task may download concurrently. The default is 1, which preserves
 the previous sequential behavior. Per-file checkpoints are merged into the
 same sidecar, so pause/resume still works across the whole task.
 
+## Can I supply mirrors for a direct link?
+
+Yes. Repeat `--mirror URL` (or set `TaskOptions::mirrors`) to add alternate
+full URLs for the same file. Mirrors are tried only after the primary URL
+fails. A mirror must match the primary's size and, when no checksum is known,
+must not expose a different strong ETag; incompatible mirrors are skipped with
+a warning. Cross-origin auth stripping still applies.
+
 ## Does shaul support FTP?
 
 Yes: plain `ftp://` links are available through the optional `ftp` feature (the
