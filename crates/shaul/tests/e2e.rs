@@ -995,6 +995,104 @@ async fn falls_back_after_the_primary_transfer_fails() {
     );
 }
 
+struct DemoParser;
+
+#[async_trait::async_trait]
+impl shaul::LinkParser for DemoParser {
+    fn name(&self) -> &'static str {
+        "demo"
+    }
+
+    fn supports(&self, link: &Link) -> bool {
+        link.as_str().starts_with("demo://")
+    }
+
+    async fn parse(&self, _link: &Link, _options: &shaul::ParseOptions) -> shaul::Result<Resource> {
+        Ok(Resource {
+            kind: ResourceKind::Custom {
+                protocol: "demo".to_string(),
+            },
+            name: "file.bin".to_string(),
+            files: vec![ResourceFile {
+                path: "file.bin".to_string(),
+                url: Url::parse("https://example.com/file.bin").unwrap(),
+                size: None,
+                checksum: None,
+                headers: Vec::new(),
+                metadata: Default::default(),
+                use_response_filename: false,
+            }],
+            request: Default::default(),
+            checksum: None,
+            revision: None,
+            metadata: Default::default(),
+        })
+    }
+}
+
+struct NoResumeBackend {
+    seen: Arc<Mutex<Option<(bool, bool)>>>,
+}
+
+#[async_trait::async_trait]
+impl DownloadBackend for NoResumeBackend {
+    fn name(&self) -> &'static str {
+        "no-resume"
+    }
+
+    fn capabilities(&self) -> shaul::BackendCapabilities {
+        shaul::BackendCapabilities::new(false, false, false)
+    }
+
+    fn supports(&self, resource: &Resource) -> bool {
+        matches!(
+            &resource.kind,
+            ResourceKind::Custom { protocol } if protocol == "demo"
+        )
+    }
+
+    async fn download(&self, request: DownloadRequest) -> shaul::Result<DownloadOutcome> {
+        *self.seen.lock().unwrap() = Some((request.resume.is_some(), request.options.resume));
+        Ok(DownloadOutcome::Completed(Vec::new()))
+    }
+}
+
+#[tokio::test]
+async fn backends_without_resume_start_from_scratch() {
+    let dir = tempfile::tempdir().unwrap();
+    let seen = Arc::new(Mutex::new(None));
+    let router = shaul::Router::new(
+        shaul::ParserRegistry::new().with(shaul::parser_arc(DemoParser)),
+        vec![shaul::backend_arc(NoResumeBackend { seen: seen.clone() })],
+    );
+    let config = Config::default();
+    let store: Arc<dyn shaul::TaskStore> =
+        Arc::new(shaul::SidecarStore::new(dir.path().join("state")).unwrap());
+    let engine = shaul::DownloadEngine::new(Arc::new(router), store, config);
+    let task = engine
+        .add(
+            Link::new("demo://file.bin").unwrap(),
+            dir.path().to_path_buf(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    engine
+        .store()
+        .update(
+            task.id,
+            Box::new(|task| {
+                task.resume = Some(TaskResume::default());
+                Ok(())
+            }),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(*seen.lock().unwrap(), Some((false, false)));
+}
+
 #[tokio::test]
 async fn downloads_multiple_http_files_concurrently() {
     let first_data = test_data(192 * 1024);

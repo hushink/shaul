@@ -26,7 +26,10 @@ Yes. Disable it per task with `--no-resume` or in config with
 the file safely instead of appending to stale data.
 
 Services that ignore `Range` are handled with a single-stream fallback;
-`200 + Content-Range` is treated as a partial response.
+`200 + Content-Range` is treated as a partial response. If the selected backend
+declares that it cannot resume, the engine discards the saved manifest and
+starts from zero. FTP automatically restarts from zero when the server rejects
+`REST`. See [resume and hardening](resume.md).
 
 ## How does verification work?
 

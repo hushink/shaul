@@ -109,9 +109,12 @@ fn configure() -> shaul::Result<(Config, TaskOptions)> {
 ```
 
 The global and per-task caps are combined: the effective rate is the lower of
-the two. `None` or `Some(0)` means no cap at that layer. The proxy covers HTTP
-and Hub metadata/file requests; BitTorrent DHT/UDP traffic is not proxied and
-BitTorrent rate limiting is not part of the 1.1 slice.
+the two. `None` or `Some(0)` means no cap at that layer. `file_jobs` controls
+how many files in one task transfer concurrently. `mirrors` contains alternate
+full URLs for the same file and is used only after the primary fails.
+`global` and `per_host_active` cap active HTTP file-transfer requests. The
+proxy covers HTTP and Hub metadata/file requests; BitTorrent DHT/UDP traffic is
+not proxied and BitTorrent rate limiting is not part of this slice.
 
 ## One task at a time
 
@@ -156,15 +159,31 @@ Use `TaskOptions::output` for a single-file direct link, and
 `overwrite`/`rename_on_conflict` for destination collisions.
 
 Other useful `TaskOptions` fields include `resume`, `checksum`, `extract_dir`,
-`delete_archive`, `cache`, `revision`, `include`/`exclude`, and `request`
-(headers and auth). See
+`delete_archive`, `cache`, `revision`, `include`/`exclude`, `file_jobs`,
+`mirrors`, `priority`, and `request` (headers and auth). See
 [`TaskOptions`](https://docs.rs/shaul/latest/shaul/struct.TaskOptions.html) for
 the full list.
 
+## Resume and backend capabilities
+
+Resume is enabled by default and can be disabled per task with
+`TaskOptions { resume: Some(false), .. }`. The engine passes a saved
+`TaskResume` only when the selected backend declares
+`BackendCapabilities::resume = true` and the task did not disable resume. A
+backend that cannot resume receives no manifest and `options.resume = false`;
+the engine emits a warning when an existing manifest has to be discarded.
+
+HTTP and Hub use sidecar byte ranges plus `ETag`/`Last-Modified`/size
+validators. FTP uses `SIZE`/`MDTM` plus `REST`, and automatically restarts from
+zero when the server rejects REST. BitTorrent relies on piece verification and
+librqbit fastresume data. See [the resume and hardening guide](resume.md) for
+the full contract, residual risks and the custom-backend checklist.
+
 ## Events
 
-Every progress update, verification step and state transition is a typed
-`DownloadEvent`. The CLI consumes the same stream for progress bars and NDJSON.
+Every progress update, verification step, state transition and retry is a
+typed `DownloadEvent`. The CLI consumes the same stream for progress bars and
+NDJSON.
 
 ```rust
 use shaul::{Config, EventKind, Link, TaskOptions, default_engine};
@@ -191,6 +210,9 @@ async fn download_with_progress() -> shaul::Result<()> {
                 EventKind::TaskFailed { error, .. } => {
                     eprintln!("failed: {error}");
                     break;
+                }
+                EventKind::Retry { attempt, error, .. } => {
+                    eprintln!("retry {attempt}: {error}");
                 }
                 _ => {}
             }
@@ -234,7 +256,14 @@ async fn run_queue() -> shaul::Result<()> {
         .add(Link::new("https://example.com/a.bin")?, destination.clone(), TaskOptions::default())
         .await?;
     let b = engine
-        .add(Link::new("https://example.com/b.bin")?, destination, TaskOptions::default())
+        .add(
+            Link::new("https://example.com/b.bin")?,
+            destination,
+            TaskOptions {
+                priority: Some(10),
+                ..TaskOptions::default()
+            },
+        )
         .await?;
 
     engine.pause(b.id).await?;
@@ -327,8 +356,9 @@ async fn build_engine() -> shaul::Result<()> {
 
 `Telemetry` methods default to no-ops, so implement only what you need. The
 metric names and labels are listed in [the extension guide](extending.md) and
-in `shaul::metrics`. `with_finalizers` replaces verification/extraction with
-your own pipeline.
+in `shaul::metrics`; `shaul.retries` counts retry events, which are also
+available as `EventKind::Retry`. `with_finalizers` replaces
+verification/extraction with your own pipeline.
 
 Logging uses the `tracing` facade; shaul never installs a subscriber, so the
 embedding application decides where spans go:

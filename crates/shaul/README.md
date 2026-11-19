@@ -89,6 +89,7 @@ $ cargo install shaul-cli
 
 - [Project README](https://github.com/hushink/shaul/blob/main/README.md)
 - [Library guide](https://github.com/hushink/shaul/blob/main/docs/library.md)
+- [Resume and hardening](https://github.com/hushink/shaul/blob/main/docs/resume.md)
 - [Extension guide](https://github.com/hushink/shaul/blob/main/docs/extending.md)
 - [API audit](https://github.com/hushink/shaul/blob/main/docs/api-audit.md)
 - [Release process](https://github.com/hushink/shaul/blob/main/docs/release.md)

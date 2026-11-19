@@ -202,7 +202,16 @@ impl DownloadEngine {
             .clone()
             .ok_or_else(|| Error::InvalidState(format!("task {id} has no parsed resource")))?;
         let backend = self.router.backend_for(&resource)?;
-        let options = self.config.resolve(&task.destination, &task.options)?;
+        let capabilities = backend.capabilities();
+        let mut options = self.config.resolve(&task.destination, &task.options)?;
+        if !capabilities.resume {
+            options.resume = false;
+        }
+        let resume = if capabilities.resume && options.resume {
+            task.resume.clone()
+        } else {
+            None
+        };
         let cancel = external_cancel.unwrap_or_default();
 
         self.running.lock().await.insert(id, cancel.clone());
@@ -225,6 +234,14 @@ impl DownloadEngine {
         let active = self.running.lock().await.len() as f64;
         self.telemetry.gauge(metrics::ACTIVE_TASKS, active, &[]);
         tracing::debug!(task_id = %id, backend = %backend_name, "task started");
+        if !capabilities.resume && task.resume.is_some() {
+            self.events.emit(EventKind::Warning {
+                task_id: Some(id),
+                message: format!(
+                    "backend {backend_name} does not support resume; starting this task from scratch"
+                ),
+            });
+        }
 
         let checkpoint = Arc::new(StoreCheckpoint {
             store: self.store.clone(),
@@ -235,7 +252,7 @@ impl DownloadEngine {
             resource,
             destination: task.destination.clone(),
             options: options.clone(),
-            resume: task.resume.clone(),
+            resume,
             cancel: cancel.clone(),
             events: self.events.clone(),
             checkpoint,

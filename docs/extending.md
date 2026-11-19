@@ -126,7 +126,11 @@ A backend must:
   protocol already proves integrity (BitTorrent pieces set `checksum_verified`).
 
 `BackendCapabilities` is descriptive: advertise `segmented`, `resume` and
-`multi_file` accurately so callers can make policy decisions.
+`multi_file` accurately so callers can make policy decisions. When `resume` is
+false, the engine passes `resume: None` and forces `options.resume = false`, and
+it warns if a saved manifest had to be discarded. The backend must still
+truncate any partial output before writing. If `resume` is true, honor both the
+request manifest and `options.resume`; see [resume.md](resume.md).
 
 Third-party protocols should use `ResourceKind::Custom { protocol }` and put
 their data in `Resource::metadata` / `ResourceFile::metadata`. The complete

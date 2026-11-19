@@ -18,6 +18,18 @@ struct MockFtp {
 
 impl MockFtp {
     async fn spawn(data: Vec<u8>, required_auth: Option<(&str, &str)>) -> Self {
+        Self::spawn_inner(data, required_auth, false).await
+    }
+
+    async fn spawn_rejecting_rest(data: Vec<u8>, required_auth: Option<(&str, &str)>) -> Self {
+        Self::spawn_inner(data, required_auth, true).await
+    }
+
+    async fn spawn_inner(
+        data: Vec<u8>,
+        required_auth: Option<(&str, &str)>,
+        reject_rest: bool,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let data = Arc::new(data);
@@ -34,6 +46,7 @@ impl MockFtp {
                     data.clone(),
                     offsets.clone(),
                     required_auth.clone(),
+                    reject_rest,
                 ));
             }
         });
@@ -58,6 +71,7 @@ async fn handle_ftp(
     data: Arc<Vec<u8>>,
     offsets: Arc<Mutex<Vec<usize>>>,
     required_auth: Option<(String, String)>,
+    reject_rest: bool,
 ) {
     let (read, mut write) = socket.into_split();
     let mut reader = BufReader::new(read);
@@ -107,8 +121,12 @@ async fn handle_ftp(
             "SIZE" => format!("213 {}\r\n", data.len()),
             "MDTM" => "213 20260101000000\r\n".to_string(),
             "REST" => {
-                restart = argument.trim().parse().unwrap_or(0);
-                format!("350 restart at {restart}\r\n")
+                if reject_rest {
+                    "502 REST not implemented\r\n".to_string()
+                } else {
+                    restart = argument.trim().parse().unwrap_or(0);
+                    format!("350 restart at {restart}\r\n")
+                }
             }
             "EPSV" | "PASV" => {
                 let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -247,6 +265,88 @@ async fn passes_ftp_credentials_to_the_server() {
             .await
             .unwrap(),
         data
+    );
+}
+
+#[tokio::test]
+async fn restarts_from_zero_when_rest_is_rejected() {
+    let data: Vec<u8> = (0..128 * 1024).map(|index| (index % 251) as u8).collect();
+    let server = MockFtp::spawn_rejecting_rest(data.clone(), None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let link = Link::new(server.url("file.bin")).unwrap();
+    let resource = FtpParser
+        .parse(&link, &ParseOptions::default())
+        .await
+        .unwrap();
+    let key = resource.files[0].url.as_str().to_string();
+    let final_path = dir.path().join("file.bin");
+    let part = part_path(&final_path);
+    let split = data.len() / 2;
+    tokio::fs::write(&part, &data[..split]).await.unwrap();
+
+    let mut resume = TaskResume::default();
+    resume.files.insert(
+        key.clone(),
+        FileResume {
+            url: key,
+            final_path: "file.bin".to_string(),
+            part_path: "file.bin.shaul.part".to_string(),
+            validator: Validator {
+                etag: None,
+                last_modified: None,
+                size: Some(data.len() as u64),
+            },
+            total_size: Some(data.len() as u64),
+            segment_size: 64 * 1024,
+            completed: vec![ByteRange::new(0, split as u64).unwrap()],
+            checksum: None,
+            metadata: Default::default(),
+            updated_at_ms: 0,
+        },
+    );
+    let shared = Arc::new(Mutex::new(TaskResume::default()));
+    let options = Config::default()
+        .resolve(dir.path(), &TaskOptions::default())
+        .unwrap();
+    let (events, _receiver) = EventSink::channel(16);
+    let request = DownloadRequest {
+        task_id: shaul::TaskId::new_v4(),
+        resource,
+        destination: dir.path().to_path_buf(),
+        options,
+        resume: Some(resume),
+        cancel: CancellationToken::new(),
+        events,
+        checkpoint: Arc::new(TestCheckpoint {
+            resume: shared.clone(),
+        }),
+    };
+
+    let outcome = FtpBackend::new().download(request).await.unwrap();
+    let DownloadOutcome::Completed(files) = outcome else {
+        panic!("expected a completed FTP download");
+    };
+    assert_eq!(files.len(), 1);
+    assert_eq!(
+        tokio::fs::read(final_path).await.unwrap(),
+        data,
+        "fallback download content differs"
+    );
+    assert_eq!(
+        server.offsets(),
+        vec![0],
+        "the fallback transfer should start from zero"
+    );
+    assert_eq!(
+        shared
+            .lock()
+            .unwrap()
+            .files
+            .values()
+            .next()
+            .unwrap()
+            .completed_bytes(),
+        data.len() as u64
     );
 }
 

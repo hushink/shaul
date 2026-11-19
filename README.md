@@ -275,8 +275,11 @@ and `config get network.proxy` redact proxy credentials.
   offsets; there is no per-segment file merge. A merge step exists for
   backends that produce independent fragments.
 - Resume is on by default. A changed validator restarts the file safely.
-  A server that ignores `Range` triggers a single-stream fallback; `416` is
-  handled explicitly. `200 + Content-Range` is treated as a partial response.
+  Backends advertise resume support through `BackendCapabilities`; a backend
+  that cannot resume receives no manifest and starts from zero. FTP restarts
+  automatically when the server rejects `REST`. A server that ignores `Range`
+  triggers a single-stream fallback; `416` is handled explicitly.
+  `200 + Content-Range` is treated as a partial response.
 - `--verify` requires a checksum. `--no-verify` disables optional checksums.
   BitTorrent piece verification is internal and counts as verification.
 - Extraction is off by default. The archive is verified first, extracted into
@@ -345,6 +348,8 @@ plus rustfmt, clippy, rustdoc, feature combinations and MSRV 1.92.
 
 - [Library guide](docs/library.md) — embedding, events, queue, blocking API
   and observability
+- [Resume and hardening](docs/resume.md) — backend resume contract, fallbacks
+  and residual risks
 - [Roadmap](docs/roadmap.md) — 1.x capabilities, extension boundaries and
   release gates
 - [Extension guide](docs/extending.md) — custom parsers/backends, routing and

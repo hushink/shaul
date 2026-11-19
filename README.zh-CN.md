@@ -258,8 +258,10 @@ header，并在任务视图中去掉 HTTP 链接的查询串。`config show` 与
 
 - HTTP 分片写入同一个预分配 `.part` 文件的不同偏移，不做"每片一文件"的合并；
   只有产生独立分片的后端才需要 merge 步骤。
-- 续传默认开启。validator 变化会安全地重新开始；服务器忽略 `Range` 时回退单流；
-  `416` 有明确处理；`200 + Content-Range` 视为部分响应。
+- 续传默认开启。validator 变化会安全地重新开始；后端通过
+  `BackendCapabilities` 声明是否支持续传，不支持时引擎不传 manifest 并从零
+  开始。FTP 服务器拒绝 `REST` 时会自动重连并从零下载。服务器忽略 `Range`
+  时回退单流；`416` 有明确处理；`200 + Content-Range` 视为部分响应。
 - `--verify` 要求存在校验值；`--no-verify` 关闭可选校验。BitTorrent piece
   校验是内部完成的，并被视为已经校验。
 - 解压默认关闭。先校验压缩包，再解压到临时目录，最后原子 rename。路径穿越与
@@ -314,6 +316,7 @@ rustfmt、clippy、rustdoc、feature 组合和 MSRV 1.92。
 ## 文档
 
 - [库使用指南](docs/library.md) —— 嵌入、事件、队列、阻塞 API 与可观测性
+- [续传与加固](docs/resume.md) —— 后端续传契约、回退行为与残余风险
 - [路线图](docs/roadmap.md) —— 1.x 能力、扩展边界与发布门槛
 - [扩展开发指南](docs/extending.md) —— 自定义 Parser/Backend、路由与测试
 - [FAQ](docs/faq.md) —— 续传、校验、解压、Hub 缓存与队列

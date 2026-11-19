@@ -196,33 +196,52 @@ impl DownloadBackend for FtpBackend {
             .resume_transfer(resume_offset)
             .await
             .map_err(ftp_error)?;
-        let mut transfer = match tokio::time::timeout(
-            request.options.timeout,
-            stream.retr_as_stream(&remote_path),
-        )
-        .await
-        {
-            Ok(Ok(transfer)) => transfer,
-            Ok(Err(error)) if offset > 0 => {
-                tracing::warn!(
-                    %error,
-                    "FTP server rejected the resume offset; restarting from zero"
-                );
-                progress_stop.cancel();
-                let _ = reporter.await;
-                return Err(Error::Backend(format!(
-                    "FTP server rejected REST resume at offset {offset}: {error}; restart with --no-resume"
-                )));
-            }
-            Ok(Err(error)) => {
-                progress_stop.cancel();
-                let _ = reporter.await;
-                return Err(ftp_error(error));
-            }
-            Err(_) => {
-                progress_stop.cancel();
-                let _ = reporter.await;
-                return Err(Error::Backend("FTP RETR timed out".to_string()));
+        let mut resume_rejected = false;
+        let mut transfer = loop {
+            let result =
+                tokio::time::timeout(request.options.timeout, stream.retr_as_stream(&remote_path))
+                    .await;
+            match result {
+                Ok(Ok(transfer)) => break transfer,
+                Ok(Err(error)) if offset > 0 && !resume_rejected => {
+                    tracing::warn!(
+                        %error,
+                        "FTP server rejected the resume offset; restarting from zero"
+                    );
+                    warning(
+                        &request,
+                        format!(
+                            "FTP server rejected resume at offset {offset}; restarting from zero"
+                        ),
+                    );
+                    resume_rejected = true;
+                    offset = 0;
+                    part_file.set_len(0).await?;
+                    part_file.seek(SeekFrom::Start(0)).await?;
+                    progress.store(0, Ordering::Relaxed);
+                    file_resume.completed.clear();
+                    file_resume.normalize();
+                    task_resume.files.insert(key.clone(), file_resume.clone());
+                    request.checkpoint.save(&task_resume).await?;
+                    match connect_and_probe(&request, &host, port, &remote_path).await {
+                        Ok((new_stream, _, _)) => stream = new_stream,
+                        Err(error) => {
+                            progress_stop.cancel();
+                            let _ = reporter.await;
+                            return Err(error);
+                        }
+                    }
+                }
+                Ok(Err(error)) => {
+                    progress_stop.cancel();
+                    let _ = reporter.await;
+                    return Err(ftp_error(error));
+                }
+                Err(_) => {
+                    progress_stop.cancel();
+                    let _ = reporter.await;
+                    return Err(Error::Backend("FTP RETR timed out".to_string()));
+                }
             }
         };
 
@@ -518,6 +537,13 @@ fn spawn_progress_reporter(
             }
         }
     })
+}
+
+fn warning(request: &DownloadRequest, message: impl Into<String>) {
+    request.events.emit(EventKind::Warning {
+        task_id: Some(request.task_id),
+        message: message.into(),
+    });
 }
 
 fn ftp_error(error: FtpError) -> Error {
