@@ -292,6 +292,7 @@ plus rustfmt, clippy, rustdoc, feature combinations and MSRV 1.92.
   queue
 - [API audit](docs/api-audit.md) — 1.x semver policy and known risks
 - [Release process](docs/release.md) — trusted publishing and CLI binaries
+- [Benchmarks](docs/benchmarks.md) — local HTTP throughput and resume baseline
 - [Architecture decisions](docs/adr) and [glossary](GLOSSARY.md)
 
 ## License

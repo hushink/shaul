@@ -268,6 +268,7 @@ rustfmt、clippy、rustdoc、feature 组合和 MSRV 1.92。
 - [FAQ](docs/faq.md) —— 续传、校验、解压、Hub 缓存与队列
 - [API 审计](docs/api-audit.md) —— 1.x semver 规则与已知风险
 - [发布流程](docs/release.md) —— trusted publishing 与 CLI 二进制
+- [Benchmark](docs/benchmarks.md) —— 本地 HTTP 吞吐与续传基线
 - [架构决策](docs/adr) 与 [术语表](GLOSSARY.md)
 
 ## 许可证

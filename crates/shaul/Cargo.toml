@@ -21,6 +21,7 @@ bt = ["dep:shaul-bt"]
 
 [dev-dependencies]
 async-trait.workspace = true
+criterion = "0.8"
 flate2.workspace = true
 hex.workspace = true
 serde_json.workspace = true
@@ -29,3 +30,7 @@ tar.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 url.workspace = true
+
+[[bench]]
+name = "http"
+harness = false
