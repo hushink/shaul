@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/hushink/shaul/compare/shaul-v1.0.3...shaul-v1.1.0) - 2026-11-19
+
+### Added
+
+- add queue priority and observable retries
+- fall back to compatible HTTP mirrors
+- enforce global and per-host HTTP request budgets
+- download multi-file tasks with bounded concurrency
+- add an optional FTP backend
+- add proxy, bandwidth limits and blocking lifecycle parity
+- make archive extraction replaceable
+- expose custom protocols, telemetry and finalizer injection
+
+### Fixed
+
+- fall back gracefully when resume is unsupported
+- preserve 1.x semver compatibility
+
+### Other
+
+- add library embedding guide and examples
+- document custom protocols, telemetry and tracing
+- add local HTTP throughput and resume baseline
+- keep finalizer context unwind-safe
+
 ## [1.0.3](https://github.com/hushink/shaul/compare/shaul-v1.0.2...shaul-v1.0.3) - 2026-11-18
 
 ### Fixed
