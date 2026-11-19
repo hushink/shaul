@@ -32,7 +32,8 @@ backends:
 - **Finalizer pipeline**: merge (only for fragment-producing backends) →
   verify → extract → atomic rename.
 - **Archive extraction**: zip, tar, tar.gz, tar.zst, gz and zst with
-  path-traversal protection and atomic replacement.
+  path-traversal protection and atomic replacement. Extraction is pluggable
+  through `ArchiveExtractor`, so 7z/rar/xz can be supplied by third parties.
 - **Per-task headers and auth**: repeatable headers, Bearer/Basic auth,
   cross-origin redirect stripping, and `${env:NAME}` placeholders.
 - **Hub-aware**: Hugging Face and ModelScope repository snapshots, revisions,
@@ -166,8 +167,9 @@ with runnable examples:
 To add a new protocol, implement `LinkParser` and/or `DownloadBackend`, then
 assemble a `Router` with `ParserRegistry` and the backends in priority order.
 See the [extension guide](docs/extending.md),
-[`custom_parser`](crates/shaul/examples/custom_parser.rs) and
-[`custom_protocol`](crates/shaul/examples/custom_protocol.rs). Extension is
+[`custom_parser`](crates/shaul/examples/custom_parser.rs),
+[`custom_protocol`](crates/shaul/examples/custom_protocol.rs) and
+[`custom_extractor`](crates/shaul/examples/custom_extractor.rs). Extension is
 compile-time: no unstable dynamic-plugin ABI is involved.
 
 ## Configuration

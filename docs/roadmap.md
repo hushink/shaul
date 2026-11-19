@@ -89,13 +89,13 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ### 1.1 实施顺序
 
-1. `ArchiveExtractor` / `ExtractorRegistry` / `ExtractorFinalizer` 及内置 registry；先保持现有解压行为完全不变。
-2. `custom_extractor` 示例、扩展文档和路径安全测试。
-3. 代理配置、CLI、环境变量和本地代理 e2e。
-4. 全局/单任务限速及取消测试。
-5. `BlockingEngine` 生命周期方法及库测试。
-6. `--input-file`、README/FAQ/rustdoc 更新。
-7. 全量 fmt、clippy、test、doc 和基准回归。
+1. [x] `ArchiveExtractor` / `ExtractorRegistry` / `ExtractorFinalizer` 及内置 registry；先保持现有解压行为完全不变。
+2. [x] `custom_extractor` 示例、扩展文档和路径安全测试。
+3. [ ] 代理配置、CLI、环境变量和本地代理 e2e。
+4. [ ] 全局/单任务限速及取消测试。
+5. [ ] `BlockingEngine` 生命周期方法及库测试。
+6. [ ] `--input-file`、README/FAQ/rustdoc 更新。
+7. [ ] 全量 fmt、clippy、test、doc 和基准回归。
 
 ### 1.1 验收
 

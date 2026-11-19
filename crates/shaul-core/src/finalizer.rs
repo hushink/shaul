@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 
-use crate::archive::{detect_archive, extract_archive};
+use crate::archive::ExtractorRegistry;
 use crate::backend::FileOutcome;
 use crate::checksum::compute_file_checksum;
 use crate::config::ResolvedOptions;
@@ -61,6 +61,15 @@ impl FinalizerPipeline {
     /// Builds a pipeline that runs the given finalizers in order.
     pub fn new(finalizers: Vec<Arc<dyn Finalizer>>) -> Self {
         Self { finalizers }
+    }
+
+    /// Builds the default verification step plus extraction through a custom
+    /// [`ExtractorRegistry`].
+    pub fn with_extractor_registry(registry: Arc<ExtractorRegistry>) -> Self {
+        Self::new(vec![
+            Arc::new(VerifyFinalizer),
+            Arc::new(ExtractorFinalizer::new(registry)),
+        ])
     }
 
     /// Runs every finalizer in order and merges their results, stopping at the
@@ -136,7 +145,8 @@ impl Finalizer for VerifyFinalizer {
     }
 }
 
-/// Extracts supported archives according to the resolved extraction options.
+/// Extracts supported archives according to the resolved extraction options
+/// using the built-in [`ExtractorRegistry::default`] formats.
 pub struct ExtractFinalizer;
 
 #[async_trait]
@@ -146,69 +156,184 @@ impl Finalizer for ExtractFinalizer {
     }
 
     async fn finalize(&self, context: &FinalizeContext<'_>) -> Result<FinalizeResult> {
-        if !context.options.extract {
-            return Ok(FinalizeResult::default());
+        static REGISTRY: OnceLock<Arc<ExtractorRegistry>> = OnceLock::new();
+        let registry = REGISTRY
+            .get_or_init(|| Arc::new(ExtractorRegistry::default()))
+            .clone();
+        run_extraction(context, registry).await
+    }
+}
+
+/// Extracts archives with a caller-supplied [`ExtractorRegistry`].
+pub struct ExtractorFinalizer {
+    registry: Arc<ExtractorRegistry>,
+}
+
+impl ExtractorFinalizer {
+    /// Creates a finalizer that chooses extractors from `registry`.
+    pub fn new(registry: Arc<ExtractorRegistry>) -> Self {
+        Self { registry }
+    }
+}
+
+#[async_trait]
+impl Finalizer for ExtractorFinalizer {
+    fn name(&self) -> &'static str {
+        "extract"
+    }
+
+    async fn finalize(&self, context: &FinalizeContext<'_>) -> Result<FinalizeResult> {
+        run_extraction(context, self.registry.clone()).await
+    }
+}
+
+async fn run_extraction(
+    context: &FinalizeContext<'_>,
+    registry: Arc<ExtractorRegistry>,
+) -> Result<FinalizeResult> {
+    if !context.options.extract {
+        return Ok(FinalizeResult::default());
+    }
+    if !registry.supports(&context.file.path)? {
+        context.events.emit(EventKind::Warning {
+            task_id: Some(context.task_id),
+            message: format!(
+                "extraction requested but {} is not a supported archive",
+                context.file.path.display()
+            ),
+        });
+        return Ok(FinalizeResult::default());
+    }
+
+    let extract_root = context
+        .options
+        .extract_dir
+        .clone()
+        .unwrap_or_else(|| context.destination.to_path_buf());
+    context.events.emit(EventKind::ExtractionStarted {
+        task_id: context.task_id,
+        file: context.file.relative_path.clone(),
+        target: extract_root.clone(),
+    });
+
+    let archive_path = context.file.path.clone();
+    let extract_root_for_task = extract_root.clone();
+    let overwrite = context.options.overwrite;
+    let report = tokio::task::spawn_blocking(move || {
+        registry.extract(&archive_path, &extract_root_for_task, overwrite)
+    })
+    .await
+    .map_err(|error| Error::Extraction(format!("extract task failed: {error}")))??;
+
+    let Some(report) = report else {
+        context.events.emit(EventKind::Warning {
+            task_id: Some(context.task_id),
+            message: format!(
+                "extraction requested but {} is no longer supported",
+                context.file.path.display()
+            ),
+        });
+        return Ok(FinalizeResult::default());
+    };
+
+    for warning in &report.warnings {
+        context.events.emit(EventKind::Warning {
+            task_id: Some(context.task_id),
+            message: warning.clone(),
+        });
+    }
+
+    if context.options.delete_archive
+        && let Err(error) = tokio::fs::remove_file(&context.file.path).await
+    {
+        context.events.emit(EventKind::Warning {
+            task_id: Some(context.task_id),
+            message: format!(
+                "could not delete archive {}: {error}",
+                context.file.path.display()
+            ),
+        });
+    }
+
+    context.events.emit(EventKind::ExtractionCompleted {
+        task_id: context.task_id,
+        file: context.file.relative_path.clone(),
+        target: report.target.clone(),
+        files_extracted: report.files_extracted,
+    });
+
+    Ok(FinalizeResult {
+        checksum_verified: false,
+        extracted_to: Some(report.target),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::archive::{ArchiveExtractor, ExtractReport, ExtractorRequest};
+    use crate::config::Config;
+    use crate::task::TaskOptions;
+
+    struct DemoExtractor;
+
+    impl ArchiveExtractor for DemoExtractor {
+        fn name(&self) -> &'static str {
+            "demo"
         }
-        let Some(kind) = detect_archive(&context.file.path)? else {
-            context.events.emit(EventKind::Warning {
-                task_id: Some(context.task_id),
-                message: format!(
-                    "extraction requested but {} is not a supported archive",
-                    context.file.path.display()
-                ),
-            });
-            return Ok(FinalizeResult::default());
+
+        fn supports(&self, path: &Path) -> Result<bool> {
+            Ok(path.extension().and_then(|extension| extension.to_str()) == Some("demo"))
+        }
+
+        fn extract(&self, request: &ExtractorRequest<'_>) -> Result<ExtractReport> {
+            let target = request.extract_root.join("demo-out");
+            std::fs::create_dir_all(&target)?;
+            std::fs::write(target.join("hello.txt"), b"hello")?;
+            Ok(ExtractReport {
+                target,
+                files_extracted: 1,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn extractor_finalizer_uses_the_registry() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("payload.demo");
+        std::fs::write(&archive, b"payload").unwrap();
+        let destination = dir.path().join("dest");
+        std::fs::create_dir_all(&destination).unwrap();
+
+        let task_options = TaskOptions {
+            extract: Some(true),
+            ..TaskOptions::default()
+        };
+        let options = Config::default()
+            .resolve(&destination, &task_options)
+            .unwrap();
+        let (events, _receiver) = EventSink::channel(16);
+        let file = FileOutcome::new(archive, "payload.demo".to_string(), 7, None, false);
+        let context = FinalizeContext {
+            task_id: uuid::Uuid::new_v4(),
+            destination: &destination,
+            file: &file,
+            options: &options,
+            events: &events,
         };
 
-        let extract_root = context
-            .options
-            .extract_dir
-            .clone()
-            .unwrap_or_else(|| context.destination.to_path_buf());
-        context.events.emit(EventKind::ExtractionStarted {
-            task_id: context.task_id,
-            file: context.file.relative_path.clone(),
-            target: extract_root.clone(),
-        });
+        let registry = ExtractorRegistry::default().with(Arc::new(DemoExtractor));
+        let result = ExtractorFinalizer::new(Arc::new(registry))
+            .finalize(&context)
+            .await
+            .unwrap();
 
-        let archive_path = context.file.path.clone();
-        let extract_root_for_task = extract_root.clone();
-        let overwrite = context.options.overwrite;
-        let report = tokio::task::spawn_blocking(move || {
-            extract_archive(&archive_path, kind, &extract_root_for_task, overwrite)
-        })
-        .await
-        .map_err(|error| Error::Extraction(format!("extract task failed: {error}")))??;
-
-        for warning in &report.warnings {
-            context.events.emit(EventKind::Warning {
-                task_id: Some(context.task_id),
-                message: warning.clone(),
-            });
-        }
-
-        if context.options.delete_archive
-            && let Err(error) = tokio::fs::remove_file(&context.file.path).await
-        {
-            context.events.emit(EventKind::Warning {
-                task_id: Some(context.task_id),
-                message: format!(
-                    "could not delete archive {}: {error}",
-                    context.file.path.display()
-                ),
-            });
-        }
-
-        context.events.emit(EventKind::ExtractionCompleted {
-            task_id: context.task_id,
-            file: context.file.relative_path.clone(),
-            target: report.target.clone(),
-            files_extracted: report.files_extracted,
-        });
-
-        Ok(FinalizeResult {
-            checksum_verified: false,
-            extracted_to: Some(report.target),
-        })
+        let extracted = result.extracted_to.expect("extracted path");
+        assert_eq!(extracted, destination.join("demo-out"));
+        assert_eq!(
+            std::fs::read_to_string(extracted.join("hello.txt")).unwrap(),
+            "hello"
+        );
     }
 }

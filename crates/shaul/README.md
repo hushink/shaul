@@ -67,7 +67,8 @@ runnable examples in
 ## Extending
 
 Implement `LinkParser` and/or `DownloadBackend`, then assemble a `Router` with
-`ParserRegistry`. Extension is compile-time; no unstable plugin ABI is used.
+`ParserRegistry`. Archive formats are extensible through `ArchiveExtractor` and
+`ExtractorRegistry`. Extension is compile-time; no unstable plugin ABI is used.
 
 ## CLI
 

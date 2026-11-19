@@ -1,6 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use uuid::Uuid;
 
@@ -37,12 +38,155 @@ impl ArchiveKind {
 /// Summary of an extraction.
 #[derive(Clone, Debug)]
 pub struct ExtractReport {
-    /// Path the archive contents were written to.
+    /// Path the archive contents were written to. Custom extractors must return
+    /// a path under [`ExtractorRequest::extract_root`].
     pub target: PathBuf,
     /// Number of file entries extracted.
     pub files_extracted: u64,
     /// Non-fatal issues, such as skipped symlinks.
     pub warnings: Vec<String>,
+}
+
+/// Read-only inputs supplied to an [`ArchiveExtractor`].
+#[non_exhaustive]
+pub struct ExtractorRequest<'a> {
+    /// Archive file to read.
+    pub path: &'a Path,
+    /// Directory the extractor may write into. Writes outside this directory
+    /// are rejected by the registry after extraction, and are a contract
+    /// violation for the implementation.
+    pub extract_root: &'a Path,
+    /// Whether an existing extraction target may be replaced.
+    pub overwrite: bool,
+}
+
+impl<'a> ExtractorRequest<'a> {
+    /// Creates a request for `path` rooted at `extract_root`.
+    pub fn new(path: &'a Path, extract_root: &'a Path, overwrite: bool) -> Self {
+        Self {
+            path,
+            extract_root,
+            overwrite,
+        }
+    }
+}
+
+/// One archive format implementation used by [`ExtractorRegistry`].
+///
+/// Extractors run on a blocking worker. Implementations must keep every write
+/// under [`ExtractorRequest::extract_root`], reject unsafe entry paths, and
+/// should extract into a temporary directory before renaming the final target
+/// into place.
+pub trait ArchiveExtractor: Send + Sync {
+    /// Stable name used in diagnostics.
+    fn name(&self) -> &'static str;
+
+    /// Returns `true` when this extractor handles `path`.
+    ///
+    /// The registry calls this in order and the first match owns the file.
+    /// Implementations should be cheap and free of side effects; return
+    /// `Ok(false)` for unsupported files and reserve `Err` for real I/O or
+    /// detection failures.
+    fn supports(&self, path: &Path) -> Result<bool>;
+
+    /// Extracts the archive described by `request`.
+    fn extract(&self, request: &ExtractorRequest<'_>) -> Result<ExtractReport>;
+}
+
+/// Extractor for the archive formats built into shaul: zip, tar, tar.gz,
+/// tar.zst, gzip and zstd.
+pub struct BuiltinExtractor;
+
+impl ArchiveExtractor for BuiltinExtractor {
+    fn name(&self) -> &'static str {
+        "builtin"
+    }
+
+    fn supports(&self, path: &Path) -> Result<bool> {
+        Ok(detect_archive(path)?.is_some())
+    }
+
+    fn extract(&self, request: &ExtractorRequest<'_>) -> Result<ExtractReport> {
+        let kind = detect_archive(request.path)?.ok_or_else(|| {
+            Error::Extraction(format!("unsupported archive: {}", request.path.display()))
+        })?;
+        extract_archive(request.path, kind, request.extract_root, request.overwrite)
+    }
+}
+
+/// Ordered list of archive extractors.
+///
+/// [`ExtractorRegistry::default`] contains [`BuiltinExtractor`]. Use
+/// [`ExtractorRegistry::with`] to try a custom extractor before the built-ins,
+/// or [`ExtractorRegistry::new`] for an explicit list.
+#[derive(Clone)]
+pub struct ExtractorRegistry {
+    extractors: Vec<Arc<dyn ArchiveExtractor>>,
+}
+
+impl Default for ExtractorRegistry {
+    fn default() -> Self {
+        Self {
+            extractors: vec![Arc::new(BuiltinExtractor)],
+        }
+    }
+}
+
+impl ExtractorRegistry {
+    /// Creates a registry containing exactly `extractors`, in order.
+    pub fn new(extractors: Vec<Arc<dyn ArchiveExtractor>>) -> Self {
+        Self { extractors }
+    }
+
+    /// Prepends `extractor` so it is tried before the existing entries.
+    pub fn with(mut self, extractor: Arc<dyn ArchiveExtractor>) -> Self {
+        self.extractors.insert(0, extractor);
+        self
+    }
+
+    /// Returns `true` when an extractor claims `path`.
+    pub fn supports(&self, path: &Path) -> Result<bool> {
+        for extractor in &self.extractors {
+            if extractor.supports(path)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Extracts `path` with the first matching extractor.
+    ///
+    /// Returns `Ok(None)` when no extractor supports the file. The final target
+    /// reported by the extractor is checked to be inside `extract_root`.
+    pub fn extract(
+        &self,
+        path: &Path,
+        extract_root: &Path,
+        overwrite: bool,
+    ) -> Result<Option<ExtractReport>> {
+        for extractor in &self.extractors {
+            if extractor.supports(path)? {
+                std::fs::create_dir_all(extract_root)?;
+                let request = ExtractorRequest::new(path, extract_root, overwrite);
+                let report = extractor.extract(&request)?;
+                validate_extract_target(extract_root, &report.target)?;
+                return Ok(Some(report));
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn validate_extract_target(extract_root: &Path, target: &Path) -> Result<()> {
+    let root = extract_root.canonicalize()?;
+    let target = target.canonicalize()?;
+    if !target.starts_with(&root) {
+        return Err(Error::Extraction(format!(
+            "extractor wrote outside the extraction root: {}",
+            target.display()
+        )));
+    }
+    Ok(())
 }
 
 /// Detect by magic bytes, using the extension only for legacy tarballs that
@@ -470,5 +614,160 @@ mod tests {
         let path = dir.path().join("plain.bin");
         std::fs::write(&path, [0u8; 512]).unwrap();
         assert_eq!(detect_archive(&path).unwrap(), None);
+    }
+
+    struct DemoExtractor;
+
+    impl ArchiveExtractor for DemoExtractor {
+        fn name(&self) -> &'static str {
+            "demo"
+        }
+
+        fn supports(&self, path: &Path) -> Result<bool> {
+            Ok(path.extension().and_then(|extension| extension.to_str()) == Some("demo"))
+        }
+
+        fn extract(&self, request: &ExtractorRequest<'_>) -> Result<ExtractReport> {
+            let target = request.extract_root.join("demo-out");
+            std::fs::create_dir_all(&target)?;
+            std::fs::write(target.join("hello.txt"), b"demo")?;
+            Ok(ExtractReport {
+                target,
+                files_extracted: 1,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    struct OverrideBuiltin;
+
+    impl ArchiveExtractor for OverrideBuiltin {
+        fn name(&self) -> &'static str {
+            "override"
+        }
+
+        fn supports(&self, path: &Path) -> Result<bool> {
+            Ok(path.to_string_lossy().ends_with(".tar.gz"))
+        }
+
+        fn extract(&self, request: &ExtractorRequest<'_>) -> Result<ExtractReport> {
+            let target = request.extract_root.join("override-out");
+            std::fs::create_dir_all(&target)?;
+            std::fs::write(target.join("override.txt"), b"override")?;
+            Ok(ExtractReport {
+                target,
+                files_extracted: 1,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn custom_extractor_is_selected_and_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sample.demo");
+        std::fs::write(&path, b"demo").unwrap();
+        let registry = ExtractorRegistry::default().with(Arc::new(DemoExtractor));
+
+        assert!(registry.supports(&path).unwrap());
+        let report = registry.extract(&path, dir.path(), false).unwrap().unwrap();
+        assert_eq!(report.files_extracted, 1);
+        assert_eq!(
+            std::fs::read_to_string(report.target.join("hello.txt")).unwrap(),
+            "demo"
+        );
+    }
+
+    #[test]
+    fn custom_extractor_precedes_builtins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sample.tar.gz");
+        std::fs::write(&path, b"not really a tarball").unwrap();
+        let registry = ExtractorRegistry::default().with(Arc::new(OverrideBuiltin));
+
+        let report = registry.extract(&path, dir.path(), false).unwrap().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(report.target.join("override.txt")).unwrap(),
+            "override"
+        );
+    }
+
+    #[test]
+    fn registry_returns_none_when_no_extractor_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plain.bin");
+        std::fs::write(&path, b"plain").unwrap();
+        let registry = ExtractorRegistry::new(Vec::new());
+
+        assert!(!registry.supports(&path).unwrap());
+        assert!(
+            registry
+                .extract(&path, dir.path(), false)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    struct EscapingExtractor;
+
+    impl ArchiveExtractor for EscapingExtractor {
+        fn name(&self) -> &'static str {
+            "escaping"
+        }
+
+        fn supports(&self, _path: &Path) -> Result<bool> {
+            Ok(true)
+        }
+
+        fn extract(&self, request: &ExtractorRequest<'_>) -> Result<ExtractReport> {
+            let target = request.extract_root.parent().unwrap().join("escaped");
+            std::fs::create_dir_all(&target)?;
+            std::fs::write(target.join("outside.txt"), b"outside")?;
+            Ok(ExtractReport {
+                target,
+                files_extracted: 1,
+                warnings: Vec::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn extractor_target_must_stay_under_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("input.bin");
+        std::fs::write(&path, b"input").unwrap();
+        let registry = ExtractorRegistry::new(vec![Arc::new(EscapingExtractor)]);
+
+        let error = registry.extract(&path, &root, false).unwrap_err();
+        assert!(matches!(error, Error::Extraction(_)));
+    }
+
+    struct FailingExtractor;
+
+    impl ArchiveExtractor for FailingExtractor {
+        fn name(&self) -> &'static str {
+            "failing"
+        }
+
+        fn supports(&self, _path: &Path) -> Result<bool> {
+            Ok(true)
+        }
+
+        fn extract(&self, _request: &ExtractorRequest<'_>) -> Result<ExtractReport> {
+            Err(Error::Extraction("boom".to_string()))
+        }
+    }
+
+    #[test]
+    fn a_claiming_extractor_failure_does_not_fall_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sample.tar.gz");
+        std::fs::write(&path, b"not really a tarball").unwrap();
+        let registry = ExtractorRegistry::default().with(Arc::new(FailingExtractor));
+
+        let error = registry.extract(&path, dir.path(), false).unwrap_err();
+        assert!(matches!(error, Error::Extraction(message) if message == "boom"));
     }
 }

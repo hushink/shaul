@@ -44,7 +44,8 @@
 ### Tier 2：扩展点
 
 `LinkParser`、`DownloadBackend`、`ResumeCheckpoint`、`TaskStore`、
-`Finalizer` 面向第三方实现。它们与 Tier 1 同等受 semver 保护，但额外约定：
+`Finalizer`、`ArchiveExtractor` 面向第三方实现。它们与 Tier 1 同等受
+semver 保护，但额外约定：
 
 - 未来新增 trait 方法必须带默认实现，否则只能进 major 版本。
 - 扩展作者应只依赖 trait 方法和 `shaul-core` 的公开类型，不依赖具体后端的
@@ -108,6 +109,9 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      指标名是 1.x 稳定契约。
    - `DownloadEngine::with_finalizers` / `set_finalizers` 允许替换
      verify/extract 管线。
+   - `ArchiveExtractor` / `ExtractorRegistry` / `ExtractorFinalizer` /
+     `FinalizerPipeline::with_extractor_registry` 允许注册自定义解压格式；
+     7z/rar/xz 不内置，由第三方实现。`ExtractFinalizer` 的内置行为保持不变。
    - `tracing` span（`shaul.engine.*`、`shaul.http.*`、`shaul.hub.*`、
      `shaul.bittorrent.*`）和事件流是对外可观测接口；用户自行安装 tracing
      subscriber，并通过 `subscribe()` 消费任务事件。

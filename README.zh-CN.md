@@ -28,7 +28,7 @@
   `lfs.oid`。
 - **Finalizer 流水线**：合并（仅独立分片后端）→ 校验 → 解压 → 原子落盘。
 - **压缩包解压**：zip、tar、tar.gz、tar.zst、gz、zst，带路径穿越防护与
-  原子替换。
+  原子替换。解压器可通过 `ArchiveExtractor` 替换，7z/rar/xz 可由第三方提供。
 - **每任务请求头与鉴权**：可重复 header、Bearer/Basic、跨域重定向剥离
   敏感头，并支持 `${env:NAME}` 占位符。
 - **Hub 一等公民**：Hugging Face / ModelScope 仓库快照、revision、
@@ -155,8 +155,9 @@ telemetry 与 tracing，并附可直接运行的示例：
 
 新增协议时，实现 `LinkParser` 和/或 `DownloadBackend`，再用 `ParserRegistry`
 与后端优先级组装 `Router`。参考 [扩展开发指南](docs/extending.md)、
-[`custom_parser`](crates/shaul/examples/custom_parser.rs) 与
-[`custom_protocol`](crates/shaul/examples/custom_protocol.rs) 示例。扩展是编译期
+[`custom_parser`](crates/shaul/examples/custom_parser.rs)、
+[`custom_protocol`](crates/shaul/examples/custom_protocol.rs) 与
+[`custom_extractor`](crates/shaul/examples/custom_extractor.rs) 示例。扩展是编译期
 完成的，不涉及不稳定的动态插件 ABI。
 
 ## 配置

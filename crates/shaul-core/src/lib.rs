@@ -48,6 +48,9 @@ pub mod task;
 pub mod telemetry;
 mod util;
 
+pub use archive::{
+    ArchiveExtractor, BuiltinExtractor, ExtractReport, ExtractorRegistry, ExtractorRequest,
+};
 pub use backend::{
     BackendCapabilities, DownloadBackend, DownloadOutcome, DownloadRequest, FileOutcome,
     ResumeCheckpoint,
@@ -59,8 +62,8 @@ pub use engine::DownloadEngine;
 pub use error::{Error, Result};
 pub use event::{DownloadEvent, EventKind, EventSink};
 pub use finalizer::{
-    ExtractFinalizer, FinalizeContext, FinalizeResult, Finalizer, FinalizerPipeline,
-    VerifyFinalizer,
+    ExtractFinalizer, ExtractorFinalizer, FinalizeContext, FinalizeResult, Finalizer,
+    FinalizerPipeline, VerifyFinalizer,
 };
 pub use header::{Auth, Header, RequestOptions, expand_env};
 pub use link::Link;

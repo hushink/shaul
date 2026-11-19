@@ -15,6 +15,7 @@ The examples below are complete programs under
 | [`library_blocking.rs`](../crates/shaul/examples/library_blocking.rs) | Use the synchronous facade |
 | [`library_queue.rs`](../crates/shaul/examples/library_queue.rs) | Persist tasks, pause/resume, run a queue |
 | [`custom_protocol.rs`](../crates/shaul/examples/custom_protocol.rs) | Custom parser + backend + telemetry |
+| [`custom_extractor.rs`](../crates/shaul/examples/custom_extractor.rs) | Custom archive format via `ExtractorRegistry` |
 | [`custom_parser.rs`](../crates/shaul/examples/custom_parser.rs) | Offline custom parser |
 
 ## Dependency
@@ -255,7 +256,8 @@ the underlying async engine. For a custom router, use
 To replace a component, build the `Router` yourself and pass it to
 `DownloadEngine::new`. The [extension guide](extending.md) covers custom
 `LinkParser`/`DownloadBackend` implementations, `ResourceKind::Custom`,
-`TaskStore`, and the finalizer pipeline.
+`TaskStore`, the finalizer pipeline, and custom archive formats through
+`ArchiveExtractor`/`ExtractorRegistry` (including user-provided 7z/rar/xz).
 
 The default assembly can also be adjusted after construction:
 

@@ -175,6 +175,66 @@ let engine = engine.with_finalizers(pipeline);
 resolved options and the event sink. Verification and extraction emit their own
 events; custom steps should emit `EventKind::Warning`/`FileCompleted` as needed.
 
+## Custom archive extractors
+
+Extraction is a replaceable component. `ArchiveExtractor` handles one format;
+`ExtractorRegistry` tries extractors in order and the first `supports()` match
+owns the file. The default registry ends with the built-in zip/tar/gzip/zstd
+extractor, so custom formats can be prepended:
+
+```rust,ignore
+struct SevenZipExtractor;
+
+impl ArchiveExtractor for SevenZipExtractor {
+    fn name(&self) -> &'static str { "7z" }
+
+    fn supports(&self, path: &Path) -> Result<bool> {
+        Ok(path.extension().and_then(|extension| extension.to_str()) == Some("7z"))
+    }
+
+    fn extract(&self, request: &ExtractorRequest<'_>) -> Result<ExtractReport> {
+        // Extract into a temporary directory under request.extract_root,
+        // validate every entry with sanitize_relative_path, then rename the
+        // target into place.
+        // ...
+    }
+}
+
+let registry = ExtractorRegistry::default().with(Arc::new(SevenZipExtractor));
+let pipeline = FinalizerPipeline::with_extractor_registry(Arc::new(registry));
+let engine = engine.with_finalizers(pipeline);
+```
+
+Rules:
+
+- `supports()` must be cheap and side-effect free. The first claiming extractor
+  is authoritative; an extraction error is not retried with the next extractor.
+- Write only under `ExtractorRequest::extract_root`. The registry canonicalizes
+  the returned `ExtractReport::target` and rejects paths outside that root.
+- Reject absolute paths, `..`, symlinks and special entries in your format;
+  `sanitize_relative_path` and `safe_join` are available for this.
+- Extract into a temporary directory and rename into place; do not leave a
+  half-written target on failure.
+- The trait is synchronous and runs inside `spawn_blocking`. Do not block the
+  async runtime directly.
+
+7z, rar and xz are intentionally not built in. Implement them with a
+third-party crate or external tool and choose their license and security
+posture yourself. See
+[`custom_extractor.rs`](../crates/shaul/examples/custom_extractor.rs) for a
+complete registry example.
+
+To keep the default verify step and add another finalizer, build the pipeline
+explicitly:
+
+```rust,ignore
+let pipeline = FinalizerPipeline::new(vec![
+    Arc::new(VerifyFinalizer),
+    Arc::new(ExtractorFinalizer::new(Arc::new(registry))),
+    Arc::new(AuditFinalizer),
+]);
+```
+
 ## Telemetry
 
 `Telemetry` is a low-cardinality metrics hook. Every method defaults to a no-op,
