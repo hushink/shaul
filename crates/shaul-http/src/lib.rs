@@ -8,6 +8,7 @@ pub mod backend;
 mod filename;
 /// Parser for direct HTTP/HTTPS links.
 pub mod parser;
+mod rate;
 
 pub use backend::HttpBackend;
 pub use parser::DirectLinkParser;

@@ -46,6 +46,9 @@ pub struct DownloadConfig {
     /// Global connection budget. The HTTP backend currently enforces per-task
     /// `connections`; this value is reserved for a scheduler-wide limit.
     pub global: usize,
+    /// Global bandwidth limit in bytes per second. `None` or `0` means
+    /// unlimited. Direct HTTP and Hub file transfers share this limit.
+    pub rate_limit: Option<u64>,
     /// Size in bytes of each ranged HTTP segment.
     pub segment_size: u64,
     /// Resume interrupted downloads from checkpoints by default.
@@ -75,6 +78,11 @@ pub struct NetworkConfig {
     pub user_agent: String,
     /// Allow authentication headers to follow cross-origin redirects.
     pub allow_cross_origin_auth: bool,
+    /// Explicit HTTP/HTTPS/SOCKS proxy URL. When unset, the HTTP client keeps
+    /// reqwest's ambient behavior.
+    pub proxy: Option<String>,
+    /// Comma-separated hosts that bypass the configured proxy.
+    pub no_proxy: Option<String>,
 }
 
 /// Hugging Face and ModelScope cache and endpoint settings.
@@ -135,6 +143,7 @@ impl Default for DownloadConfig {
             connections: 8,
             per_host: 16,
             global: 64,
+            rate_limit: None,
             segment_size: 8 * 1024 * 1024,
             resume: true,
             verify: VerifyMode::Auto,
@@ -153,6 +162,8 @@ impl Default for NetworkConfig {
             retries: 5,
             user_agent: format!("shaul/{}", env!("CARGO_PKG_VERSION")),
             allow_cross_origin_auth: false,
+            proxy: None,
+            no_proxy: None,
         }
     }
 }
@@ -172,6 +183,10 @@ pub struct ResolvedOptions {
     /// Global connection budget carried from configuration; currently reserved
     /// for a scheduler-wide limit.
     pub global: usize,
+    /// Global bandwidth limit in bytes per second, if configured.
+    pub rate_limit: Option<u64>,
+    /// Additional per-task bandwidth limit in bytes per second, if configured.
+    pub task_rate_limit: Option<u64>,
     /// Byte size of each ranged HTTP segment.
     pub segment_size: u64,
     /// Whether resume is enabled for this task.
@@ -337,6 +352,9 @@ impl Config {
         if let Some(value) = env_parse::<usize>("SHAUL_GLOBAL")? {
             self.download.global = value;
         }
+        if let Some(value) = env("SHAUL_RATE_LIMIT") {
+            self.download.rate_limit = Some(parse_bytes(&value)?).filter(|value| *value > 0);
+        }
         if let Some(value) = env("SHAUL_SEGMENT_SIZE") {
             self.download.segment_size = parse_bytes(&value)?;
         }
@@ -372,6 +390,22 @@ impl Config {
         }
         if let Some(value) = env_parse::<bool>("SHAUL_ALLOW_CROSS_ORIGIN_AUTH")? {
             self.network.allow_cross_origin_auth = value;
+        }
+        if let Some(value) = env("SHAUL_PROXY").or_else(|| {
+            env("HTTPS_PROXY")
+                .or_else(|| env("https_proxy"))
+                .or_else(|| env("HTTP_PROXY"))
+                .or_else(|| env("http_proxy"))
+                .or_else(|| env("ALL_PROXY"))
+                .or_else(|| env("all_proxy"))
+        }) {
+            self.network.proxy = Some(value);
+        }
+        if let Some(value) = env("SHAUL_NO_PROXY")
+            .or_else(|| env("NO_PROXY"))
+            .or_else(|| env("no_proxy"))
+        {
+            self.network.no_proxy = Some(value);
         }
 
         if let Some(value) = env("HF_HOME") {
@@ -453,6 +487,8 @@ impl Config {
                 .max(1),
             per_host: self.download.per_host.max(1),
             global: self.download.global.max(1),
+            rate_limit: self.download.rate_limit.filter(|value| *value > 0),
+            task_rate_limit: options.rate_limit.filter(|value| *value > 0),
             segment_size: self.download.segment_size.max(64 * 1024),
             resume: options.resume.unwrap_or(self.download.resume),
             verify: options.verify.unwrap_or(self.download.verify),
@@ -485,6 +521,11 @@ impl Config {
             "download.connections" => self.download.connections.to_string(),
             "download.per_host" => self.download.per_host.to_string(),
             "download.global" => self.download.global.to_string(),
+            "download.rate_limit" => self
+                .download
+                .rate_limit
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
             "download.segment_size" => self.download.segment_size.to_string(),
             "download.resume" => self.download.resume.to_string(),
             "download.verify" => verify_mode_str(self.download.verify).to_string(),
@@ -501,6 +542,8 @@ impl Config {
             "network.retries" => self.network.retries.to_string(),
             "network.user_agent" => self.network.user_agent.clone(),
             "network.allow_cross_origin_auth" => self.network.allow_cross_origin_auth.to_string(),
+            "network.proxy" => self.network.proxy.clone().unwrap_or_default(),
+            "network.no_proxy" => self.network.no_proxy.clone().unwrap_or_default(),
             "hub.use_cache" => self.hub.use_cache.to_string(),
             "hub.hf_cache" => self.hf_cache_dir()?.display().to_string(),
             "hub.modelscope_cache" => self.modelscope_cache_dir()?.display().to_string(),
@@ -537,6 +580,13 @@ impl Config {
             "download.connections" => self.download.connections = parse_value(value)?,
             "download.per_host" => self.download.per_host = parse_value(value)?,
             "download.global" => self.download.global = parse_value(value)?,
+            "download.rate_limit" => {
+                self.download.rate_limit = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(parse_bytes(value)?).filter(|value| *value > 0)
+                }
+            }
             "download.segment_size" => self.download.segment_size = parse_bytes(value)?,
             "download.resume" => self.download.resume = parse_value(value)?,
             "download.verify" => self.download.verify = parse_verify_mode(value)?,
@@ -557,6 +607,20 @@ impl Config {
             "network.user_agent" => self.network.user_agent = value.to_string(),
             "network.allow_cross_origin_auth" => {
                 self.network.allow_cross_origin_auth = parse_value(value)?
+            }
+            "network.proxy" => {
+                self.network.proxy = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                }
+            }
+            "network.no_proxy" => {
+                self.network.no_proxy = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.to_string())
+                }
             }
             "hub.use_cache" => self.hub.use_cache = parse_value(value)?,
             "hub.hf_cache" => {
@@ -737,6 +801,8 @@ struct PartialDownload {
     #[serde(default)]
     global: Option<usize>,
     #[serde(default)]
+    rate_limit: Option<u64>,
+    #[serde(default)]
     segment_size: Option<u64>,
     #[serde(default)]
     resume: Option<bool>,
@@ -762,6 +828,10 @@ struct PartialNetwork {
     user_agent: Option<String>,
     #[serde(default)]
     allow_cross_origin_auth: Option<bool>,
+    #[serde(default)]
+    proxy: Option<String>,
+    #[serde(default)]
+    no_proxy: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -809,6 +879,9 @@ impl PartialConfig {
             if let Some(value) = download.global {
                 config.download.global = value;
             }
+            if let Some(value) = download.rate_limit {
+                config.download.rate_limit = (value > 0).then_some(value);
+            }
             if let Some(value) = download.segment_size {
                 config.download.segment_size = value;
             }
@@ -843,6 +916,12 @@ impl PartialConfig {
             }
             if let Some(value) = network.allow_cross_origin_auth {
                 config.network.allow_cross_origin_auth = value;
+            }
+            if let Some(value) = network.proxy {
+                config.network.proxy = (!value.trim().is_empty()).then_some(value);
+            }
+            if let Some(value) = network.no_proxy {
+                config.network.no_proxy = (!value.trim().is_empty()).then_some(value);
             }
         }
         if let Some(hub) = self.hub {
@@ -919,7 +998,50 @@ mod tests {
         let mut config = Config::default();
         config.set_value("download.connections", "12").unwrap();
         assert_eq!(config.get_value("download.connections").unwrap(), "12");
+        config.set_value("download.rate_limit", "2MiB").unwrap();
+        assert_eq!(
+            config.get_value("download.rate_limit").unwrap(),
+            (2 * 1024 * 1024).to_string()
+        );
+        config
+            .set_value("network.proxy", "http://127.0.0.1:8080")
+            .unwrap();
+        assert_eq!(
+            config.get_value("network.proxy").unwrap(),
+            "http://127.0.0.1:8080"
+        );
+        config
+            .set_value("network.no_proxy", "localhost,127.0.0.1")
+            .unwrap();
+        assert_eq!(
+            config.get_value("network.no_proxy").unwrap(),
+            "localhost,127.0.0.1"
+        );
         config.set_value("headers.X-Test", "yes").unwrap();
         assert_eq!(config.get_value("headers.X-Test").unwrap(), "yes");
+    }
+
+    #[test]
+    fn resolves_proxy_and_rate_limits() {
+        let mut config = Config::default();
+        config.download.rate_limit = Some(1024);
+        config.network.proxy = Some("http://127.0.0.1:8080".to_string());
+        config.network.no_proxy = Some("localhost".to_string());
+        let options = TaskOptions {
+            rate_limit: Some(2048),
+            ..TaskOptions::default()
+        };
+        let resolved = config.resolve(Path::new("."), &options).unwrap();
+        assert_eq!(resolved.rate_limit, Some(1024));
+        assert_eq!(resolved.task_rate_limit, Some(2048));
+
+        let partial: PartialConfig = toml::from_str(
+            "[download]\nrate_limit = 0\n[network]\nproxy = \"\"\nno_proxy = \"\"\n",
+        )
+        .unwrap();
+        partial.apply(&mut config).unwrap();
+        assert_eq!(config.download.rate_limit, None);
+        assert_eq!(config.network.proxy, None);
+        assert_eq!(config.network.no_proxy, None);
     }
 }

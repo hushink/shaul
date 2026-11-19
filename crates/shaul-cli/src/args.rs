@@ -31,6 +31,14 @@ pub struct Cli {
     #[arg(long, short = 'v', global = true, action = ArgAction::Count)]
     pub verbose: u8,
 
+    /// HTTP/HTTPS/SOCKS proxy URL
+    #[arg(long, global = true, value_name = "URL")]
+    pub proxy: Option<String>,
+
+    /// Comma-separated hosts that bypass the proxy
+    #[arg(long, global = true, value_name = "HOSTS")]
+    pub no_proxy: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -87,8 +95,12 @@ pub struct RequestArgs {
 #[derive(Args, Debug)]
 pub struct DownloadArgs {
     /// One or more links to download
-    #[arg(value_name = "LINK", required = true)]
+    #[arg(value_name = "LINK", required_unless_present = "input_file")]
     pub links: Vec<String>,
+
+    /// Read links from a file (one per line, `#` comments ignored)
+    #[arg(long, value_name = "PATH")]
+    pub input_file: Option<PathBuf>,
 
     /// Download directory (defaults to the configured download.dir)
     #[arg(long, short = 'd', value_name = "DIR")]
@@ -101,6 +113,10 @@ pub struct DownloadArgs {
     /// Connections per file
     #[arg(long, short = 'n', value_name = "N")]
     pub connections: Option<usize>,
+
+    /// Additional bandwidth cap for this task (for example 10MiB, 500K)
+    #[arg(long, value_name = "RATE")]
+    pub limit: Option<String>,
 
     /// Enable resume (default)
     #[arg(long, conflicts_with = "no_resume")]
@@ -210,6 +226,10 @@ pub struct RunArgs {
     #[arg(long, short = 'j', default_value_t = 1, value_name = "N")]
     pub jobs: usize,
 
+    /// Global bandwidth limit for the worker (for example 10MiB, 500K)
+    #[arg(long, value_name = "RATE")]
+    pub limit: Option<String>,
+
     /// Exit when the queue is empty instead of waiting for new tasks
     #[arg(long)]
     pub once: bool,
@@ -301,9 +321,15 @@ impl DownloadArgs {
         } else {
             None
         };
+        let rate_limit = self
+            .limit
+            .as_deref()
+            .map(shaul::config::parse_bytes)
+            .transpose()?;
         Ok(TaskOptions {
             output: self.output.clone(),
             connections: self.connections,
+            rate_limit,
             resume,
             verify,
             checksum,

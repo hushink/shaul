@@ -42,12 +42,16 @@ pub struct HubClient {
 impl HubClient {
     /// Build a client from global configuration.
     pub fn new(config: &Config) -> Result<Self> {
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .redirect(reqwest::redirect::Policy::limited(10))
             .connect_timeout(Duration::from_secs(
                 config.network.connect_timeout_secs.max(1),
             ))
-            .user_agent(config.network.user_agent.clone())
+            .user_agent(config.network.user_agent.clone());
+        if let Some(proxy) = proxy_from_config(config)? {
+            builder = builder.proxy(proxy);
+        }
+        let client = builder
             .build()
             .map_err(|error| Error::Backend(format!("failed to build Hub client: {error}")))?;
         Ok(Self {
@@ -631,6 +635,20 @@ fn parse_cookie_line(line: &str) -> Option<String> {
     } else {
         Some(value.to_string())
     }
+}
+
+fn proxy_from_config(config: &Config) -> Result<Option<reqwest::Proxy>> {
+    let Some(url) = config.network.proxy.as_deref() else {
+        return Ok(None);
+    };
+    let mut proxy = reqwest::Proxy::all(url)
+        .map_err(|error| Error::Config(format!("invalid proxy URL: {error}")))?;
+    if let Some(value) = config.network.no_proxy.as_deref()
+        && let Some(no_proxy) = reqwest::NoProxy::from_string(value)
+    {
+        proxy = proxy.no_proxy(Some(no_proxy));
+    }
+    Ok(Some(proxy))
 }
 
 #[cfg(test)]

@@ -118,6 +118,12 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    - `default_blocking_engine` 让无 Tokio runtime 的同步应用也能使用默认
      backend/store 组装；`CancellationToken` 从 `shaul` 直接重导出，避免库
      用户额外依赖 `tokio-util`。
+   - `NetworkConfig::proxy` / `no_proxy`、`DownloadConfig::rate_limit` 与
+     `TaskOptions::rate_limit` 提供代理和带宽控制；默认均为未设置，保持
+     1.0 行为。`BlockingEngine` 同步补齐 `status`/`pause`/`resume`/`cancel`/
+     `run_pending`/`requeue_stale`。
+   - 本能力遵循“库与 CLI 尽量对齐”：库通过公开配置/任务字段获得同等能力，
+     CLI 额外负责从用户配置、环境变量和 flags 填充这些字段。
 
 ## 4. semver 规则
 

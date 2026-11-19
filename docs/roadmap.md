@@ -38,7 +38,7 @@
 ### 限速
 
 - `DownloadConfig.rate_limit`：全局共享字节/秒。
-- `TaskOptions.rate_limit`：覆盖单任务；`None` 表示继承全局。
+- `TaskOptions.rate_limit`：额外的单任务上限；与全局上限同时生效，取较低值。
 - CLI `--limit`，复用现有字节单位解析。
 - token bucket 覆盖所有 HTTP Range 流；暂停/取消必须立即释放等待。
 - 默认不限速；先覆盖 HTTP/Hub，BitTorrent 限速后续通过 librqbit 能力补齐。
@@ -91,11 +91,11 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 1. [x] `ArchiveExtractor` / `ExtractorRegistry` / `ExtractorFinalizer` 及内置 registry；先保持现有解压行为完全不变。
 2. [x] `custom_extractor` 示例、扩展文档和路径安全测试。
-3. [ ] 代理配置、CLI、环境变量和本地代理 e2e。
-4. [ ] 全局/单任务限速及取消测试。
-5. [ ] `BlockingEngine` 生命周期方法及库测试。
-6. [ ] `--input-file`、README/FAQ/rustdoc 更新。
-7. [ ] 全量 fmt、clippy、test、doc 和基准回归。
+3. [x] 代理配置、CLI、环境变量和本地代理 e2e。
+4. [x] 全局/单任务限速及取消测试。
+5. [x] `BlockingEngine` 生命周期方法及库测试。
+6. [x] `--input-file`、README/FAQ/rustdoc 更新。
+7. [x] 全量 fmt、clippy、test、doc 和基准运行（8 连接结果需在安静环境复核）。
 
 ### 1.1 验收
 

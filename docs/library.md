@@ -73,6 +73,38 @@ apply them to the `Config` after `load` so your precedence stays
 **flags > config file > environment > defaults**. A custom state directory is
 available as `config.state_dir = Some(path)` before building the engine.
 
+`Config::default()` is intentionally inert: it does not read the user's config
+file or environment. Library callers must fill the fields they need. The CLI
+uses `Config::load` and then applies its flags, which is the main capability
+difference between the two entry points.
+
+### Network controls
+
+Proxy and bandwidth settings are part of the same `Config`, and every option
+is available to library callers:
+
+```rust
+use shaul::{Config, TaskOptions};
+
+fn configure() -> shaul::Result<(Config, TaskOptions)> {
+    let mut config = Config::default();
+    config.network.proxy = Some("socks5://127.0.0.1:1080".to_string());
+    config.network.no_proxy = Some("localhost,127.0.0.1".to_string());
+    config.download.rate_limit = Some(8 * 1024 * 1024); // global bytes/sec
+
+    let options = TaskOptions {
+        rate_limit: Some(1024 * 1024), // additional per-task cap
+        ..TaskOptions::default()
+    };
+    Ok((config, options))
+}
+```
+
+The global and per-task caps are combined: the effective rate is the lower of
+the two. `None` or `Some(0)` means no cap at that layer. The proxy covers HTTP
+and Hub metadata/file requests; BitTorrent DHT/UDP traffic is not proxied and
+BitTorrent rate limiting is not part of the 1.1 slice.
+
 ## One task at a time
 
 `add` resolves the link through the router (Hub links can make metadata
@@ -247,8 +279,9 @@ fn main() -> shaul::Result<()> {
 ```
 
 `BlockingEngine::subscribe()` returns a `std::sync::mpsc::Receiver`. `add`,
-`run_task` and `list` are available as blocking calls, and `engine()` exposes
-the underlying async engine. For a custom router, use
+`run_task`, `list`, `status`, `pause`, `resume`, `cancel`, `run_pending` and
+`requeue_stale` are available as blocking calls, and `engine()` exposes the
+underlying async engine. For a custom router, use
 `BlockingEngine::new(router, store, config)`.
 
 ## Custom assembly and observability

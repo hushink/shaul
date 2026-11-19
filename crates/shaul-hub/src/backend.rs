@@ -29,6 +29,12 @@ impl HubBackend {
         })
     }
 
+    /// Build a Hub backend around an existing HTTP backend, so direct and Hub
+    /// transfers share connection and bandwidth limits.
+    pub fn with_http(client: Arc<HubClient>, http: HttpBackend) -> Self {
+        Self { client, http }
+    }
+
     async fn download_one(
         &self,
         provider: HubProvider,

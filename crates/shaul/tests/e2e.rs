@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -68,6 +69,108 @@ impl TestServer {
     fn redirect_url(&self) -> String {
         format!("http://{}/redirect", self.addr)
     }
+}
+
+struct ProxyServer {
+    addr: SocketAddr,
+    requests: Arc<AtomicUsize>,
+}
+
+impl ProxyServer {
+    async fn spawn(data: Vec<u8>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let data = Arc::new(data);
+        let requests = Arc::new(AtomicUsize::new(0));
+        let seen = requests.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let data = data.clone();
+                let seen = seen.clone();
+                tokio::spawn(async move {
+                    handle_proxy(socket, data, seen).await;
+                });
+            }
+        });
+        Self { addr, requests }
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
+    fn requests(&self) -> usize {
+        self.requests.load(Ordering::SeqCst)
+    }
+}
+
+async fn handle_proxy(mut socket: TcpStream, data: Arc<Vec<u8>>, seen: Arc<AtomicUsize>) {
+    let mut buffer = vec![0u8; 32 * 1024];
+    let mut read = 0;
+    loop {
+        let Ok(count) = socket.read(&mut buffer[read..]).await else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        read += count;
+        if buffer[..read]
+            .windows(4)
+            .any(|window| window == b"\r\n\r\n")
+        {
+            break;
+        }
+        if read == buffer.len() {
+            return;
+        }
+    }
+    let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+    let mut lines = request.lines();
+    let request_line = lines.next().unwrap_or_default();
+    let target = request_line.split_whitespace().nth(1).unwrap_or("/");
+    assert!(
+        target.starts_with("http://"),
+        "proxy received a non-absolute target: {target}"
+    );
+    let mut headers = HashMap::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+        }
+    }
+    seen.fetch_add(1, Ordering::SeqCst);
+
+    let total = data.len() as u64;
+    let etag = format!("\"{}\"", sha256_hex(&data));
+    let common = vec![
+        ("ETag".to_string(), etag),
+        ("Accept-Ranges".to_string(), "bytes".to_string()),
+        (
+            "Content-Disposition".to_string(),
+            "attachment; filename=\"proxied.bin\"".to_string(),
+        ),
+    ];
+    if let Some(range) = headers.get("range")
+        && let Some((start, end)) = parse_range(range, total)
+    {
+        let body = &data[start as usize..=end as usize];
+        let mut response_headers = common;
+        response_headers.push((
+            "Content-Range".to_string(),
+            format!("bytes {start}-{end}/{total}"),
+        ));
+        response_headers.push(("Content-Length".to_string(), body.len().to_string()));
+        respond(&mut socket, "206 Partial Content", response_headers, body).await;
+        return;
+    }
+
+    let mut response_headers = common;
+    response_headers.push(("Content-Length".to_string(), total.to_string()));
+    respond(&mut socket, "200 OK", response_headers, &data).await;
 }
 
 async fn handle(
@@ -569,6 +672,95 @@ async fn extracts_archives_after_verification() {
             .unwrap(),
         "hello"
     );
+}
+
+#[tokio::test]
+async fn applies_a_global_bandwidth_limit() {
+    let data = test_data(256 * 1024);
+    let server = TestServer::spawn(data.clone(), RangeMode::Supported, None, "limited.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.download.rate_limit = Some(1024 * 1024);
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let options = TaskOptions {
+        connections: Some(1),
+        ..TaskOptions::default()
+    };
+    let started = Instant::now();
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            options,
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert!(
+        started.elapsed().as_millis() >= 180,
+        "global rate limit was not applied"
+    );
+}
+
+#[tokio::test]
+async fn applies_a_per_task_bandwidth_limit() {
+    let data = test_data(256 * 1024);
+    let server = TestServer::spawn(data.clone(), RangeMode::Supported, None, "limited.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let options = TaskOptions {
+        connections: Some(1),
+        rate_limit: Some(1024 * 1024),
+        ..TaskOptions::default()
+    };
+    let started = Instant::now();
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            options,
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert!(
+        started.elapsed().as_millis() >= 180,
+        "per-task rate limit was not applied"
+    );
+}
+
+#[tokio::test]
+async fn downloads_through_an_http_proxy() {
+    let data = test_data(800 * 1024);
+    let proxy = ProxyServer::spawn(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.network.proxy = Some(proxy.url());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let options = TaskOptions {
+        connections: Some(2),
+        ..TaskOptions::default()
+    };
+    let task = engine
+        .add(
+            Link::new("http://proxy-only.invalid/file.bin").unwrap(),
+            config.download.dir.clone(),
+            options,
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("proxied.bin"))
+            .await
+            .unwrap(),
+        data
+    );
+    assert!(proxy.requests() >= 2, "expected probe and range requests");
 }
 
 fn tar_gz(contents: &[u8]) -> Vec<u8> {

@@ -183,6 +183,10 @@ pub struct TaskOptions {
     /// Number of parallel connections used for this task.
     #[serde(default)]
     pub connections: Option<usize>,
+    /// Additional bandwidth cap for this task in bytes per second. `None` or
+    /// `Some(0)` means no task-specific cap; the global limit still applies.
+    #[serde(default)]
+    pub rate_limit: Option<u64>,
     /// Whether to resume from existing partial data.
     #[serde(default)]
     pub resume: Option<bool>,

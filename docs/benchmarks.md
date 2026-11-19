@@ -50,6 +50,24 @@ the remaining 8 MiB. Throughput is computed over the remaining bytes.
   performance. A future benchmark should add a throttled/latency-injected
   server and a larger payload.
 
+## 2026-11-19 pre-release check (1.1 network controls)
+
+The same command was run after adding proxy/rate-limit plumbing. No proxy or
+rate limit was configured, so the transfer path should be unchanged. A quick
+run produced:
+
+| Case | Time | Throughput |
+| --- | ---: | ---: |
+| Full, 1 connection | 249 ms | ~64 MiB/s |
+| Full, 4 connections | 227 ms | ~70 MiB/s |
+| Full, 8 connections | 238 ms | ~67 MiB/s |
+| Resume from 50%, 8 connections | 155 ms | ~52 MiB/s |
+
+Criterion reported no change against the immediately preceding run in this
+environment, but the 8-connection estimate is above the 2026-11-18 warmed
+baseline. This was a noisy run; re-measure on a quiet machine before treating
+it as a regression. The rate-limit path is disabled when both limits are unset.
+
 ## Reproducing
 
 The benchmark is a normal Cargo bench target:

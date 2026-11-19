@@ -41,11 +41,12 @@ pub fn default_router(config: &Config) -> Result<Router> {
     let bt_backend: Option<Arc<dyn DownloadBackend>> = Some(Arc::new(BtBackend::new(config)?));
     #[cfg(not(feature = "bt"))]
     let bt_backend: Option<Arc<dyn DownloadBackend>> = None;
+    let http = HttpBackend::new(config)?;
     let backends: Vec<Arc<dyn DownloadBackend>> = bt_backend
         .into_iter()
         .chain([
-            Arc::new(HubBackend::new(client, config)?) as Arc<dyn DownloadBackend>,
-            shaul_core::backend_arc(HttpBackend::new(config)?),
+            Arc::new(HubBackend::with_http(client, http.clone())) as Arc<dyn DownloadBackend>,
+            shaul_core::backend_arc(http),
         ])
         .collect();
     Ok(Router::new(parsers, backends))

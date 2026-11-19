@@ -39,6 +39,7 @@
   完成后立即暂停，不常驻做种。
 - **持久队列**：`shaul add`、`shaul run` worker，以及跨进程
   pause/resume/cancel。
+- **网络控制**：显式 HTTP/HTTPS/SOCKS5 代理与 `NO_PROXY`，全局及单任务限速。
 - **可观测性**：同一条类型化事件流同时驱动人类可读进度条与 NDJSON 输出；
   `tracing` span 与可插拔 `Telemetry` 指标钩子支持日志、监控和外部接入。
 
@@ -95,9 +96,13 @@ $ shaul download https://modelscope.cn/models/org/repo
 $ shaul download 'magnet:?xt=urn:btih:<info-hash>&dn=example'
 $ shaul download ./example.torrent --include '*.mkv' --dir ./media
 
-# 持久队列
-$ shaul add https://example.com/data.tar.gz --extract
-$ shaul run
+# 代理与限速
+$ shaul download https://example.com/file.bin \
+      --proxy socks5://127.0.0.1:1080 --limit 10MiB
+
+# 持久队列与批量输入
+$ shaul add --input-file links.txt
+$ shaul run --limit 50MiB
 $ shaul list
 $ shaul status <id 或后缀>
 $ shaul pause <id>      # 运行中的 worker 约 500ms 内感知
@@ -112,8 +117,10 @@ v1 info hash 处理。
 常用参数：`--dir`、`--output`（单文件直链）、`--checksum`、
 `--verify/--no-verify`、`--extract/--no-extract`、`--extract-dir`、
 `--delete-archive`、`--header`、`--header-file`、`--bearer-token`、`--basic`、
-`--revision`、`--include`、`--exclude`、`--cache/--no-cache`、`--json`、
-`--force`、`--overwrite`、`--rename`。
+`--proxy`、`--no-proxy`、`--limit`、`--input-file`、`--revision`、
+`--include`、`--exclude`、`--cache/--no-cache`、`--json`、`--force`、
+`--overwrite`、`--rename`。`download`/`add` 的 `--limit` 限制单个任务；
+`shaul run --limit` 限制 worker 的全局速率。
 
 ### 库
 
@@ -174,6 +181,7 @@ connections = 8
 per_host = 16
 global = 64             # 预留；尚未强制执行
 segment_size = 8388608
+rate_limit = 0         # 全局共享字节/秒；0 = 不限速
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
@@ -186,6 +194,8 @@ connect_timeout_secs = 15
 retries = 5
 user_agent = "shaul/1.0.3"
 allow_cross_origin_auth = false
+# proxy = "http://127.0.0.1:8080"   # http://、https:// 或 socks5://
+# no_proxy = "localhost,127.0.0.1"
 
 [hub]
 use_cache = false      # 开启 HF 兼容缓存 / ModelScope 缓存
@@ -209,6 +219,10 @@ persistence = true
 # Authorization = "Bearer ${env:MY_TOKEN}"
 ```
 
+网络相关环境变量包括 `SHAUL_RATE_LIMIT`、`SHAUL_PROXY`、
+`SHAUL_NO_PROXY`，以及常规的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` /
+`NO_PROXY`。显式配置优先于环境变量。
+
 Hub 相关环境变量包括 `HF_TOKEN`、`HUGGING_FACE_HUB_TOKEN`、`HF_HOME`、
 `HF_HUB_CACHE`、`HF_ENDPOINT`、`MODELSCOPE_API_TOKEN`、`MODELSCOPE_CACHE`、
 `MODELSCOPE_ENDPOINT`、`SHAUL_HF_CACHE`、`SHAUL_MODELSCOPE_CACHE`、
@@ -221,7 +235,8 @@ BitTorrent 环境变量包括 `SHAUL_BT_DHT`、`SHAUL_BT_TRACKERS`、
 Unix 上 task sidecar 以 0600 权限写入。来自环境变量或官方凭据文件的 provider
 token 在运行时解析，不会落盘；用户显式传入的 `--bearer-token`/`--basic`/header
 会保存在 sidecar 中，建议使用 `${env:NAME}` 占位符。`--json` 输出会脱敏敏感
-header，并在任务视图中去掉 HTTP 链接的查询串。
+header，并在任务视图中去掉 HTTP 链接的查询串。`config show` 与
+`config get network.proxy` 会脱敏代理凭据。
 
 ## 关键语义
 

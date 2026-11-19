@@ -18,7 +18,8 @@ use tracing_subscriber::EnvFilter;
 
 use args::{Cli, Commands, ConfigArgs, ConfigCmd, DownloadArgs, IdArgs, InfoArgs, RunArgs};
 use support::{
-    acquire_run_lock, display_link, human_bytes, redacted_task, resolve_task_id, short_id,
+    acquire_run_lock, collect_links, display_link, human_bytes, redacted_task, resolve_task_id,
+    short_id,
 };
 
 #[tokio::main]
@@ -40,9 +41,17 @@ async fn run(cli: Cli) -> Result<()> {
         json,
         quiet,
         verbose: _,
+        proxy,
+        no_proxy,
         command,
     } = cli;
     let (mut config, config_path) = Config::load(config_arg.as_deref())?;
+    if let Some(proxy) = proxy {
+        config.network.proxy = Some(proxy);
+    }
+    if let Some(no_proxy) = no_proxy {
+        config.network.no_proxy = Some(no_proxy);
+    }
 
     match command {
         Commands::Download(args) => command_download(&mut config, args, json, quiet).await,
@@ -92,7 +101,8 @@ async fn command_download(
     json: bool,
     quiet: bool,
 ) -> Result<()> {
-    if args.links.len() > 1 && args.output.is_some() {
+    let links = collect_links(&args.links, args.input_file.as_deref())?;
+    if links.len() > 1 && args.output.is_some() {
         return Err(Error::Config(
             "--output applies to one link; use --dir for multiple links".to_string(),
         ));
@@ -110,7 +120,7 @@ async fn command_download(
     let ctrl_c = spawn_ctrl_c(cancel.clone());
     let mut failures = 0usize;
 
-    for raw in &args.links {
+    for raw in &links {
         if cancel.is_cancelled() {
             break;
         }
@@ -164,7 +174,8 @@ async fn command_download(
 }
 
 async fn command_add(config: &mut Config, args: DownloadArgs, json: bool) -> Result<()> {
-    if args.links.len() > 1 && args.output.is_some() {
+    let links = collect_links(&args.links, args.input_file.as_deref())?;
+    if links.len() > 1 && args.output.is_some() {
         return Err(Error::Config(
             "--output applies to one link; use --dir for multiple links".to_string(),
         ));
@@ -178,7 +189,7 @@ async fn command_add(config: &mut Config, args: DownloadArgs, json: bool) -> Res
     let engine = build_engine(config)?;
 
     let mut tasks = Vec::new();
-    for raw in &args.links {
+    for raw in &links {
         let link = Link::new(raw.clone())?;
         tasks.push(
             engine
@@ -204,6 +215,10 @@ async fn command_add(config: &mut Config, args: DownloadArgs, json: bool) -> Res
 }
 
 async fn command_run(config: &mut Config, args: RunArgs, json: bool, quiet: bool) -> Result<()> {
+    if let Some(limit) = &args.limit {
+        let rate = shaul::config::parse_bytes(limit)?;
+        config.download.rate_limit = (rate > 0).then_some(rate);
+    }
     let state_dir = config.state_dir()?;
     let _lock = acquire_run_lock(&state_dir)?;
     let engine = build_engine(config)?;
@@ -397,7 +412,12 @@ fn command_config(config: &Config, path: &Path, args: ConfigArgs, json: bool) ->
                 println!("<redacted>");
                 return Ok(());
             }
-            println!("{}", config.get_value(&key)?);
+            let value = config.get_value(&key)?;
+            if key == "network.proxy" {
+                println!("{}", redact_proxy(&value));
+            } else {
+                println!("{value}");
+            }
         }
         ConfigCmd::Set { key, value } => {
             let mut file_config = Config::load_file_only(path)?;
@@ -425,8 +445,27 @@ fn command_config(config: &Config, path: &Path, args: ConfigArgs, json: bool) ->
     Ok(())
 }
 
+fn redact_proxy(proxy: &str) -> String {
+    let Ok(mut url) = url::Url::parse(proxy) else {
+        return "<redacted>".to_string();
+    };
+    if url.username().is_empty() && url.password().is_none() {
+        return proxy.to_string();
+    }
+    if !url.username().is_empty() {
+        let _ = url.set_username("redacted");
+    }
+    if url.password().is_some() {
+        let _ = url.set_password(Some("redacted"));
+    }
+    url.to_string()
+}
+
 fn redacted_config(config: &Config) -> Config {
     let mut config = config.clone();
+    if let Some(proxy) = &config.network.proxy {
+        config.network.proxy = Some(redact_proxy(proxy));
+    }
     for (name, value) in &mut config.headers {
         if is_sensitive_header(name) {
             *value = "<redacted>".to_string();

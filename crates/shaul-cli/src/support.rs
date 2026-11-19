@@ -37,6 +37,30 @@ pub fn read_header_file(path: &Path) -> Result<Vec<Header>> {
     Ok(headers)
 }
 
+pub fn collect_links(links: &[String], input_file: Option<&Path>) -> Result<Vec<String>> {
+    let mut collected: Vec<String> = links
+        .iter()
+        .map(|link| link.trim())
+        .filter(|link| !link.is_empty())
+        .map(str::to_string)
+        .collect();
+    if let Some(path) = input_file {
+        let file = std::fs::File::open(path)?;
+        for line in BufReader::new(file).lines() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            collected.push(trimmed.to_string());
+        }
+    }
+    if collected.is_empty() {
+        return Err(Error::Config("no links provided".to_string()));
+    }
+    Ok(collected)
+}
+
 pub fn parse_basic_auth(value: &str) -> Result<Auth> {
     let (username, password) = value
         .split_once(':')

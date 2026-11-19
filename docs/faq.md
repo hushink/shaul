@@ -77,8 +77,9 @@ and a running worker notices within about 500 ms.
 
 `shaul config path` prints the resolved file. `--config PATH` or
 `SHAUL_CONFIG` overrides the location. Common environment variables include
-`SHAUL_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_STATE_DIR`, `SHAUL_VERIFY`,
-`HF_TOKEN` and `MODELSCOPE_API_TOKEN`; see the README for the full list.
+`SHAUL_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_RATE_LIMIT`, `SHAUL_PROXY`,
+`SHAUL_NO_PROXY`, `SHAUL_STATE_DIR`, `SHAUL_VERIFY`, `HF_TOKEN` and
+`MODELSCOPE_API_TOKEN`; see the README for the full list.
 
 ## How do I enable logs and metrics?
 
@@ -100,8 +101,21 @@ and telemetry examples.
 
 ## Does shaul support proxies or bandwidth limits?
 
-Not yet. These are candidates for a later 1.x release. `--header` can supply
-custom headers, but there is no HTTP/SOCKS proxy or speed-limit option today.
+Yes in the 1.1 line:
+
+- `network.proxy` / `--proxy` accepts `http://`, `https://` and `socks5://`.
+- `network.no_proxy` / `--no-proxy` is a comma-separated bypass list.
+- `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are read by
+  `Config::load`; explicit config and CLI values win.
+- `download.rate_limit` sets a global bytes-per-second cap.
+- `TaskOptions::rate_limit` adds a per-task cap. `shaul download --limit` and
+  `shaul add --limit` set that field (and `add` persists it); `shaul run
+  --limit` sets the worker's global cap.
+
+The proxy covers HTTP/Hub metadata and file transfers. BitTorrent DHT/UDP
+traffic is not proxied. BitTorrent rate limiting is not part of this slice.
+The library does not read environment variables unless the caller uses
+`Config::load`; `Config::default()` requires the caller to fill these fields.
 
 ## What do the JSON outputs contain?
 

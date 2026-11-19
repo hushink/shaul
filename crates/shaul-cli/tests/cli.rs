@@ -19,6 +19,7 @@ fn shaul() -> Command {
         "SHAUL_CONNECTIONS",
         "SHAUL_PER_HOST",
         "SHAUL_GLOBAL",
+        "SHAUL_RATE_LIMIT",
         "SHAUL_SEGMENT_SIZE",
         "SHAUL_RESUME",
         "SHAUL_VERIFY",
@@ -30,6 +31,16 @@ fn shaul() -> Command {
         "SHAUL_CONNECT_TIMEOUT_SECS",
         "SHAUL_RETRIES",
         "SHAUL_USER_AGENT",
+        "SHAUL_PROXY",
+        "SHAUL_NO_PROXY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
         "HF_TOKEN",
         "HUGGING_FACE_HUB_TOKEN",
         "MODELSCOPE_API_TOKEN",
@@ -113,6 +124,69 @@ fn config_file_wins_over_environment() {
         ])
         .env("SHAUL_PER_HOST", "33"));
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "33");
+}
+
+#[test]
+fn proxy_flags_override_the_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let output = run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "--proxy",
+        "http://127.0.0.1:8080",
+        "--no-proxy",
+        "localhost,127.0.0.1",
+        "config",
+        "get",
+        "network.proxy",
+    ]));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "http://127.0.0.1:8080"
+    );
+}
+
+#[test]
+fn config_show_redacts_proxy_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(
+        &dir,
+        "[network]\nproxy = \"http://user:secret@127.0.0.1:8080\"\n",
+    );
+    let output = run(shaul().args(["--config", path.to_str().unwrap(), "config", "show"]));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("secret"),
+        "proxy password leaked: {stdout}"
+    );
+    assert!(
+        stdout.contains("redacted"),
+        "proxy was not redacted: {stdout}"
+    );
+}
+
+#[test]
+fn input_file_supplies_download_links() {
+    let (url, _server) = spawn_file_server(b"from input file".to_vec());
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let input = dir.path().join("links.txt");
+    fs::write(&input, format!("# generated\n\n{url}\n")).unwrap();
+    let output_dir = dir.path().join("input-download");
+    run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "download",
+        "--input-file",
+        input.to_str().unwrap(),
+        "--dir",
+        output_dir.to_str().unwrap(),
+    ]));
+    assert_eq!(
+        fs::read(output_dir.join("file.bin")).unwrap(),
+        b"from input file"
+    );
 }
 
 #[test]

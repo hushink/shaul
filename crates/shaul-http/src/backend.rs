@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::filename::parse_content_disposition;
+use crate::rate::{RateLimiter, RateLimiters};
 
 const MAX_REDIRECTS: usize = 10;
 
@@ -55,26 +56,64 @@ const RESERVED_HEADERS: &[&str] = &[
     "transfer-encoding",
 ];
 
+type TaskRates = Arc<StdMutex<HashMap<TaskId, (u64, Arc<RateLimiter>)>>>;
+
 /// Segmented, resumable HTTP/HTTPS download backend.
 #[derive(Clone)]
 pub struct HttpBackend {
     client: Client,
+    global_rate: Option<Arc<RateLimiter>>,
+    task_rates: TaskRates,
 }
 
 impl HttpBackend {
-    /// Build a backend using the connection limits and user agent from
-    /// `config`.
+    /// Build a backend using the connection, proxy and user-agent settings
+    /// from `config`.
     pub fn new(config: &Config) -> Result<Self> {
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .redirect(Policy::none())
             .connect_timeout(Duration::from_secs(
                 config.network.connect_timeout_secs.max(1),
             ))
             .pool_max_idle_per_host(config.download.per_host.max(1))
-            .user_agent(config.network.user_agent.clone())
+            .user_agent(config.network.user_agent.clone());
+        if let Some(proxy) = proxy_from_config(config)? {
+            builder = builder.proxy(proxy);
+        }
+        let client = builder
             .build()
             .map_err(|error| Error::Backend(format!("failed to build HTTP client: {error}")))?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            global_rate: config
+                .download
+                .rate_limit
+                .filter(|value| *value > 0)
+                .map(|rate| Arc::new(RateLimiter::new(rate))),
+            task_rates: Arc::new(StdMutex::new(HashMap::new())),
+        })
+    }
+
+    fn request_rate(&self, request: &DownloadRequest) -> RateLimiters {
+        let task = request
+            .options
+            .task_rate_limit
+            .filter(|value| *value > 0)
+            .map(|rate| {
+                let mut rates = self
+                    .task_rates
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some((existing, limiter)) = rates.get(&request.task_id)
+                    && *existing == rate
+                {
+                    return limiter.clone();
+                }
+                let limiter = Arc::new(RateLimiter::new(rate));
+                rates.insert(request.task_id, (rate, limiter.clone()));
+                limiter
+            });
+        RateLimiters::new(self.global_rate.clone(), task)
     }
 
     /// Download one resource file, sharing the caller's task resume. This is
@@ -280,6 +319,7 @@ impl HttpBackend {
             progress_stop.clone(),
         );
 
+        let rate = self.request_rate(request);
         let transfer_result = if let Some(0) = total {
             // Empty file: the pre-allocated part is already the final content.
             task_resume.files.insert(key.clone(), file_resume.clone());
@@ -298,6 +338,7 @@ impl HttpBackend {
                 task_resume.clone(),
                 progress.clone(),
                 total,
+                &rate,
             )
             .await
         } else {
@@ -310,6 +351,7 @@ impl HttpBackend {
                 task_resume.clone(),
                 progress.clone(),
                 probe.range_supported,
+                &rate,
             )
             .await
         };
@@ -531,6 +573,7 @@ impl HttpBackend {
         task_resume: TaskResume,
         progress: Arc<AtomicU64>,
         total: Option<u64>,
+        rate: &RateLimiters,
     ) -> Result<FileResume> {
         let total =
             total.ok_or_else(|| Error::Backend("segmented transfer without size".to_string()))?;
@@ -571,6 +614,7 @@ impl HttpBackend {
             let progress = progress.clone();
             let cancel = child_cancel.clone();
             let if_range = if_range.clone();
+            let rate = rate.clone();
             set.spawn(async move {
                 backend
                     .segment_worker(
@@ -586,6 +630,7 @@ impl HttpBackend {
                         cancel,
                         total,
                         if_range,
+                        rate,
                     )
                     .await
             });
@@ -650,6 +695,7 @@ impl HttpBackend {
                     task_resume,
                     progress,
                     false,
+                    rate,
                 )
                 .await;
         }
@@ -683,6 +729,7 @@ impl HttpBackend {
         cancel: CancellationToken,
         total: u64,
         if_range: Option<String>,
+        rate: RateLimiters,
     ) -> std::result::Result<(), FetchError> {
         let mut part = tokio::fs::OpenOptions::new()
             .write(true)
@@ -712,6 +759,7 @@ impl HttpBackend {
                     &cancel,
                     total,
                     if_range.as_deref(),
+                    &rate,
                 )
                 .await
             {
@@ -760,6 +808,7 @@ impl HttpBackend {
         cancel: &CancellationToken,
         total: u64,
         if_range: Option<&str>,
+        rate: &RateLimiters,
     ) -> std::result::Result<(), FetchError> {
         let mut attempt = 0u32;
         loop {
@@ -872,6 +921,9 @@ impl HttpBackend {
                                 Some("server sent more data than requested".to_string());
                             break;
                         }
+                        rate.throttle(chunk.len() as u64, cancel)
+                            .await
+                            .map_err(FetchError::Fatal)?;
                         part.write_all(&chunk)
                             .await
                             .map_err(|error| FetchError::Fatal(Error::Io(error)))?;
@@ -926,6 +978,7 @@ impl HttpBackend {
         mut task_resume: TaskResume,
         progress: Arc<AtomicU64>,
         range_supported: bool,
+        rate: &RateLimiters,
     ) -> Result<FileResume> {
         let mut offset = if request.options.resume && range_supported {
             contiguous_end(&file_resume.completed)
@@ -1062,6 +1115,7 @@ impl HttpBackend {
                                 "server sent more data than the known file size".to_string(),
                             ));
                         }
+                        rate.throttle(chunk.len() as u64, &request.cancel).await?;
                         part.write_all(&chunk).await?;
                         offset += chunk.len() as u64;
                         progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
@@ -1333,6 +1387,20 @@ async fn sleep_or_cancel(duration: Duration, cancel: &CancellationToken) -> Resu
         _ = cancel.cancelled() => Err(Error::Cancelled),
         _ = tokio::time::sleep(duration) => Ok(()),
     }
+}
+
+fn proxy_from_config(config: &Config) -> Result<Option<reqwest::Proxy>> {
+    let Some(url) = config.network.proxy.as_deref() else {
+        return Ok(None);
+    };
+    let mut proxy = reqwest::Proxy::all(url)
+        .map_err(|error| Error::Config(format!("invalid proxy URL: {error}")))?;
+    if let Some(value) = config.network.no_proxy.as_deref()
+        && let Some(no_proxy) = reqwest::NoProxy::from_string(value)
+    {
+        proxy = proxy.no_proxy(Some(no_proxy));
+    }
+    Ok(Some(proxy))
 }
 
 fn http_error(status: StatusCode, captured: &BTreeMap<String, String>) -> Error {

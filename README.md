@@ -45,6 +45,8 @@ backends:
   not keep seeding.
 - **Persistent queue**: `shaul add`, a `shaul run` worker, and
   pause/resume/cancel across processes.
+- **Network controls**: explicit HTTP/HTTPS/SOCKS5 proxy with `NO_PROXY`, plus
+  global and per-task bandwidth caps.
 - **Observability**: one typed event stream feeds both human progress bars and
   NDJSON output; `tracing` spans and a pluggable `Telemetry` hook cover logs,
   metrics and external monitoring.
@@ -104,9 +106,13 @@ $ shaul download https://modelscope.cn/models/org/repo
 $ shaul download 'magnet:?xt=urn:btih:<info-hash>&dn=example'
 $ shaul download ./example.torrent --include '*.mkv' --dir ./media
 
-# Persistent queue
-$ shaul add https://example.com/data.tar.gz --extract
-$ shaul run
+# Proxy and bandwidth limit
+$ shaul download https://example.com/file.bin \
+      --proxy socks5://127.0.0.1:1080 --limit 10MiB
+
+# Persistent queue and batch input
+$ shaul add --input-file links.txt
+$ shaul run --limit 50MiB
 $ shaul list
 $ shaul status <id-or-suffix>
 $ shaul pause <id>      # a running worker notices within ~500 ms
@@ -121,8 +127,10 @@ string is accepted as a bare BitTorrent v1 info hash.
 Useful flags: `--dir`, `--output` (single-file direct links), `--checksum`,
 `--verify/--no-verify`, `--extract/--no-extract`, `--extract-dir`,
 `--delete-archive`, `--header`, `--header-file`, `--bearer-token`, `--basic`,
-`--revision`, `--include`, `--exclude`, `--cache/--no-cache`, `--json`,
-`--force`, `--overwrite`, `--rename`.
+`--proxy`, `--no-proxy`, `--limit`, `--input-file`, `--revision`,
+`--include`, `--exclude`, `--cache/--no-cache`, `--json`, `--force`,
+`--overwrite`, `--rename`. `--limit` on `download`/`add` caps that task;
+`shaul run --limit` caps the worker globally.
 
 ### Library
 
@@ -186,6 +194,7 @@ connections = 8
 per_host = 16
 global = 64             # reserved; not enforced yet
 segment_size = 8388608
+rate_limit = 0         # bytes/sec shared by all tasks; 0 = unlimited
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
@@ -198,6 +207,8 @@ connect_timeout_secs = 15
 retries = 5
 user_agent = "shaul/1.0.3"
 allow_cross_origin_auth = false
+# proxy = "http://127.0.0.1:8080"   # http://, https:// or socks5://
+# no_proxy = "localhost,127.0.0.1"
 
 [hub]
 use_cache = false      # enable HF-compatible / ModelScope caches
@@ -221,6 +232,10 @@ persistence = true
 # Authorization = "Bearer ${env:MY_TOKEN}"
 ```
 
+Network environment variables include `SHAUL_RATE_LIMIT`, `SHAUL_PROXY`,
+`SHAUL_NO_PROXY`, and the conventional `HTTP_PROXY` / `HTTPS_PROXY` /
+`ALL_PROXY` / `NO_PROXY` names. Explicit settings win over environment values.
+
 Hub-related environment variables include `HF_TOKEN`,
 `HUGGING_FACE_HUB_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`, `HF_ENDPOINT`,
 `MODELSCOPE_API_TOKEN`, `MODELSCOPE_CACHE`, `MODELSCOPE_ENDPOINT`,
@@ -235,7 +250,8 @@ On Unix, task sidecars are written with mode 0600. Provider tokens read from
 the environment or official credential files are resolved at run time and are
 never persisted. User-supplied `--bearer-token`/`--basic`/headers are stored in
 the sidecar; prefer `${env:NAME}` placeholders. `--json` output redacts
-sensitive headers and strips HTTP query strings from task views.
+sensitive headers and strips HTTP query strings from task views. `config show`
+and `config get network.proxy` redact proxy credentials.
 
 ## Semantics worth knowing
 

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::runtime::{Builder, Runtime};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::engine::DownloadEngine;
@@ -71,5 +72,35 @@ impl BlockingEngine {
     /// Lists all stored tasks.
     pub fn list(&self) -> Result<Vec<Task>> {
         self.runtime.block_on(self.engine.list())
+    }
+
+    /// Loads a single task by id.
+    pub fn status(&self, id: TaskId) -> Result<Task> {
+        self.runtime.block_on(self.engine.status(id))
+    }
+
+    /// Marks a task paused and cancels its in-flight transfer.
+    pub fn pause(&self, id: TaskId) -> Result<Task> {
+        self.runtime.block_on(self.engine.pause(id))
+    }
+
+    /// Moves a non-completed task back to `Pending`.
+    pub fn resume(&self, id: TaskId) -> Result<Task> {
+        self.runtime.block_on(self.engine.resume(id))
+    }
+
+    /// Marks a task cancelled.
+    pub fn cancel(&self, id: TaskId) -> Result<Task> {
+        self.runtime.block_on(self.engine.cancel(id))
+    }
+
+    /// Runs every pending task, at most `jobs` at a time.
+    pub fn run_pending(&self, jobs: usize, cancel: CancellationToken) -> Result<Vec<Task>> {
+        self.runtime.block_on(self.engine.run_pending(jobs, cancel))
+    }
+
+    /// Requeues tasks left in `Running` by a previous process.
+    pub fn requeue_stale(&self) -> Result<Vec<TaskId>> {
+        self.runtime.block_on(self.engine.requeue_stale())
     }
 }
