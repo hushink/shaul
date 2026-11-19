@@ -27,9 +27,23 @@ tokio.workspace = true
 tracing.workspace = true
 url.workspace = true
 
+# These exact constraints keep hf-xet's caret dependencies on the 1.6 line;
+# 1.7+ pulls sysinfo 0.39, which requires Rust 1.95 and would raise shaul's
+# MSRV.
+xet-client = { version = "=1.6.0", optional = true }
+xet-core-structures = { version = "=1.6.0", optional = true }
+xet-data = { version = "=1.6.0", optional = true }
+xet-runtime = { version = "=1.6.0", optional = true }
+
 [features]
 default = []
-xet = ["dep:hf-xet"]
+xet = [
+    "dep:hf-xet",
+    "dep:xet-client",
+    "dep:xet-core-structures",
+    "dep:xet-data",
+    "dep:xet-runtime",
+]
 
 [dev-dependencies]
 serde_json.workspace = true

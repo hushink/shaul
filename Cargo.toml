@@ -21,7 +21,9 @@ fs2 = "0.4"
 futures-util = "0.3"
 globset = "0.4"
 hex = "0.4"
-hf-xet = "1.8"
+# 1.7+ pulls xet-runtime -> sysinfo 0.39, which requires Rust 1.95.
+# Keep the exact 1.6 line so shaul stays on its 1.92 MSRV.
+hf-xet = "=1.6.0"
 http = "1"
 indicatif = "0.18"
 librqbit = { version = "9.1", default-features = false, features = ["rust-tls"] }

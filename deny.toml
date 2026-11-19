@@ -9,6 +9,10 @@ ignore = [
     # chrono is pulled in by librqbit-dht. It is unmaintained, not vulnerable;
     # there is no safe upgrade until librqbit migrates.
     { id = "RUSTSEC-2026-0543", reason = "unmaintained chrono via librqbit-dht; no safe upgrade until upstream migrates" },
+    # xet-runtime wraps chrono through humantime. The advisory is an
+    # unmaintained warning, not a known vulnerability, and only affects the
+    # opt-in `xet` feature. Remove when xet-core drops humantime.
+    { id = "RUSTSEC-2026-0542", reason = "unmaintained humantime via optional xet-runtime; no safe upgrade until upstream migrates" },
 ]
 
 [licenses]
