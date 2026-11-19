@@ -276,6 +276,7 @@ mod tests {
     fn event_sink_remains_unwind_safe() {
         fn assert_unwind_safe<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
         assert_unwind_safe::<EventSink>();
+        assert_unwind_safe::<crate::finalizer::FinalizeContext<'static>>();
     }
 
     #[test]
