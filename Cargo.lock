@@ -3160,7 +3160,7 @@ dependencies = [
 
 [[package]]
 name = "shaul"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "criterion",
@@ -3181,7 +3181,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-bt"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "globset",
@@ -3196,7 +3196,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-cli"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -3219,7 +3219,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-core"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "digest",
@@ -3250,7 +3250,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-ftp"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "percent-encoding",
@@ -3265,7 +3265,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-http"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -3288,7 +3288,7 @@ dependencies = [
 
 [[package]]
 name = "shaul-hub"
-version = "1.0.3"
+version = "1.1.0"
 dependencies = [
  "async-trait",
  "directories",
