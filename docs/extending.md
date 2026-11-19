@@ -284,6 +284,21 @@ avoid unbounded cardinality; use `EventSink` for per-task detail. Backends can
 reach the attached telemetry through `request.events.telemetry()` without
 storing a second handle.
 
+### Prometheus and OpenTelemetry
+
+Keep vendor SDKs in the application, not in shaul-core. An adapter implements
+`Telemetry` and forwards the low-cardinality names above to its own registry:
+
+- Prometheus: use a `prometheus` registry and map `counter` to `Counter`,
+  `gauge` to `Gauge`, and `histogram` to `Histogram`; register names once and
+  keep labels to the documented `backend`/`state` values.
+- OpenTelemetry: use the metrics SDK and a periodic reader/exporter; map the
+  same names to `u64` counters, `f64` gauges and histograms. Do not attach task
+  ids, URLs or file paths as attributes.
+
+Both approaches keep the core dependency graph unchanged and let the embedding
+application choose its exporter and license posture.
+
 ## Logging and tracing
 
 The engine and backends use the [`tracing`](https://docs.rs/tracing) facade.
