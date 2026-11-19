@@ -14,9 +14,9 @@ from [`shaul-core`](https://crates.io/crates/shaul-core),
 
 ```toml
 [dependencies]
-shaul = "1.0"
+shaul = "1.1"
 # BitTorrent and/or FTP support:
-# shaul = { version = "1.0", features = ["bt", "ftp"] }
+# shaul = { version = "1.1", features = ["bt", "ftp"] }
 ```
 
 MSRV is Rust 1.92.
@@ -67,8 +67,11 @@ runnable examples in
 - BitTorrent / magnet / `.torrent` via the optional `bt` feature
 - single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume via the optional `ftp` feature
 - concurrent multi-file downloads with `file_jobs`
+- opt-in content-addressed cache for verified files (`ContentCache`)
 - persistent task queue with priorities, pause/resume/cancel and retry events
-- NDJSON events and low-cardinality telemetry metrics
+- NDJSON events and low-cardinality telemetry metrics, including cache hits,
+  active connections and queue depth
+- `doctor`, `stats` and `clean` operations commands in the CLI
 
 ## Extending
 

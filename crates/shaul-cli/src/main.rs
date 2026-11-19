@@ -4,6 +4,7 @@
 #![warn(missing_docs)]
 
 mod args;
+mod maintenance;
 mod render;
 mod support;
 
@@ -72,6 +73,9 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Cancel(args) => command_cancel(&config, args).await,
         Commands::Info(args) => command_info(&config, args, json).await,
         Commands::Config(args) => command_config(&config, &config_path, args, json),
+        Commands::Doctor => maintenance::command_doctor(&config, &config_path, json).await,
+        Commands::Stats => maintenance::command_stats(&config, json).await,
+        Commands::Clean(args) => maintenance::command_clean(&config, args, json).await,
         Commands::Completions { shell } => {
             let mut command = Cli::command();
             clap_complete::generate(shell, &mut command, "shaul", &mut std::io::stdout());

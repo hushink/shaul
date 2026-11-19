@@ -271,10 +271,18 @@ Stable metric names live in `shaul::metrics`:
 | `shaul.bytes.downloaded` | counter | `backend` |
 | `shaul.active_tasks` | gauge | none |
 | `shaul.retries` | counter | none |
+| `shaul.http.active_connections` | gauge | none |
+| `shaul.queue.depth` | gauge | none |
+| `shaul.cache.hits` | counter | none |
+| `shaul.cache.misses` | counter | none |
+| `shaul.cache.bytes` | counter | none |
+| `shaul.cache.inserts` | counter | none |
 
 Callbacks run on the task executor; do not block. Use a channel or batch when
 exporting to a slow backend. Task ids are deliberately not metric labels to
-avoid unbounded cardinality; use `EventSink` for per-task detail.
+avoid unbounded cardinality; use `EventSink` for per-task detail. Backends can
+reach the attached telemetry through `request.events.telemetry()` without
+storing a second handle.
 
 ## Logging and tracing
 

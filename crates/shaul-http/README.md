@@ -15,6 +15,7 @@ multi-protocol download engine.
 - HTTP/HTTPS/SOCKS5 proxy support, global/per-task bandwidth limits and
   global/per-host active request budgets
 - SHA-256/SHA-512/SHA-1/MD5 checksums, `Digest` and `Content-MD5`
+- opt-in content-addressed cache hits when checksum and size are known
 - `Content-Disposition` filename support
 
 ## Usage

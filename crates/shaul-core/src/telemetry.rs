@@ -53,4 +53,16 @@ pub mod metrics {
     pub const ACTIVE_TASKS: &str = "shaul.active_tasks";
     /// Transfer retry attempts reported by backends. No labels.
     pub const RETRIES: &str = "shaul.retries";
+    /// Active HTTP file-transfer requests. No labels.
+    pub const ACTIVE_CONNECTIONS: &str = "shaul.http.active_connections";
+    /// Pending tasks observed by `run_pending`. No labels.
+    pub const QUEUE_DEPTH: &str = "shaul.queue.depth";
+    /// Content-cache hits. No labels.
+    pub const CACHE_HITS: &str = "shaul.cache.hits";
+    /// Content-cache misses. No labels.
+    pub const CACHE_MISSES: &str = "shaul.cache.misses";
+    /// Bytes served from the content cache. No labels.
+    pub const CACHE_BYTES: &str = "shaul.cache.bytes";
+    /// Files inserted into the content cache. No labels.
+    pub const CACHE_INSERTS: &str = "shaul.cache.inserts";
 }

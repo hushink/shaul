@@ -11,7 +11,8 @@
 [English](README.md)
 
 > **状态：1.1.0** —— 直链 HTTP、Hugging Face、ModelScope、BitTorrent 与 FTP
-> 已实现并发布到 [crates.io](https://crates.io/crates/shaul)。1.x 稳定性规则见
+> 已发布到 [crates.io](https://crates.io/crates/shaul)。内容缓存与
+> `doctor`/`stats`/`clean` 已在 `main` 上，计划随 1.2.0 发布。1.x 稳定性规则见
 > [API 审计](docs/api-audit.md)。
 
 ## 为什么做 shaul
@@ -47,8 +48,13 @@
   以及全局/单主机活动文件传输请求预算。
 - **多文件并发**：`download.file_jobs` / `--file-jobs` 可并发下载 Hub 快照或
   多文件任务中的多个文件。
+- **内容寻址缓存**：对已知 checksum + size 的文件可选复用；命中后会再次校验，
+  并以硬链接或复制方式写入目标。
+- **运维命令**：`shaul doctor` 检查配置、目录、代理与 provider 凭据；
+  `shaul stats` 汇总任务、字节数与缓存；`shaul clean` 清理已完成任务与缓存。
 - **可观测性**：同一条类型化事件流同时驱动人类可读进度条与 NDJSON 输出；
-  `tracing` span 与可插拔 `Telemetry` 指标钩子支持日志、监控和外部接入。
+  `tracing` span 与可插拔 `Telemetry` 指标钩子支持日志、监控和外部接入，
+  包括缓存命中、活动连接与队列深度。
 
 ## 架构
 
@@ -117,6 +123,11 @@ $ shaul list
 $ shaul status <id 或后缀>
 $ shaul pause <id>      # 运行中的 worker 约 500ms 内感知
 $ shaul resume <id>
+
+# 健康检查、统计与清理
+$ shaul doctor
+$ shaul stats
+$ shaul clean --finished --cache
 ```
 
 也接受 `hf://org/repo`、`hf://datasets/org/repo`、`ms://org/repo`、
@@ -127,7 +138,8 @@ v1 info hash 处理。
 常用参数：`--dir`、`--output`（单文件直链）、`--checksum`、
 `--verify/--no-verify`、`--extract/--no-extract`、`--extract-dir`、
 `--delete-archive`、`--header`、`--header-file`、`--bearer-token`、`--basic`、
-`--proxy`、`--no-proxy`、`--limit`、`--file-jobs`、`--mirror`、`--priority`、
+`--proxy`、`--no-proxy`、`--limit`、`--file-jobs`、`--content-cache`、
+`--no-content-cache`、`--mirror`、`--priority`、
 `--global-connections`、`--per-host-active`、`--input-file`、`--revision`、
 `--include`、`--exclude`、`--cache/--no-cache`、`--json`、`--force`、
 `--overwrite`、`--rename`。`download`/`add` 的 `--limit` 限制单个任务；
@@ -195,6 +207,8 @@ global = 64             # 跨任务的活动 HTTP 文件传输上限
 segment_size = 8388608
 rate_limit = 0         # 全局共享字节/秒；0 = 不限速
 file_jobs = 1          # 单任务内并发下载的文件数
+content_cache = false  # 按 checksum + size 复用已校验文件
+# content_cache_dir = "/path/to/shaul/content"
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
@@ -233,9 +247,10 @@ persistence = true
 ```
 
 网络相关环境变量包括 `SHAUL_RATE_LIMIT`、`SHAUL_FILE_JOBS`、
-`SHAUL_PER_HOST_ACTIVE`、`SHAUL_GLOBAL`、`SHAUL_PROXY`、`SHAUL_NO_PROXY`，
-以及常规的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`。显式配置
-优先于环境变量。
+`SHAUL_CONTENT_CACHE`、`SHAUL_CONTENT_CACHE_DIR`、`SHAUL_PER_HOST_ACTIVE`、
+`SHAUL_GLOBAL`、`SHAUL_PROXY`、`SHAUL_NO_PROXY`，以及常规的
+`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`。显式配置优先于
+环境变量。
 
 Hub 相关环境变量包括 `HF_TOKEN`、`HUGGING_FACE_HUB_TOKEN`、`HF_HOME`、
 `HF_HUB_CACHE`、`HF_ENDPOINT`、`MODELSCOPE_API_TOKEN`、`MODELSCOPE_CACHE`、
@@ -281,11 +296,12 @@ header，并在任务视图中去掉 HTTP 链接的查询串。`config show` 与
 
 - **0.3** —— 已完成：通过 `librqbit` 实现 BitTorrent 后端（只做 leech）。
 - **1.0** —— 已完成：API 冻结、各 crate README、跨平台 CI 与 release-plz 发布。
-- **1.1** —— 下一步：代理、限速、可替换解压器、完整 `BlockingEngine`
-  生命周期与 `--input-file`。
-- **1.2** —— 吞吐与多源：多文件并发、真正执行连接预算、镜像回退与任务优先级。
-- **1.3** —— Hub 差异化：spike 通过后的可选 Xet 后端、CAS 缓存与缓存维护。
-- **1.4** —— 运维：重试/连接/缓存指标、OpenTelemetry 适配、`doctor`/`clean`/`stats`。
+- **1.1.0** —— 已完成：代理、限速、可替换解压器、完整 `BlockingEngine`
+  生命周期、`--input-file`、FTP、多文件并发、连接预算、镜像回退与任务优先级。
+- **1.2.0** —— 当前：可校验的内容寻址缓存、`doctor`/`stats`/`clean`、
+  缓存/队列/连接指标。
+- **1.3** —— Hub 差异化：spike 通过后的可选 Xet 后端与缓存维护。
+- **1.4** —— 运维：OpenTelemetry/Prometheus 适配、残留 `.part` 扫描与磁盘预检。
 
 详细计划、扩展边界与发布门槛见 [docs/roadmap.md](docs/roadmap.md)。
 
@@ -300,9 +316,10 @@ $ cargo test --workspace
 ```
 
 测试覆盖分片下载、续传、200 回退、重定向、自定义 header、校验、
-tar.gz/zip 解压、HF/MS 仓库下载、include 过滤、鉴权失败、缓存填充与缓存命中、
-本地 FTP server（完整下载、Basic 认证、空文件与 `REST` 续传），以及本地
-BitTorrent peer（创建种子、seeder session、leech 下载）。不依赖外网。
+tar.gz/zip 解压、HF/MS 仓库下载、include 过滤、鉴权失败、provider 缓存与
+内容缓存填充/命中、`doctor`/`stats`/`clean`、本地 FTP server（完整下载、
+Basic 认证、空文件与 `REST` 续传），以及本地 BitTorrent peer（创建种子、
+seeder session、leech 下载）。不依赖外网。
 
 ## API 稳定性
 

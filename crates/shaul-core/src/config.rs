@@ -53,6 +53,10 @@ pub struct DownloadConfig {
     pub rate_limit: Option<u64>,
     /// Number of files downloaded concurrently within one multi-file task.
     pub file_jobs: usize,
+    /// Reuse verified downloads through the content-addressed cache.
+    pub content_cache: bool,
+    /// Override for the content-addressed cache root.
+    pub content_cache_dir: Option<PathBuf>,
     /// Size in bytes of each ranged HTTP segment.
     pub segment_size: u64,
     /// Resume interrupted downloads from checkpoints by default.
@@ -150,6 +154,8 @@ impl Default for DownloadConfig {
             global: 64,
             rate_limit: None,
             file_jobs: 1,
+            content_cache: false,
+            content_cache_dir: None,
             segment_size: 8 * 1024 * 1024,
             resume: true,
             verify: VerifyMode::Auto,
@@ -198,6 +204,10 @@ pub struct ResolvedOptions {
     pub task_rate_limit: Option<u64>,
     /// Number of files downloaded concurrently within this task.
     pub file_jobs: usize,
+    /// Whether verified files are reused through the content-addressed cache.
+    pub content_cache: bool,
+    /// Root of the content-addressed cache.
+    pub content_cache_dir: PathBuf,
     /// Alternate HTTP(S) URLs for the same file.
     pub mirrors: Vec<url::Url>,
     /// Byte size of each ranged HTTP segment.
@@ -280,6 +290,17 @@ impl Config {
             return Ok(dir.clone());
         }
         Ok(project_dirs()?.cache_dir().join("modelscope"))
+    }
+
+    /// Resolved content-addressed cache root: configured override or the
+    /// platform cache directory under `shaul/content`.
+    pub fn content_cache_dir(&self) -> Result<PathBuf> {
+        if let Some(dir) = &self.download.content_cache_dir
+            && !dir.as_os_str().is_empty()
+        {
+            return Ok(dir.clone());
+        }
+        Ok(project_dirs()?.cache_dir().join("content"))
     }
 
     /// Configured Hugging Face endpoint or the public default.
@@ -373,6 +394,12 @@ impl Config {
         }
         if let Some(value) = env_parse::<usize>("SHAUL_FILE_JOBS")? {
             self.download.file_jobs = value.max(1);
+        }
+        if let Some(value) = env_parse::<bool>("SHAUL_CONTENT_CACHE")? {
+            self.download.content_cache = value;
+        }
+        if let Some(value) = env("SHAUL_CONTENT_CACHE_DIR") {
+            self.download.content_cache_dir = Some(PathBuf::from(value));
         }
         if let Some(value) = env("SHAUL_SEGMENT_SIZE") {
             self.download.segment_size = parse_bytes(&value)?;
@@ -510,6 +537,8 @@ impl Config {
             rate_limit: self.download.rate_limit.filter(|value| *value > 0),
             task_rate_limit: options.rate_limit.filter(|value| *value > 0),
             file_jobs: options.file_jobs.unwrap_or(self.download.file_jobs).max(1),
+            content_cache: options.content_cache.unwrap_or(self.download.content_cache),
+            content_cache_dir: self.content_cache_dir()?,
             mirrors: options.mirrors.clone(),
             segment_size: self.download.segment_size.max(64 * 1024),
             resume: options.resume.unwrap_or(self.download.resume),
@@ -550,6 +579,8 @@ impl Config {
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
             "download.file_jobs" => self.download.file_jobs.to_string(),
+            "download.content_cache" => self.download.content_cache.to_string(),
+            "download.content_cache_dir" => self.content_cache_dir()?.display().to_string(),
             "download.segment_size" => self.download.segment_size.to_string(),
             "download.resume" => self.download.resume.to_string(),
             "download.verify" => verify_mode_str(self.download.verify).to_string(),
@@ -615,6 +646,14 @@ impl Config {
                 }
             }
             "download.file_jobs" => self.download.file_jobs = parse_value::<usize>(value)?.max(1),
+            "download.content_cache" => self.download.content_cache = parse_value(value)?,
+            "download.content_cache_dir" => {
+                self.download.content_cache_dir = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(value))
+                }
+            }
             "download.segment_size" => self.download.segment_size = parse_bytes(value)?,
             "download.resume" => self.download.resume = parse_value(value)?,
             "download.verify" => self.download.verify = parse_verify_mode(value)?,
@@ -835,6 +874,10 @@ struct PartialDownload {
     #[serde(default)]
     file_jobs: Option<usize>,
     #[serde(default)]
+    content_cache: Option<bool>,
+    #[serde(default)]
+    content_cache_dir: Option<PathBuf>,
+    #[serde(default)]
     segment_size: Option<u64>,
     #[serde(default)]
     resume: Option<bool>,
@@ -919,6 +962,13 @@ impl PartialConfig {
             }
             if let Some(value) = download.file_jobs {
                 config.download.file_jobs = value.max(1);
+            }
+            if let Some(value) = download.content_cache {
+                config.download.content_cache = value;
+            }
+            if let Some(value) = download.content_cache_dir {
+                config.download.content_cache_dir =
+                    (!value.as_os_str().is_empty()).then_some(value);
             }
             if let Some(value) = download.segment_size {
                 config.download.segment_size = value;
@@ -1043,6 +1093,15 @@ mod tests {
         );
         config.set_value("download.file_jobs", "3").unwrap();
         assert_eq!(config.get_value("download.file_jobs").unwrap(), "3");
+        config.set_value("download.content_cache", "true").unwrap();
+        assert_eq!(config.get_value("download.content_cache").unwrap(), "true");
+        config
+            .set_value("download.content_cache_dir", "/tmp/shaul-content")
+            .unwrap();
+        assert_eq!(
+            config.get_value("download.content_cache_dir").unwrap(),
+            Path::new("/tmp/shaul-content").display().to_string()
+        );
         config.set_value("download.per_host_active", "7").unwrap();
         assert_eq!(config.get_value("download.per_host_active").unwrap(), "7");
         config
@@ -1070,9 +1129,11 @@ mod tests {
         config.network.proxy = Some("http://127.0.0.1:8080".to_string());
         config.network.no_proxy = Some("localhost".to_string());
         config.download.file_jobs = 4;
+        config.download.content_cache = true;
         let options = TaskOptions {
             rate_limit: Some(2048),
             file_jobs: Some(2),
+            content_cache: Some(false),
             ..TaskOptions::default()
         };
         let resolved = config.resolve(Path::new("."), &options).unwrap();
@@ -1080,6 +1141,8 @@ mod tests {
         assert_eq!(resolved.task_rate_limit, Some(2048));
         assert_eq!(resolved.file_jobs, 2);
         assert_eq!(resolved.per_host_active, 16);
+        assert!(!resolved.content_cache);
+        assert!(resolved.content_cache_dir.ends_with("content"));
 
         let partial: PartialConfig = toml::from_str(
             "[download]\nrate_limit = 0\n[network]\nproxy = \"\"\nno_proxy = \"\"\n",

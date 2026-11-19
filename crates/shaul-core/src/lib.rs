@@ -13,6 +13,8 @@ pub mod archive;
 pub mod backend;
 /// Blocking facade over the asynchronous engine.
 pub mod blocking;
+/// Content-addressed cache for verified downloads.
+pub mod cache;
 /// Checksum algorithms, checksum parsing and file digest computation.
 pub mod checksum;
 /// Configuration files, sections and resolved download options.
@@ -56,6 +58,7 @@ pub use backend::{
     ResumeCheckpoint,
 };
 pub use blocking::BlockingEngine;
+pub use cache::{CacheStats, ContentCache};
 pub use checksum::{Checksum, ChecksumAlgorithm, compute_file_checksum};
 pub use config::{BtConfig, Config, DownloadConfig, HubConfig, NetworkConfig, ResolvedOptions};
 pub use engine::DownloadEngine;

@@ -22,6 +22,8 @@ fn shaul() -> Command {
         "SHAUL_GLOBAL",
         "SHAUL_RATE_LIMIT",
         "SHAUL_FILE_JOBS",
+        "SHAUL_CONTENT_CACHE",
+        "SHAUL_CONTENT_CACHE_DIR",
         "SHAUL_SEGMENT_SIZE",
         "SHAUL_RESUME",
         "SHAUL_VERIFY",
@@ -233,6 +235,7 @@ fn add_list_status_and_cancel_roundtrip() {
         override_dir.to_str().unwrap(),
         "--priority",
         "7",
+        "--content-cache",
     ]));
     let added = json_stdout(&output);
     let tasks = added.as_array().expect("add output should be an array");
@@ -241,6 +244,7 @@ fn add_list_status_and_cancel_roundtrip() {
     assert_eq!(task["state"], "pending");
     assert_eq!(task["backend"], "http");
     assert_eq!(task["priority"], 7);
+    assert_eq!(task["options"]["content_cache"], true);
     assert!(
         task["destination"]
             .as_str()
@@ -339,6 +343,155 @@ fn info_reports_the_ftp_route() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("backend: ftp"), "output: {text}");
     assert!(text.contains("parser:  ftp"), "output: {text}");
+}
+
+#[test]
+fn doctor_reports_config_and_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = toml_path(dir.path().join("content-cache"));
+    let path = write_config(
+        &dir,
+        &format!("content_cache = true\ncontent_cache_dir = \"{cache}\"\n"),
+    );
+    let output = run(shaul().args(["--config", path.to_str().unwrap(), "--json", "doctor"]));
+    let checks = json_stdout(&output);
+    let checks = checks.as_array().expect("doctor output should be an array");
+    for name in ["config", "state_dir", "download_dir", "content_cache"] {
+        let check = checks
+            .iter()
+            .find(|check| check["name"] == name)
+            .unwrap_or_else(|| panic!("missing doctor check: {name}"));
+        assert_ne!(check["status"], "error", "doctor check failed: {check}");
+    }
+}
+
+#[test]
+fn stats_and_clean_manage_finished_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = toml_path(dir.path().join("content-cache"));
+    let path = write_config(&dir, &format!("content_cache_dir = \"{cache}\"\n"));
+    let config = path.to_str().unwrap();
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "add",
+        "https://example.com/file.bin",
+    ]));
+    let id = json_stdout(&output)[0]["id"].as_str().unwrap().to_string();
+    run(shaul().args(["--config", config, "cancel", &id]));
+
+    let output = run(shaul().args(["--config", config, "--json", "stats"]));
+    let stats = json_stdout(&output);
+    assert_eq!(stats["tasks"]["total"], 1);
+    assert_eq!(stats["tasks"]["by_state"]["cancelled"], 1);
+
+    let output = run(shaul().args(["--config", config, "--json", "clean", "--cancelled"]));
+    let cleaned = json_stdout(&output);
+    assert_eq!(cleaned["tasks"], 1);
+
+    let output = run(shaul().args(["--config", config, "--json", "list"]));
+    assert!(json_stdout(&output).as_array().unwrap().is_empty());
+}
+
+#[test]
+fn content_cache_is_populated_and_can_be_cleaned() {
+    let data = b"cache test".to_vec();
+    let checksum = "d420c9e26942b8062e73f9aa281c912cf0f8eada582fede3de1cd10bd4f72396";
+    let (url, _server) = spawn_file_server(data.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let cache = toml_path(dir.path().join("content-cache"));
+    let path = write_config(
+        &dir,
+        &format!("content_cache = true\ncontent_cache_dir = \"{cache}\"\n"),
+    );
+    let config = path.to_str().unwrap();
+    let first = dir.path().join("first.bin");
+    let second = dir.path().join("second.bin");
+
+    run(shaul().args([
+        "--config",
+        config,
+        "download",
+        &url,
+        "--output",
+        first.to_str().unwrap(),
+        "--checksum",
+        &format!("sha256:{checksum}"),
+    ]));
+    assert_eq!(fs::read(&first).unwrap(), data);
+
+    let output = run(shaul().args(["--config", config, "--json", "stats"]));
+    assert_eq!(json_stdout(&output)["cache"]["entries"], 1);
+
+    run(shaul().args([
+        "--config",
+        config,
+        "download",
+        &url,
+        "--output",
+        second.to_str().unwrap(),
+        "--checksum",
+        &format!("sha256:{checksum}"),
+        "--force",
+    ]));
+    assert_eq!(fs::read(&second).unwrap(), data);
+    let output = run(shaul().args(["--config", config, "--json", "stats"]));
+    assert_eq!(json_stdout(&output)["cache"]["entries"], 1);
+
+    let output = run(shaul().args(["--config", config, "--json", "clean", "--cache"]));
+    assert_eq!(json_stdout(&output)["cache_entries"], 1);
+    let output = run(shaul().args(["--config", config, "--json", "stats"]));
+    assert_eq!(json_stdout(&output)["cache"]["entries"], 0);
+}
+
+#[test]
+fn content_cache_hit_avoids_the_response_body() {
+    let data = b"cache hit body".to_vec();
+    let checksum = {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(&data))
+    };
+    let (url, serve_body) = spawn_cache_test_server(data.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let cache = toml_path(dir.path().join("content-cache"));
+    let path = write_config(
+        &dir,
+        &format!("content_cache = true\ncontent_cache_dir = \"{cache}\"\n"),
+    );
+    let config = path.to_str().unwrap();
+    let first = dir.path().join("first.bin");
+    let second = dir.path().join("second.bin");
+
+    run(shaul().args([
+        "--config",
+        config,
+        "download",
+        &url,
+        "--output",
+        first.to_str().unwrap(),
+        "--connections",
+        "1",
+        "--checksum",
+        &format!("sha256:{checksum}"),
+    ]));
+    serve_body.store(false, Ordering::SeqCst);
+
+    run(shaul().args([
+        "--config",
+        config,
+        "download",
+        &url,
+        "--output",
+        second.to_str().unwrap(),
+        "--connections",
+        "1",
+        "--checksum",
+        &format!("sha256:{checksum}"),
+        "--force",
+    ]));
+    assert_eq!(fs::read(&second).unwrap(), data);
 }
 
 #[test]
@@ -480,6 +633,43 @@ fn spawn_file_server(data: Vec<u8>) -> (String, thread::JoinHandle<()>) {
         }
     });
     (format!("http://{address}/file.bin"), handle)
+}
+
+/// Serves a file while `serve_body` is true. Once disabled, probes still get
+/// headers but no body, so only a cache hit can complete successfully.
+fn spawn_cache_test_server(data: Vec<u8>) -> (String, Arc<AtomicBool>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let serve_body = Arc::new(AtomicBool::new(true));
+    let serve = serve_body.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            let data = data.clone();
+            let serve = serve.clone();
+            thread::spawn(move || {
+                let mut request = [0_u8; 16 * 1024];
+                let _ = stream.read(&mut request);
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\n\
+                     Content-Length: {}\r\n\
+                     Content-Type: application/octet-stream\r\n\
+                     Content-Disposition: attachment; filename=\"file.bin\"\r\n\
+                     Connection: close\r\n\
+                     \r\n",
+                    data.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                if serve.load(Ordering::SeqCst) {
+                    let _ = stream.write_all(&data);
+                }
+                let _ = stream.flush();
+            });
+        }
+    });
+    (format!("http://{address}/file.bin"), serve_body)
 }
 
 /// Sends half of the body and stalls until `release_full` is set, then serves

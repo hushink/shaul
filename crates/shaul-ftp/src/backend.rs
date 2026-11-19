@@ -6,9 +6,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use percent_encoding::percent_decode_str;
 use shaul_core::{
-    Auth, BackendCapabilities, ByteRange, DownloadBackend, DownloadOutcome, DownloadRequest, Error,
-    EventKind, EventSink, FileOutcome, FileResume, Resource, ResourceFile, ResourceKind, Result,
-    TaskResume, Validator, VerifyMode, part_path,
+    Auth, BackendCapabilities, ByteRange, ContentCache, DownloadBackend, DownloadOutcome,
+    DownloadRequest, Error, EventKind, EventSink, FileOutcome, FileResume, Resource, ResourceFile,
+    ResourceKind, Result, TaskResume, Validator, VerifyMode, metrics, part_path,
 };
 use suppaftp::FtpError;
 use suppaftp::tokio::AsyncFtpStream;
@@ -105,6 +105,53 @@ impl DownloadBackend for FtpBackend {
         let (mut stream, size, last_modified) =
             connect_and_probe(&request, &host, port, &remote_path).await?;
         let total = size;
+        if request.options.content_cache
+            && let (Some(checksum), Some(size)) = (checksum.as_ref(), total)
+            && let Ok(cache) = ContentCache::new(&request.options.content_cache_dir)
+        {
+            match cache.lookup_verified(checksum, size).await {
+                Ok(Some(cached)) => match cache.materialize(&cached, &final_path, size).await {
+                    Ok(()) => {
+                        let relative = relative_path(&request.destination, &final_path);
+                        request
+                            .events
+                            .telemetry()
+                            .counter(metrics::CACHE_HITS, 1, &[]);
+                        request
+                            .events
+                            .telemetry()
+                            .counter(metrics::CACHE_BYTES, size, &[]);
+                        request.events.emit(EventKind::FileStarted {
+                            task_id: request.task_id,
+                            file: relative.clone(),
+                            total_bytes: Some(size),
+                        });
+                        request.events.emit(EventKind::Progress {
+                            task_id: request.task_id,
+                            file: relative.clone(),
+                            downloaded_bytes: size,
+                            total_bytes: Some(size),
+                        });
+                        return Ok(DownloadOutcome::Completed(vec![FileOutcome::new(
+                            final_path,
+                            relative,
+                            size,
+                            Some(checksum.clone()),
+                            true,
+                        )]));
+                    }
+                    Err(error) => warning(
+                        &request,
+                        format!("could not materialize cached file: {error}"),
+                    ),
+                },
+                Ok(None) => request
+                    .events
+                    .telemetry()
+                    .counter(metrics::CACHE_MISSES, 1, &[]),
+                Err(error) => warning(&request, format!("could not read content cache: {error}")),
+            }
+        }
         let validator = Validator {
             etag: None,
             last_modified,

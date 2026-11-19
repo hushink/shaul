@@ -11,10 +11,12 @@ Most applications should depend on the `shaul` facade with the `ftp` feature:
 
 ```toml
 [dependencies]
-shaul = { version = "1.0", features = ["ftp"] }
+shaul = { version = "1.1", features = ["ftp"] }
 ```
 
 The backend is protocol-isolated: `shaul-core` does not depend on FTP or
-`suppaftp`. FTPS is not part of the first implementation.
+`suppaftp`. FTP transfers also participate in the opt-in content-addressed
+cache when a checksum and size are known. FTPS is not part of the first
+implementation.
 
 License: Apache-2.0.

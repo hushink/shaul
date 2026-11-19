@@ -222,6 +222,9 @@ pub struct TaskOptions {
     /// Use the provider cache for Hub tasks (HF-compatible layout for HF).
     #[serde(default)]
     pub cache: Option<bool>,
+    /// Reuse verified files through the content-addressed cache.
+    #[serde(default)]
+    pub content_cache: Option<bool>,
     /// Per-task headers, authentication and cross-origin policy.
     #[serde(default)]
     pub request: RequestOptions,

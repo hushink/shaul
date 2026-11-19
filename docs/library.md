@@ -26,8 +26,7 @@ shaul = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 # Optional: add the BitTorrent and/or FTP parser/backend.
-# FTP requires the next minor release (1.2) or a local `main` build.
-# shaul = { version = "1.2", features = ["bt", "ftp"] }
+# shaul = { version = "1.1", features = ["bt", "ftp"] }
 ```
 
 The async API needs a Tokio runtime. The blocking facade
@@ -96,6 +95,8 @@ fn configure() -> shaul::Result<(Config, TaskOptions)> {
     config.download.file_jobs = 4; // files within one multi-file task
     config.download.global = 32; // active HTTP file transfers across tasks
     config.download.per_host_active = 8; // active HTTP file transfers per host
+    config.download.content_cache = true; // reuse verified files by checksum+size
+    config.download.content_cache_dir = Some("/var/cache/shaul/content".into());
 
     let options = TaskOptions {
         rate_limit: Some(1024 * 1024), // additional per-task cap
@@ -115,6 +116,29 @@ full URLs for the same file and is used only after the primary fails.
 `global` and `per_host_active` cap active HTTP file-transfer requests. The
 proxy covers HTTP and Hub metadata/file requests; BitTorrent DHT/UDP traffic is
 not proxied and BitTorrent rate limiting is not part of this slice.
+
+### Content-addressed cache
+
+`download.content_cache` is opt-in and only applies when both a checksum and a
+size are known. Set `download.content_cache_dir` to move the cache away from
+the platform cache directory. The same switch is available per task as
+`TaskOptions::content_cache`.
+
+```rust
+use shaul::{Config, ContentCache};
+
+fn inspect_cache(config: &Config) -> shaul::Result<()> {
+    let cache = ContentCache::new(config.content_cache_dir()?)?;
+    println!("{}", cache.root().display());
+    Ok(())
+}
+```
+
+Entries are keyed by `<algorithm>/<digest>`. A hit is re-hashed before use; a
+corrupt or truncated entry is removed and the transfer falls back to the
+network. Files are inserted only after the verify finalizer succeeds, so
+`--no-verify` downloads are never cached. `ContentCache::stats` and
+`ContentCache::clear` are available for maintenance tooling.
 
 ## One task at a time
 
@@ -159,8 +183,8 @@ Use `TaskOptions::output` for a single-file direct link, and
 `overwrite`/`rename_on_conflict` for destination collisions.
 
 Other useful `TaskOptions` fields include `resume`, `checksum`, `extract_dir`,
-`delete_archive`, `cache`, `revision`, `include`/`exclude`, `file_jobs`,
-`mirrors`, `priority`, and `request` (headers and auth). See
+`delete_archive`, `cache`, `content_cache`, `revision`, `include`/`exclude`,
+`file_jobs`, `mirrors`, `priority`, and `request` (headers and auth). See
 [`TaskOptions`](https://docs.rs/shaul/latest/shaul/struct.TaskOptions.html) for
 the full list.
 
@@ -357,8 +381,10 @@ async fn build_engine() -> shaul::Result<()> {
 `Telemetry` methods default to no-ops, so implement only what you need. The
 metric names and labels are listed in [the extension guide](extending.md) and
 in `shaul::metrics`; `shaul.retries` counts retry events, which are also
-available as `EventKind::Retry`. `with_finalizers` replaces
-verification/extraction with your own pipeline.
+available as `EventKind::Retry`. Cache hits/misses, active HTTP connections and
+queue depth are emitted as `shaul.cache.*`, `shaul.http.active_connections`
+and `shaul.queue.depth`. `with_finalizers` replaces verification/extraction
+with your own pipeline.
 
 Logging uses the `tracing` facade; shaul never installs a subscriber, so the
 embedding application decides where spans go:

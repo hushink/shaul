@@ -242,6 +242,11 @@ impl EventSink {
         let _ = self.sender.send(DownloadEvent::new(kind));
     }
 
+    /// Returns the telemetry sink attached to this event stream.
+    pub fn telemetry(&self) -> &Arc<dyn Telemetry> {
+        &self.telemetry.0
+    }
+
     /// Open another receiver; only events emitted after this call are seen.
     pub fn subscribe(&self) -> broadcast::Receiver<DownloadEvent> {
         self.sender.subscribe()

@@ -5,11 +5,13 @@ use async_trait::async_trait;
 
 use crate::archive::ExtractorRegistry;
 use crate::backend::FileOutcome;
+use crate::cache::ContentCache;
 use crate::checksum::compute_file_checksum;
 use crate::config::ResolvedOptions;
 use crate::error::{Error, Result};
 use crate::event::{EventKind, EventSink};
 use crate::task::{TaskId, VerifyMode};
+use crate::telemetry::metrics;
 
 /// Outcome accumulated by a finalizer or by a whole pipeline.
 #[derive(Clone, Debug, Default)]
@@ -136,12 +138,42 @@ impl Finalizer for VerifyFinalizer {
                         actual: actual.hex,
                     });
                 }
+                cache_verified_file(context, &expected).await;
                 Ok(FinalizeResult {
                     checksum_verified: true,
                     extracted_to: None,
                 })
             }
         }
+    }
+}
+
+async fn cache_verified_file(context: &FinalizeContext<'_>, checksum: &crate::checksum::Checksum) {
+    if !context.options.content_cache {
+        return;
+    }
+    let cache = match ContentCache::new(&context.options.content_cache_dir) {
+        Ok(cache) => cache,
+        Err(error) => {
+            context.events.emit(EventKind::Warning {
+                task_id: Some(context.task_id),
+                message: format!("could not open content cache: {error}"),
+            });
+            return;
+        }
+    };
+    match cache
+        .insert(checksum, &context.file.path, context.file.size)
+        .await
+    {
+        Ok(_) => context
+            .events
+            .telemetry()
+            .counter(metrics::CACHE_INSERTS, 1, &[]),
+        Err(error) => context.events.emit(EventKind::Warning {
+            task_id: Some(context.task_id),
+            message: format!("could not populate content cache: {error}"),
+        }),
     }
 }
 

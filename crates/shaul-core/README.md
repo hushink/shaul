@@ -20,8 +20,9 @@ and runs verification and archive-extraction finalizers.
 - task sidecars (`SidecarStore`), resume manifests and validators
 - segmented-range helpers and SHA-256/SHA-512/SHA-1/MD5 checksums
 - safe relative-path handling and archive detection/extraction
+- verified, content-addressed cache (`ContentCache`)
 - async and blocking engine facades
-- structured `DownloadEvent` stream
+- structured `DownloadEvent` stream and low-cardinality telemetry hooks
 
 ## When to use it
 

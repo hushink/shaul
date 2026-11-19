@@ -1,7 +1,8 @@
 # shaul 1.x 路线图
 
 - 更新日期：2026-11-19
-- 基线：1.1.0（1.1 与 1.2 的能力已合并发布）
+- 基线：1.1.0（1.1 与 1.2 的吞吐能力已合并发布）
+- 当前开发线：1.2.0 —— 运维闭环与通用内容缓存
 - 目标：在不破坏 1.0 兼容性的前提下，把 shaul 从“能下载”推进到“可长期运行、可嵌入、可扩展”的生产级下载引擎。
 
 ## 原则
@@ -19,8 +20,9 @@
 | --- | --- | --- | --- |
 | **1.1** | 生产化基础 | 代理、限速、可替换解压器、BlockingEngine 生命周期、批量输入文件 | 已发布 2026-11-19 |
 | **1.2** | 吞吐与多源 | FTP 后端、多文件并发、全局/单主机连接预算、镜像回退、任务优先级 | 已随 1.1.0 交付 |
-| **1.3** | Hub 差异化 | 可选 Xet 后端、通用 CAS 缓存、缓存维护 | 高，需先 spike |
-| **1.4** | 运维与观测 | 重试/连接/缓存指标、OpenTelemetry 适配、`doctor`/`clean`/`stats` | 低中 |
+| **1.2.0** | 运维闭环与缓存 | 内容寻址缓存、`doctor`/`stats`/`clean`、缓存/队列/连接指标 | 已实现，待发布 |
+| **1.3** | Hub 差异化 | 可选 Xet 后端、缓存维护、CAS 增量维护 | 高，需先 spike |
+| **1.4** | 运维与观测 | OpenTelemetry / Prometheus 适配、残留 `.part` 扫描、磁盘预检 | 低中 |
 
 ---
 
@@ -157,6 +159,37 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ---
 
+## 1.2.0 运维闭环与内容缓存（已实现，待发布）
+
+### 内容缓存
+
+- [x] `ContentCache`：按 `checksum + size` 寻址，默认关闭。
+- [x] `download.content_cache` / `download.content_cache_dir` 与
+  `TaskOptions.content_cache`；CLI `--content-cache` / `--no-content-cache`。
+- [x] 命中后重新校验，损坏条目自动删除并回退网络。
+- [x] 仅在 verify finalizer 成功后写入缓存；`--no-verify` 不缓存。
+- [x] 硬链接优先，失败时复制并原子替换。
+- [x] `shaul stats` / `shaul clean --cache` 统计与清理。
+
+### 运维命令
+
+- [x] `shaul doctor`：配置、状态目录、下载目录、缓存目录、代理与 provider
+  token 检查。
+- [x] `shaul stats`：任务状态、字节数、队列深度、缓存条目/字节。
+- [x] `shaul clean`：按完成/取消/失败状态清理 sidecar，`--cache` 清理缓存，
+  `--dry-run` 预览。
+- [x] CLI 与库能力对齐：诊断和缓存能力通过公开 `Config`、`TaskOptions` 与
+  `ContentCache` 暴露。
+
+### 指标
+
+- [x] `shaul.http.active_connections`
+- [x] `shaul.queue.depth`
+- [x] `shaul.cache.hits` / `misses` / `bytes` / `inserts`
+- [ ] OpenTelemetry / Prometheus 适配示例或可选 crate（下一小步）
+
+---
+
 ## 1.3 Hub 差异化
 
 ### 可选 Xet 后端
@@ -176,13 +209,14 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ---
 
-## 1.4 运维与观测
+## 1.4 运维与观测（后续）
 
-- 新增指标：重试次数、活动连接数、缓存命中/未命中、队列深度。
-- 提供 OpenTelemetry / Prometheus 适配示例或可选 crate，不让核心依赖变重。
-- `shaul doctor`：配置、状态目录、代理、Hub token、磁盘权限。
-- `shaul clean`：已完成/失败任务 sidecar 与残留 `.part`。
-- `shaul stats`：任务数量、字节数、失败原因分布。
+- [x] 重试、活动连接、缓存命中/未命中、队列深度指标（已随 1.2.0 实现）。
+- [ ] 提供 OpenTelemetry / Prometheus 适配示例或可选 crate，不让核心依赖变重。
+- [x] `shaul doctor`：配置、状态目录、代理、Hub token、目录权限。
+- [x] `shaul clean`：已完成/失败任务 sidecar 与内容缓存。
+- [x] `shaul stats`：任务数量、字节数、失败原因分布。
+- [ ] 残留 `.part` 扫描与磁盘空间预检（需要额外的跨平台能力，单独评估）。
 
 ---
 

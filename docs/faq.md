@@ -61,6 +61,32 @@ Provider tokens come from the environment or official credential files and are
 never written into task sidecars. User-supplied `--bearer-token`/`--basic`/
 headers are stored in the sidecar; prefer `${env:NAME}` placeholders.
 
+## What is the content-addressed cache?
+
+It is an opt-in cache for files with a known checksum and size, independent of
+the Hub provider cache. Enable it with `download.content_cache = true`,
+`SHAUL_CONTENT_CACHE=1`, `--content-cache`, or `TaskOptions::content_cache`.
+The root defaults to the platform cache directory and can be changed with
+`download.content_cache_dir` / `SHAUL_CONTENT_CACHE_DIR`.
+
+A hit is re-hashed before use; corrupt or truncated entries are discarded. New
+entries are written only after verification succeeds, so `--no-verify`
+downloads are not cached. `shaul stats` reports entries/bytes and
+`shaul clean --cache` removes them.
+
+## What do `doctor`, `stats` and `clean` do?
+
+- `doctor` checks config readability, state/download/cache directory
+  writability, proxy syntax and whether provider tokens are present. It exits
+  non-zero when a check fails.
+- `stats` summarizes task states, known/downloaded bytes, queue depth and the
+  content cache.
+- `clean --finished` removes completed/cancelled/failed sidecars;
+  `--completed`, `--cancelled` and `--failed` select individual states;
+  `--cache` removes content-cache entries. Add `--dry-run` to preview and
+  `--json` for machine-readable output. Destination files are never deleted by
+  `clean`.
+
 ## Can a Hub snapshot download files in parallel?
 
 Yes. Set `download.file_jobs` (or `--file-jobs N`) to the number of files a
@@ -110,9 +136,10 @@ default priority is 0.
 `shaul config path` prints the resolved file. `--config PATH` or
 `SHAUL_CONFIG` overrides the location. Common environment variables include
 `SHAUL_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_RATE_LIMIT`, `SHAUL_FILE_JOBS`,
-`SHAUL_PER_HOST_ACTIVE`, `SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`,
-`SHAUL_STATE_DIR`, `SHAUL_VERIFY`, `HF_TOKEN` and `MODELSCOPE_API_TOKEN`; see
-the README for the full list.
+`SHAUL_CONTENT_CACHE`, `SHAUL_CONTENT_CACHE_DIR`, `SHAUL_PER_HOST_ACTIVE`,
+`SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`, `SHAUL_STATE_DIR`,
+`SHAUL_VERIFY`, `HF_TOKEN` and `MODELSCOPE_API_TOKEN`; see the README for the
+full list.
 
 ## How do I enable logs and metrics?
 
@@ -125,9 +152,11 @@ $ RUST_LOG=shaul_core=debug,shaul_http=debug shaul download https://example.com/
 
 For numeric metrics, implement `shaul::Telemetry` and attach it with
 `engine.with_telemetry(...)`. Stable names include `shaul.tasks.*`,
-`shaul.bytes.downloaded`, `shaul.task.duration_seconds` and
-`shaul.active_tasks`. Task events (`engine.subscribe()`) carry per-task detail
-and avoid the high-cardinality labels you would not want in a metrics backend.
+`shaul.bytes.downloaded`, `shaul.task.duration_seconds`,
+`shaul.active_tasks`, `shaul.retries`, `shaul.http.active_connections`,
+`shaul.queue.depth` and `shaul.cache.*`. Task events (`engine.subscribe()`)
+carry per-task detail and avoid the high-cardinality labels you would not want
+in a metrics backend.
 
 See [docs/extending.md](extending.md) for complete parser, backend, finalizer
 and telemetry examples.
@@ -157,9 +186,9 @@ slice. The library does not read environment variables unless the caller uses
 ## What do the JSON outputs contain?
 
 `--json` emits NDJSON for progress events and pretty JSON for `add`, `list`,
-`status`, `info` and `config show`. Sensitive headers are replaced with
-`<redacted>`, HTTP query strings are stripped from task views, and provider
-tokens are never included.
+`status`, `info`, `config show`, `doctor`, `stats` and `clean`. Sensitive
+headers are replaced with `<redacted>`, HTTP query strings are stripped from
+task views, and provider tokens are never included.
 
 ## Why did a download fail with 416 or an HTML file?
 

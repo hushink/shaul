@@ -72,6 +72,14 @@ _Avoid_: Checkout, tree
 缓存中按内容哈希命名的文件；Snapshot 与目标目录通过链接或复制引用它。
 _Avoid_: Object, chunk
 
+**Content cache**:
+跨协议复用的、按 Checksum + size 寻址的已验证内容缓存；与 Hub 的 provider 缓存相互独立，默认关闭。
+_Avoid_: Cache, CAS, blob store
+
+**Cache hit**:
+Content cache 中存在校验通过、可直接链接或复制到目标的内容。
+_Avoid_: Reuse, dedupe
+
 **Magnet**:
 由 info hash 与可选 trackers/名称组成的 BitTorrent 链接；元数据需要从 peer 获取。
 _Avoid_: Magnet link, URI

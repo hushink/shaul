@@ -73,6 +73,12 @@ pub enum Commands {
     Info(InfoArgs),
     /// Manage configuration
     Config(ConfigArgs),
+    /// Check config, directories, proxy and provider credentials
+    Doctor,
+    /// Show task and content-cache statistics
+    Stats,
+    /// Remove finished tasks and/or content-cache entries
+    Clean(CleanArgs),
     /// Generate shell completions
     Completions { shell: clap_complete::Shell },
 }
@@ -186,6 +192,14 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub no_cache: bool,
 
+    /// Reuse verified files through the content-addressed cache
+    #[arg(long, conflicts_with = "no_content_cache")]
+    pub content_cache: bool,
+
+    /// Disable the content-addressed cache
+    #[arg(long)]
+    pub no_content_cache: bool,
+
     /// Overwrite existing destination files
     #[arg(long, conflicts_with = "rename")]
     pub overwrite: bool,
@@ -257,6 +271,28 @@ pub struct RunArgs {
     /// Exit when the queue is empty instead of waiting for new tasks
     #[arg(long)]
     pub once: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct CleanArgs {
+    /// Remove completed tasks
+    #[arg(long)]
+    pub completed: bool,
+    /// Remove cancelled tasks
+    #[arg(long)]
+    pub cancelled: bool,
+    /// Remove failed tasks
+    #[arg(long)]
+    pub failed: bool,
+    /// Remove all finished tasks (completed, cancelled and failed)
+    #[arg(long)]
+    pub finished: bool,
+    /// Remove every content-cache entry
+    #[arg(long)]
+    pub cache: bool,
+    /// Show what would be removed without deleting anything
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Args, Debug)]
@@ -345,6 +381,13 @@ impl DownloadArgs {
         } else {
             None
         };
+        let content_cache = if self.no_content_cache {
+            Some(false)
+        } else if self.content_cache {
+            Some(true)
+        } else {
+            None
+        };
         let rate_limit = self
             .limit
             .as_deref()
@@ -379,6 +422,7 @@ impl DownloadArgs {
             extract_dir: self.extract_dir.clone(),
             delete_archive: self.delete_archive.then_some(true),
             cache,
+            content_cache,
             request: self.request.to_settings()?,
             revision: self.revision.clone(),
             include: self.include.clone(),

@@ -11,8 +11,9 @@ A resumable, pluggable download engine for Rust — library and CLI.
 [简体中文](README.zh-CN.md)
 
 > **Status: 1.1.0** — HTTP, Hugging Face, ModelScope, BitTorrent and FTP are
-> implemented and published to [crates.io](https://crates.io/crates/shaul).
-> See the [API audit](docs/api-audit.md) for the 1.x stability policy.
+> published to [crates.io](https://crates.io/crates/shaul). The content cache
+> and `doctor`/`stats`/`clean` commands are on `main` for 1.2.0. See the
+> [API audit](docs/api-audit.md) for the 1.x stability policy.
 
 ## Why shaul
 
@@ -54,9 +55,16 @@ backends:
   file-transfer request budgets.
 - **Parallel files**: `download.file_jobs` / `--file-jobs` downloads several
   files of a Hub snapshot or multi-file task concurrently.
+- **Content-addressed cache**: opt-in reuse of files whose checksum and size
+  are known. Entries are verified before use and can be hardlinked into the
+  destination.
+- **Operations commands**: `shaul doctor` checks config, directories, proxy
+  and provider credentials; `shaul stats` summarizes tasks, bytes and cache;
+  `shaul clean` removes finished sidecars and cache entries.
 - **Observability**: one typed event stream feeds both human progress bars and
   NDJSON output; `tracing` spans and a pluggable `Telemetry` hook cover logs,
-  metrics and external monitoring.
+  metrics (including cache hits, active connections and queue depth) and
+  external monitoring.
 
 ## Architecture
 
@@ -127,6 +135,11 @@ $ shaul list
 $ shaul status <id-or-suffix>
 $ shaul pause <id>      # a running worker notices within ~500 ms
 $ shaul resume <id>
+
+# Health, statistics and cleanup
+$ shaul doctor
+$ shaul stats
+$ shaul clean --finished --cache
 ```
 
 `hf://org/repo`, `hf://datasets/org/repo`, `ms://org/repo` and
@@ -137,7 +150,8 @@ string is accepted as a bare BitTorrent v1 info hash.
 Useful flags: `--dir`, `--output` (single-file direct links), `--checksum`,
 `--verify/--no-verify`, `--extract/--no-extract`, `--extract-dir`,
 `--delete-archive`, `--header`, `--header-file`, `--bearer-token`, `--basic`,
-`--proxy`, `--no-proxy`, `--limit`, `--file-jobs`, `--mirror`, `--priority`,
+`--proxy`, `--no-proxy`, `--limit`, `--file-jobs`, `--content-cache`,
+`--no-content-cache`, `--mirror`, `--priority`,
 `--global-connections`, `--per-host-active`, `--input-file`, `--revision`,
 `--include`, `--exclude`, `--cache/--no-cache`, `--json`, `--force`,
 `--overwrite`, `--rename`. `--limit` on `download`/`add` caps that
@@ -208,6 +222,8 @@ global = 64             # active HTTP file transfers across all tasks
 segment_size = 8388608
 rate_limit = 0         # bytes/sec shared by all tasks; 0 = unlimited
 file_jobs = 1          # files downloaded concurrently within one task
+content_cache = false  # reuse verified files by checksum + size
+# content_cache_dir = "/path/to/shaul/content"
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
@@ -246,9 +262,10 @@ persistence = true
 ```
 
 Network environment variables include `SHAUL_RATE_LIMIT`, `SHAUL_FILE_JOBS`,
-`SHAUL_PER_HOST_ACTIVE`, `SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`, and
-the conventional `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` names.
-Explicit settings win over environment values.
+`SHAUL_CONTENT_CACHE`, `SHAUL_CONTENT_CACHE_DIR`, `SHAUL_PER_HOST_ACTIVE`,
+`SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`, and the conventional
+`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` names. Explicit
+settings win over environment values.
 
 Hub-related environment variables include `HF_TOKEN`,
 `HUGGING_FACE_HUB_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`, `HF_ENDPOINT`,
@@ -305,14 +322,15 @@ and `config get network.proxy` redact proxy credentials.
 - **0.3** — done: BitTorrent backend via `librqbit`, leech-only.
 - **1.0** — done: 1.0 API freeze, per-crate READMEs, cross-platform CI and
   release-plz publishing.
-- **1.1** — next: proxy, bandwidth limiting, replaceable archive extractors,
-  full `BlockingEngine` lifecycle and `--input-file`.
-- **1.2** — throughput and multi-source: parallel files, enforced connection
-  budgets, mirror fallback and task priority.
-- **1.3** — Hub differentiation: optional Xet backend (after a spike), CAS
-  cache and cache maintenance.
-- **1.4** — operations: retry/connection/cache metrics, OpenTelemetry
-  adapters, `doctor`/`clean`/`stats`.
+- **1.1.0** — done: proxy, bandwidth limiting, replaceable archive extractors,
+  full `BlockingEngine` lifecycle, `--input-file`, FTP, parallel files,
+  connection budgets, mirror fallback and task priority.
+- **1.2.0** — current: verified content-addressed cache, `doctor`/`stats`/
+  `clean`, cache/queue/connection metrics.
+- **1.3** — Hub differentiation: optional Xet backend (after a spike) and
+  cache maintenance.
+- **1.4** — operations: OpenTelemetry/Prometheus adapters, orphan `.part`
+  discovery and disk-space preflight.
 
 The detailed plan, extension boundaries and release gates live in
 [docs/roadmap.md](docs/roadmap.md).
@@ -330,10 +348,10 @@ $ cargo test --workspace
 
 The suite covers segmented downloads, resume, 200 fallback, redirects, custom
 headers, checksum verification, tar.gz/zip extraction, HF/MS repository
-downloads, include filters, auth failures, cache population/cache hits, a local
-FTP server (full download, Basic auth, empty file and `REST` resume), and a
-local BitTorrent peer (torrent creation, seeder session and leech download).
-No external network is required.
+downloads, include filters, auth failures, provider and content-cache
+population/hits, `doctor`/`stats`/`clean`, a local FTP server (full download,
+Basic auth, empty file and `REST` resume), and a local BitTorrent peer (torrent
+creation, seeder session and leech download). No external network is required.
 
 ## API stability
 

@@ -526,7 +526,13 @@ impl DownloadEngine {
     /// first, then older tasks. All tasks share `cancel`; tasks whose run fails
     /// are omitted from the returned list.
     pub async fn run_pending(&self, jobs: usize, cancel: CancellationToken) -> Result<Vec<Task>> {
-        let ids = pending_task_ids(self.store.list().await?);
+        let tasks = self.store.list().await?;
+        let pending = tasks
+            .iter()
+            .filter(|task| task.state == TaskState::Pending)
+            .count() as f64;
+        self.telemetry.gauge(metrics::QUEUE_DEPTH, pending, &[]);
+        let ids = pending_task_ids(tasks);
         let jobs = jobs.max(1);
         let results = futures_util::stream::iter(ids.into_iter().map(|id| {
             let cancel = cancel.clone();

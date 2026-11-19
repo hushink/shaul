@@ -39,7 +39,7 @@
 `FtpBackend`/`FtpParser`（启用 `ftp` 时）、
 `EventKind`/`DownloadEvent`/`EventSink`、`Checksum`/`ChecksumAlgorithm`、
 `Error`/`Result`、`TaskStore`/`SidecarStore`、`Finalizer` 管线、
-`Telemetry`/`NoopTelemetry`/`metrics`。
+`Telemetry`/`NoopTelemetry`/`metrics`、`ContentCache`/`CacheStats`。
 
 这些项遵循第 4 节的 semver 规则。
 
@@ -137,6 +137,13 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      按高优先级、创建时间、任务 id 依次排序；默认优先级为 0。
    - `EventKind::Retry` 和 `metrics::RETRIES` 暴露重试尝试；指数 backoff
      增加最多 25% jitter（服务器 `Retry-After` 仍优先）。
+   - `ContentCache` / `CacheStats` 提供按 checksum + size 寻址的内容缓存；
+     `download.content_cache`、`download.content_cache_dir`、
+     `TaskOptions.content_cache`、`SHAUL_CONTENT_CACHE` 与
+     `SHAUL_CONTENT_CACHE_DIR` 控制启用与位置。默认关闭；命中后重新校验，
+     校验失败自动回退网络。`ContentCache::clear`/`stats` 供运维命令使用。
+   - `metrics::ACTIVE_CONNECTIONS`、`QUEUE_DEPTH`、`CACHE_HITS`、
+     `CACHE_MISSES`、`CACHE_BYTES`、`CACHE_INSERTS` 扩展观测面。
    - `DownloadEngine` 在 `BackendCapabilities::resume = false` 或用户关闭
      resume 时清空 `DownloadRequest::resume` 并强制 `options.resume = false`；
      FTP 在服务器拒绝 `REST` 时自动断线重连并从零开始。

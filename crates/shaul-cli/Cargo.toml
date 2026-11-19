@@ -21,6 +21,7 @@ directories.workspace = true
 fs2.workspace = true
 futures-util.workspace = true
 indicatif.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 shaul = { workspace = true, features = ["bt", "ftp"] }
 thiserror.workspace = true
@@ -33,4 +34,6 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+hex.workspace = true
+sha2.workspace = true
 tempfile.workspace = true

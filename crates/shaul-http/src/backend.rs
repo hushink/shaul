@@ -13,11 +13,11 @@ use reqwest::header::{
 use reqwest::redirect::Policy;
 use reqwest::{Client, Response, StatusCode};
 use shaul_core::{
-    BackendCapabilities, Checksum, ChecksumAlgorithm, Config, DownloadBackend, DownloadOutcome,
-    DownloadRequest, Error, EventKind, EventSink, FileOutcome, FileResume, Header, Resource,
-    ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskId, TaskResume, Validator,
-    VerifyMode, completed_bytes, merge_ranges, missing_ranges, part_path, sanitize_file_name,
-    split_range,
+    BackendCapabilities, Checksum, ChecksumAlgorithm, Config, ContentCache, DownloadBackend,
+    DownloadOutcome, DownloadRequest, Error, EventKind, EventSink, FileOutcome, FileResume, Header,
+    Resource, ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskId, TaskResume, Telemetry,
+    Validator, VerifyMode, completed_bytes, merge_ranges, metrics, missing_ranges, part_path,
+    sanitize_file_name, split_range,
 };
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Mutex;
@@ -67,6 +67,7 @@ pub struct HttpBackend {
     budget: Arc<ConnectionBudget>,
     global_rate: Option<Arc<RateLimiter>>,
     task_rates: TaskRates,
+    active_connections: Arc<AtomicU64>,
 }
 
 impl HttpBackend {
@@ -98,6 +99,7 @@ impl HttpBackend {
                 .filter(|value| *value > 0)
                 .map(|rate| Arc::new(RateLimiter::new(rate))),
             task_rates: Arc::new(StdMutex::new(HashMap::new())),
+            active_connections: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -194,6 +196,84 @@ impl HttpBackend {
         }
         Err(last_error
             .unwrap_or_else(|| Error::Backend("no HTTP download URL was available".to_string())))
+    }
+
+    async fn try_content_cache(
+        &self,
+        request: &DownloadRequest,
+        checksum: Option<&Checksum>,
+        total: Option<u64>,
+        final_path: &Path,
+    ) -> Result<Option<FileOutcome>> {
+        if !request.options.content_cache {
+            return Ok(None);
+        }
+        let (Some(checksum), Some(size)) = (checksum, total) else {
+            return Ok(None);
+        };
+        let cache = match ContentCache::new(&request.options.content_cache_dir) {
+            Ok(cache) => cache,
+            Err(error) => {
+                warning(request, format!("could not open content cache: {error}"));
+                return Ok(None);
+            }
+        };
+        match cache.lookup_verified(checksum, size).await {
+            Ok(Some(cached)) => match cache.materialize(&cached, final_path, size).await {
+                Ok(()) => {
+                    let relative = relative_path(&request.destination, final_path);
+                    request
+                        .events
+                        .telemetry()
+                        .counter(metrics::CACHE_HITS, 1, &[]);
+                    request
+                        .events
+                        .telemetry()
+                        .counter(metrics::CACHE_BYTES, size, &[]);
+                    request.events.emit(EventKind::FileStarted {
+                        task_id: request.task_id,
+                        file: relative.clone(),
+                        total_bytes: Some(size),
+                    });
+                    request.events.emit(EventKind::Progress {
+                        task_id: request.task_id,
+                        file: relative.clone(),
+                        downloaded_bytes: size,
+                        total_bytes: Some(size),
+                    });
+                    tracing::debug!(
+                        task_id = %request.task_id,
+                        path = %cached.display(),
+                        "content cache hit"
+                    );
+                    Ok(Some(FileOutcome::new(
+                        final_path.to_path_buf(),
+                        relative,
+                        size,
+                        Some(checksum.clone()),
+                        true,
+                    )))
+                }
+                Err(error) => {
+                    warning(
+                        request,
+                        format!("could not materialize cached file: {error}"),
+                    );
+                    Ok(None)
+                }
+            },
+            Ok(None) => {
+                request
+                    .events
+                    .telemetry()
+                    .counter(metrics::CACHE_MISSES, 1, &[]);
+                Ok(None)
+            }
+            Err(error) => {
+                warning(request, format!("could not read content cache: {error}"));
+                Ok(None)
+            }
+        }
     }
 
     #[tracing::instrument(
@@ -308,6 +388,12 @@ impl HttpBackend {
         }
 
         final_path = apply_conflict_policy(final_path, &request.options).await?;
+        if let Some(outcome) = self
+            .try_content_cache(request, checksum.as_ref(), total, &final_path)
+            .await?
+        {
+            return Ok(outcome);
+        }
         let part_name = part_path(&final_path);
         let part_for_manifest = path_for_manifest(&request.destination, &part_name);
 
@@ -474,7 +560,13 @@ impl HttpBackend {
         loop {
             let headers = build_headers(&request.options, &file.headers, Some("bytes=0-0"), None)?;
             let sent = self
-                .send_follow(&file.url, &headers, &request.options, &request.cancel)
+                .send_follow(
+                    &file.url,
+                    &headers,
+                    &request.options,
+                    &request.cancel,
+                    &request.events,
+                )
                 .await;
             match sent {
                 Err(Error::Cancelled) => return Err(Error::Cancelled),
@@ -594,7 +686,8 @@ impl HttpBackend {
         headers: &HeaderMap,
         options: &shaul_core::ResolvedOptions,
         cancel: &CancellationToken,
-    ) -> Result<(Response, BTreeMap<String, String>, Url, ConnectionPermit)> {
+        events: &EventSink,
+    ) -> Result<(Response, BTreeMap<String, String>, Url, TrackedPermit)> {
         let mut current = url.clone();
         let mut headers = headers.clone();
         let mut captured = BTreeMap::new();
@@ -604,6 +697,11 @@ impl HttpBackend {
                 .budget
                 .acquire(current.host_str().unwrap_or_default(), cancel)
                 .await?;
+            let permit = TrackedPermit::new(
+                permit,
+                self.active_connections.clone(),
+                events.telemetry().clone(),
+            );
             let response = tokio::select! {
                 _ = cancel.cancelled() => return Err(Error::Cancelled),
                 response = self.client.get(current.clone()).headers(headers.clone()).send() => {
@@ -907,7 +1005,13 @@ impl HttpBackend {
             )
             .map_err(FetchError::Fatal)?;
             let sent = self
-                .send_follow(&file.url, &headers, &request.options, cancel)
+                .send_follow(
+                    &file.url,
+                    &headers,
+                    &request.options,
+                    cancel,
+                    &request.events,
+                )
                 .await;
             let (response, captured, _, _permit) = match sent {
                 Err(Error::Cancelled) => return Err(FetchError::Cancelled),
@@ -1112,7 +1216,13 @@ impl HttpBackend {
                 if_range.as_deref(),
             )?;
             let sent = self
-                .send_follow(&file.url, &headers, &request.options, &request.cancel)
+                .send_follow(
+                    &file.url,
+                    &headers,
+                    &request.options,
+                    &request.cancel,
+                    &request.events,
+                )
                 .await;
             let (response, captured, _, _permit) = match sent {
                 Err(Error::Cancelled) => {
@@ -1863,6 +1973,36 @@ fn spawn_progress_reporter(
             }
         }
     })
+}
+
+struct TrackedPermit {
+    _permit: ConnectionPermit,
+    active: Arc<AtomicU64>,
+    telemetry: Arc<dyn Telemetry>,
+}
+
+impl TrackedPermit {
+    fn new(
+        permit: ConnectionPermit,
+        active: Arc<AtomicU64>,
+        telemetry: Arc<dyn Telemetry>,
+    ) -> Self {
+        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+        telemetry.gauge(metrics::ACTIVE_CONNECTIONS, current as f64, &[]);
+        Self {
+            _permit: permit,
+            active,
+            telemetry,
+        }
+    }
+}
+
+impl Drop for TrackedPermit {
+    fn drop(&mut self) {
+        let current = self.active.fetch_sub(1, Ordering::SeqCst).saturating_sub(1);
+        self.telemetry
+            .gauge(metrics::ACTIVE_CONNECTIONS, current as f64, &[]);
+    }
 }
 
 #[cfg(test)]
