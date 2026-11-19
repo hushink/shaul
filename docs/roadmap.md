@@ -129,8 +129,10 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ### 全局连接预算
 
-- 启用目前预留的 `download.global`。
-- 全局 semaphore + 每主机活动连接上限。
+状态：`main` 已实现，待 1.2 发布。
+
+- 启用 `download.global` 作为跨任务的活动 HTTP 请求上限。
+- 新增 `download.per_host_active`，用共享 semaphore 限制单主机活动请求。
 - 多任务并发时不超过全局预算，并避免小任务饥饿。
 - 与 `file_jobs` 联合测试，防止“任务数 × 连接数”放大。
 

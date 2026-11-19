@@ -39,6 +39,14 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "HOSTS")]
     pub no_proxy: Option<String>,
 
+    /// Maximum active HTTP file transfers across all tasks
+    #[arg(long = "global-connections", global = true, value_name = "N")]
+    pub global_connections: Option<usize>,
+
+    /// Maximum active HTTP file transfers per host
+    #[arg(long = "per-host-active", global = true, value_name = "N")]
+    pub per_host_active: Option<usize>,
+
     #[command(subcommand)]
     pub command: Commands,
 }

@@ -43,6 +43,8 @@ async fn run(cli: Cli) -> Result<()> {
         verbose: _,
         proxy,
         no_proxy,
+        global_connections,
+        per_host_active,
         command,
     } = cli;
     let (mut config, config_path) = Config::load(config_arg.as_deref())?;
@@ -51,6 +53,12 @@ async fn run(cli: Cli) -> Result<()> {
     }
     if let Some(no_proxy) = no_proxy {
         config.network.no_proxy = Some(no_proxy);
+    }
+    if let Some(global) = global_connections {
+        config.download.global = global.max(1);
+    }
+    if let Some(per_host) = per_host_active {
+        config.download.per_host_active = per_host.max(1);
     }
 
     match command {

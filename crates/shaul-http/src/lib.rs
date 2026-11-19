@@ -5,6 +5,7 @@
 
 /// Segmented direct-link download backend.
 pub mod backend;
+mod budget;
 mod filename;
 /// Parser for direct HTTP/HTTPS links.
 pub mod parser;

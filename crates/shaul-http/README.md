@@ -12,6 +12,8 @@ multi-protocol download engine.
 - single-stream fallback when a server ignores `Range`
 - manual redirect handling with cross-origin credential stripping
 - custom headers, bearer/basic/header authentication
+- HTTP/HTTPS/SOCKS5 proxy support, global/per-task bandwidth limits and
+  global/per-host active request budgets
 - SHA-256/SHA-512/SHA-1/MD5 checksums, `Digest` and `Content-MD5`
 - `Content-Disposition` filename support
 

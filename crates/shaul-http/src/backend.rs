@@ -24,6 +24,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+use crate::budget::{ConnectionBudget, ConnectionPermit};
 use crate::filename::parse_content_disposition;
 use crate::rate::{RateLimiter, RateLimiters};
 
@@ -63,6 +64,7 @@ type TaskRates = Arc<StdMutex<HashMap<TaskId, (u64, Arc<RateLimiter>)>>>;
 #[derive(Clone)]
 pub struct HttpBackend {
     client: Client,
+    budget: Arc<ConnectionBudget>,
     global_rate: Option<Arc<RateLimiter>>,
     task_rates: TaskRates,
 }
@@ -86,6 +88,10 @@ impl HttpBackend {
             .map_err(|error| Error::Backend(format!("failed to build HTTP client: {error}")))?;
         Ok(Self {
             client,
+            budget: Arc::new(ConnectionBudget::new(
+                config.download.global,
+                config.download.per_host_active,
+            )),
             global_rate: config
                 .download
                 .rate_limit
@@ -410,7 +416,7 @@ impl HttpBackend {
                     sleep_or_cancel(backoff(attempt), &request.cancel).await?;
                     attempt += 1;
                 }
-                Ok((response, captured, final_url)) => {
+                Ok((response, captured, final_url, _permit)) => {
                     let status = response.status();
                     let retry_after = retry_after(response.headers());
                     if status.is_server_error()
@@ -516,12 +522,16 @@ impl HttpBackend {
         headers: &HeaderMap,
         options: &shaul_core::ResolvedOptions,
         cancel: &CancellationToken,
-    ) -> Result<(Response, BTreeMap<String, String>, Url)> {
+    ) -> Result<(Response, BTreeMap<String, String>, Url, ConnectionPermit)> {
         let mut current = url.clone();
         let mut headers = headers.clone();
         let mut captured = BTreeMap::new();
 
         for _ in 0..MAX_REDIRECTS {
+            let permit = self
+                .budget
+                .acquire(current.host_str().unwrap_or_default(), cancel)
+                .await?;
             let response = tokio::select! {
                 _ = cancel.cancelled() => return Err(Error::Cancelled),
                 response = self.client.get(current.clone()).headers(headers.clone()).send() => {
@@ -558,7 +568,7 @@ impl HttpBackend {
                 current = next;
                 continue;
             }
-            return Ok((response, captured, current));
+            return Ok((response, captured, current, permit));
         }
         Err(Error::Backend("too many redirects".to_string()))
     }
@@ -827,7 +837,7 @@ impl HttpBackend {
             let sent = self
                 .send_follow(&file.url, &headers, &request.options, cancel)
                 .await;
-            let (response, captured, _) = match sent {
+            let (response, captured, _, _permit) = match sent {
                 Err(Error::Cancelled) => return Err(FetchError::Cancelled),
                 Err(error) => {
                     if attempt >= request.options.retries {
@@ -1030,7 +1040,7 @@ impl HttpBackend {
             let sent = self
                 .send_follow(&file.url, &headers, &request.options, &request.cancel)
                 .await;
-            let (response, captured, _) = match sent {
+            let (response, captured, _, _permit) = match sent {
                 Err(Error::Cancelled) => {
                     checkpoint_single(request, &mut task_resume, key, &mut file_resume, offset)
                         .await?;

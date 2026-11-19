@@ -59,7 +59,7 @@ runnable examples in
 - segmented HTTP downloads with work-stealing range scheduling
 - resume with ETag / Last-Modified / size validation
 - custom headers and bearer/basic/header authentication
-- HTTP/HTTPS/SOCKS5 proxy with `NO_PROXY`, plus global and per-task bandwidth caps
+- HTTP/HTTPS/SOCKS5 proxy with `NO_PROXY`, plus global/per-task bandwidth caps and global/per-host request budgets
 - SHA-256/SHA-512/SHA-1/MD5 verification, toggleable per download
 - archive extraction (zip, tar, tar.gz, tar.zst, gzip, zstd) after verification
 - Hugging Face and ModelScope repositories with optional provider caches

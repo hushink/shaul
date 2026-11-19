@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -30,6 +30,7 @@ enum RangeMode {
 struct TestServer {
     addr: SocketAddr,
     filename: String,
+    max_active: Arc<AtomicUsize>,
 }
 
 impl TestServer {
@@ -39,12 +40,26 @@ impl TestServer {
         required_header: Option<String>,
         filename: &str,
     ) -> Self {
+        Self::spawn_with_delay(data, mode, required_header, filename, Duration::ZERO).await
+    }
+
+    async fn spawn_with_delay(
+        data: Vec<u8>,
+        mode: RangeMode,
+        required_header: Option<String>,
+        filename: &str,
+        delay: Duration,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let data = Arc::new(data);
         let server_filename = filename.to_string();
         let filename = server_filename.clone();
         let seen = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let server_active = active.clone();
+        let server_max_active = max_active.clone();
         tokio::spawn(async move {
             loop {
                 let Ok((socket, _)) = listener.accept().await else {
@@ -54,14 +69,28 @@ impl TestServer {
                 let filename = filename.clone();
                 let required_header = required_header.clone();
                 let seen = seen.clone();
+                let active = server_active.clone();
+                let max_active = server_max_active.clone();
                 tokio::spawn(async move {
-                    handle(socket, data, mode, required_header, filename, seen).await;
+                    handle(
+                        socket,
+                        data,
+                        mode,
+                        required_header,
+                        filename,
+                        seen,
+                        active,
+                        max_active,
+                        delay,
+                    )
+                    .await;
                 });
             }
         });
         Self {
             addr,
             filename: server_filename,
+            max_active,
         }
     }
 
@@ -71,6 +100,28 @@ impl TestServer {
 
     fn redirect_url(&self) -> String {
         format!("http://{}/redirect", self.addr)
+    }
+
+    fn max_active(&self) -> usize {
+        self.max_active.load(Ordering::SeqCst)
+    }
+}
+
+struct ActiveGuard {
+    active: Arc<AtomicUsize>,
+}
+
+impl ActiveGuard {
+    fn new(active: Arc<AtomicUsize>, max_active: &AtomicUsize) -> Self {
+        let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+        max_active.fetch_max(current, Ordering::SeqCst);
+        Self { active }
+    }
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.active.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -176,6 +227,7 @@ async fn handle_proxy(mut socket: TcpStream, data: Arc<Vec<u8>>, seen: Arc<Atomi
     respond(&mut socket, "200 OK", response_headers, &data).await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle(
     mut socket: TcpStream,
     data: Arc<Vec<u8>>,
@@ -183,7 +235,11 @@ async fn handle(
     required_header: Option<String>,
     filename: String,
     seen: Arc<AtomicUsize>,
+    active: Arc<AtomicUsize>,
+    max_active: Arc<AtomicUsize>,
+    delay: Duration,
 ) {
+    let _active = ActiveGuard::new(active, &max_active);
     let mut buffer = vec![0u8; 32 * 1024];
     let mut read = 0;
     loop {
@@ -213,6 +269,9 @@ async fn handle(
         if let Some((name, value)) = line.split_once(':') {
             headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
         }
+    }
+    if !delay.is_zero() {
+        tokio::time::sleep(delay).await;
     }
 
     if let Some(required) = required_header
@@ -776,6 +835,94 @@ impl ResumeCheckpoint for TestCheckpoint {
         *self.resume.lock().unwrap() = resume.clone();
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn enforces_the_global_connection_budget() {
+    let data = test_data(1024 * 1024);
+    let server = TestServer::spawn_with_delay(
+        data.clone(),
+        RangeMode::Supported,
+        None,
+        "budget.bin",
+        Duration::from_millis(25),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.download.global = 2;
+    config.download.per_host_active = 16;
+    config.download.connections = 4;
+    config.download.segment_size = 128 * 1024;
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                connections: Some(4),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join(&server.filename))
+            .await
+            .unwrap(),
+        data
+    );
+    assert!(
+        server.max_active() <= 2,
+        "global budget exceeded: {} concurrent requests",
+        server.max_active()
+    );
+}
+
+#[tokio::test]
+async fn enforces_the_per_host_connection_budget() {
+    let data = test_data(512 * 1024);
+    let server = TestServer::spawn_with_delay(
+        data.clone(),
+        RangeMode::Supported,
+        None,
+        "host-budget.bin",
+        Duration::from_millis(20),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.download.global = 64;
+    config.download.per_host_active = 1;
+    config.download.connections = 4;
+    config.download.segment_size = 128 * 1024;
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                connections: Some(4),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join(&server.filename))
+            .await
+            .unwrap(),
+        data
+    );
+    assert!(
+        server.max_active() <= 1,
+        "per-host budget exceeded: {} concurrent requests",
+        server.max_active()
+    );
 }
 
 #[tokio::test]

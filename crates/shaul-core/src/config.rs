@@ -43,8 +43,10 @@ pub struct DownloadConfig {
     pub connections: usize,
     /// Maximum number of idle connections kept per host in the HTTP pool.
     pub per_host: usize,
-    /// Global connection budget. The HTTP backend currently enforces per-task
-    /// `connections`; this value is reserved for a scheduler-wide limit.
+    /// Maximum number of active HTTP file-transfer requests per host across
+    /// all tasks.
+    pub per_host_active: usize,
+    /// Maximum number of active HTTP file-transfer requests across all tasks.
     pub global: usize,
     /// Global bandwidth limit in bytes per second. `None` or `0` means
     /// unlimited. Direct HTTP and Hub file transfers share this limit.
@@ -144,6 +146,7 @@ impl Default for DownloadConfig {
             dir: PathBuf::from("."),
             connections: 8,
             per_host: 16,
+            per_host_active: 16,
             global: 64,
             rate_limit: None,
             file_jobs: 1,
@@ -183,8 +186,11 @@ pub struct ResolvedOptions {
     pub connections: usize,
     /// Effective HTTP idle-connection limit per host.
     pub per_host: usize,
-    /// Global connection budget carried from configuration; currently reserved
-    /// for a scheduler-wide limit.
+    /// Maximum active HTTP file-transfer requests per host carried from
+    /// configuration.
+    pub per_host_active: usize,
+    /// Global active HTTP file-transfer request budget carried from
+    /// configuration.
     pub global: usize,
     /// Global bandwidth limit in bytes per second, if configured.
     pub rate_limit: Option<u64>,
@@ -354,6 +360,9 @@ impl Config {
         if let Some(value) = env_parse::<usize>("SHAUL_PER_HOST")? {
             self.download.per_host = value;
         }
+        if let Some(value) = env_parse::<usize>("SHAUL_PER_HOST_ACTIVE")? {
+            self.download.per_host_active = value.max(1);
+        }
         if let Some(value) = env_parse::<usize>("SHAUL_GLOBAL")? {
             self.download.global = value;
         }
@@ -494,6 +503,7 @@ impl Config {
                 .unwrap_or(self.download.connections)
                 .max(1),
             per_host: self.download.per_host.max(1),
+            per_host_active: self.download.per_host_active.max(1),
             global: self.download.global.max(1),
             rate_limit: self.download.rate_limit.filter(|value| *value > 0),
             task_rate_limit: options.rate_limit.filter(|value| *value > 0),
@@ -529,6 +539,7 @@ impl Config {
             "download.dir" => self.download.dir.display().to_string(),
             "download.connections" => self.download.connections.to_string(),
             "download.per_host" => self.download.per_host.to_string(),
+            "download.per_host_active" => self.download.per_host_active.to_string(),
             "download.global" => self.download.global.to_string(),
             "download.rate_limit" => self
                 .download
@@ -589,6 +600,9 @@ impl Config {
             "download.dir" => self.download.dir = PathBuf::from(value),
             "download.connections" => self.download.connections = parse_value(value)?,
             "download.per_host" => self.download.per_host = parse_value(value)?,
+            "download.per_host_active" => {
+                self.download.per_host_active = parse_value::<usize>(value)?.max(1)
+            }
             "download.global" => self.download.global = parse_value(value)?,
             "download.rate_limit" => {
                 self.download.rate_limit = if value.trim().is_empty() {
@@ -810,6 +824,8 @@ struct PartialDownload {
     #[serde(default)]
     per_host: Option<usize>,
     #[serde(default)]
+    per_host_active: Option<usize>,
+    #[serde(default)]
     global: Option<usize>,
     #[serde(default)]
     rate_limit: Option<u64>,
@@ -888,6 +904,9 @@ impl PartialConfig {
             }
             if let Some(value) = download.per_host {
                 config.download.per_host = value;
+            }
+            if let Some(value) = download.per_host_active {
+                config.download.per_host_active = value.max(1);
             }
             if let Some(value) = download.global {
                 config.download.global = value;
@@ -1021,6 +1040,8 @@ mod tests {
         );
         config.set_value("download.file_jobs", "3").unwrap();
         assert_eq!(config.get_value("download.file_jobs").unwrap(), "3");
+        config.set_value("download.per_host_active", "7").unwrap();
+        assert_eq!(config.get_value("download.per_host_active").unwrap(), "7");
         config
             .set_value("network.proxy", "http://127.0.0.1:8080")
             .unwrap();
@@ -1055,6 +1076,7 @@ mod tests {
         assert_eq!(resolved.rate_limit, Some(1024));
         assert_eq!(resolved.task_rate_limit, Some(2048));
         assert_eq!(resolved.file_jobs, 2);
+        assert_eq!(resolved.per_host_active, 16);
 
         let partial: PartialConfig = toml::from_str(
             "[download]\nrate_limit = 0\n[network]\nproxy = \"\"\nno_proxy = \"\"\n",

@@ -122,8 +122,9 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      用户额外依赖 `tokio-util`。
    - `NetworkConfig::proxy` / `no_proxy`、`DownloadConfig::rate_limit`、
      `TaskOptions::rate_limit`、`DownloadConfig::file_jobs` 与
-     `TaskOptions::file_jobs` 提供代理、带宽和多文件并发控制；默认均为关闭/
-     未设置，保持 1.0 行为。`BlockingEngine` 同步补齐
+     `TaskOptions::file_jobs` 提供代理、带宽和多文件并发控制；
+     `DownloadConfig::global` / `per_host_active` 限制跨任务的活动 HTTP
+     文件传输请求数。默认均为关闭/未设置，保持 1.0 行为。`BlockingEngine` 同步补齐
      `status`/`pause`/`resume`/`cancel`/`run_pending`/`requeue_stale`。
    - 本能力遵循“库与 CLI 尽量对齐”：库通过公开配置/任务字段获得同等能力，
      CLI 额外负责从用户配置、环境变量和 flags 填充这些字段。

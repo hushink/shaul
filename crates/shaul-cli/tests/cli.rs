@@ -18,6 +18,7 @@ fn shaul() -> Command {
         "SHAUL_DIR",
         "SHAUL_CONNECTIONS",
         "SHAUL_PER_HOST",
+        "SHAUL_PER_HOST_ACTIVE",
         "SHAUL_GLOBAL",
         "SHAUL_RATE_LIMIT",
         "SHAUL_FILE_JOBS",
@@ -146,6 +147,31 @@ fn proxy_flags_override_the_config() {
         String::from_utf8_lossy(&output.stdout).trim(),
         "http://127.0.0.1:8080"
     );
+
+    let output = run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "--global-connections",
+        "3",
+        "--per-host-active",
+        "2",
+        "config",
+        "get",
+        "download.global",
+    ]));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "3");
+    let output = run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "--global-connections",
+        "3",
+        "--per-host-active",
+        "2",
+        "config",
+        "get",
+        "download.per_host_active",
+    ]));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
 }
 
 #[test]

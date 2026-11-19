@@ -93,8 +93,9 @@ and a running worker notices within about 500 ms.
 `shaul config path` prints the resolved file. `--config PATH` or
 `SHAUL_CONFIG` overrides the location. Common environment variables include
 `SHAUL_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_RATE_LIMIT`, `SHAUL_FILE_JOBS`,
-`SHAUL_PROXY`, `SHAUL_NO_PROXY`, `SHAUL_STATE_DIR`, `SHAUL_VERIFY`, `HF_TOKEN`
-and `MODELSCOPE_API_TOKEN`; see the README for the full list.
+`SHAUL_PER_HOST_ACTIVE`, `SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`,
+`SHAUL_STATE_DIR`, `SHAUL_VERIFY`, `HF_TOKEN` and `MODELSCOPE_API_TOKEN`; see
+the README for the full list.
 
 ## How do I enable logs and metrics?
 
@@ -114,7 +115,7 @@ and avoid the high-cardinality labels you would not want in a metrics backend.
 See [docs/extending.md](extending.md) for complete parser, backend, finalizer
 and telemetry examples.
 
-## Does shaul support proxies or bandwidth limits?
+## Does shaul support proxies, bandwidth or connection limits?
 
 Yes in the 1.1 line:
 
@@ -126,6 +127,10 @@ Yes in the 1.1 line:
 - `TaskOptions::rate_limit` adds a per-task cap. `shaul download --limit` and
   `shaul add --limit` set that field (and `add` persists it); `shaul run
   --limit` sets the worker's global cap.
+- `download.global` caps active HTTP file-transfer requests across tasks, while
+  `download.per_host_active` caps them per host. File-level concurrency uses
+  `download.file_jobs`; the connection budget still applies across all files.
+  Hub metadata requests and FTP transfers are not counted.
 
 The proxy covers HTTP/Hub metadata and file transfers. FTP and BitTorrent
 traffic are not proxied, and BitTorrent rate limiting is not part of this
