@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0](https://github.com/hushink/shaul/compare/shaul-v1.1.0...shaul-v1.2.0) - 2026-11-19
+
+### Added
+
+- add Xet downloads and per-host rate limiting
+- add content cache and maintenance commands
+- harden downloads and cache maintenance
+
+### Fixed
+
+- keep Xet on the 1.92 MSRV
+
 ## [1.1.0](https://github.com/hushink/shaul/compare/shaul-v1.0.3...shaul-v1.1.0) - 2026-11-19
 
 ### Added
