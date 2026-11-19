@@ -2,10 +2,10 @@
 
 发布由 `.github/workflows/release-plz.yml` 驱动，配置在 `release-plz.toml`。
 
-当前状态：1.0.3 已发布；六个已发布 crate 已配置 crates.io trusted
-publishing，`CARGO_REGISTRY_TOKEN` secret 已删除。新增的 `shaul-ftp` 尚未
-发布，首次发布需要一次性的 bootstrap token 或先创建 crate 后配置 trusted
-publishing。
+当前状态：1.1.0 已发布；七个 crate 均已在 crates.io 可见，包括新增的
+`shaul-ftp`。1.1.0 的 `shaul-ftp` 首次发布使用了一次性
+`CARGO_REGISTRY_TOKEN` bootstrap；发布完成后应立即在 crates.io 为
+`shaul-ftp` 配置 trusted publishing，撤销临时 token，并删除 GitHub secret。
 
 ## 流程
 
@@ -41,7 +41,7 @@ crates.io 不允许通过 trusted publishing 创建全新 crate。六个 crate �
 5. 确认六个 crate 在 crates.io 可见后，立即撤销这个 API token；
 6. 删除 GitHub secret `CARGO_REGISTRY_TOKEN`。
 
-#### `shaul-ftp` 首次发布
+#### `shaul-ftp` 首次发布（1.1.0 已完成）
 
 `shaul-ftp` 是新增 crate，crates.io trusted publishing 不能创建全新 crate。
 首次发布前需要：
@@ -49,6 +49,11 @@ crates.io 不允许通过 trusted publishing 创建全新 crate。六个 crate �
 1. 用一次性 token 创建 `shaul-ftp`，或先在 crates.io 手动创建 crate；
 2. 在 crates.io 为 `shaul-ftp` 配置 trusted publishing；
 3. 之后删除 bootstrap token，后续继续使用 OIDC。
+
+1.1.0 已通过临时 `CARGO_REGISTRY_TOKEN` 完成第 1 步。接下来需要完成第 2、3
+步：在 crates.io 为 `shaul-ftp` 添加 trusted publisher（仓库 `hushink/shaul`，
+workflow `release-plz.yml`），撤销临时 API token 并从 GitHub 删除
+`CARGO_REGISTRY_TOKEN` secret。
 
 #### 本地 bootstrap（不配置 GitHub secret 的替代方案）
 
@@ -117,6 +122,8 @@ release-plz 对 `shaul-cli` 关闭了 `git_release_enable`，但保留 tag 创�
 
 `shaul-cli-v1.0.0` Release 早于该流程，因此没有二进制附件；从
 `shaul-cli-v1.0.1` 起，Release 会附带预编译包、校验和及安装脚本。
+`shaul-cli-v1.1.0` 已包含 Linux x86_64/aarch64、macOS x86_64/aarch64、
+Windows x86_64 的压缩包、SHA-256、shell 与 PowerShell 安装器。
 
 ### GitHub Actions 设置
 

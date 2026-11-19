@@ -1,7 +1,7 @@
 # shaul 1.x 路线图
 
 - 更新日期：2026-11-19
-- 基线：1.0.3
+- 基线：1.1.0（1.1 与 1.2 的能力已合并发布）
 - 目标：在不破坏 1.0 兼容性的前提下，把 shaul 从“能下载”推进到“可长期运行、可嵌入、可扩展”的生产级下载引擎。
 
 ## 原则
@@ -15,16 +15,16 @@
 
 ## 版本总览
 
-| 版本 | 主题 | 主要能力 | 风险 |
+| 版本 | 主题 | 主要能力 | 状态 |
 | --- | --- | --- | --- |
-| **1.1** | 生产化基础 | 代理、限速、可替换解压器、BlockingEngine 生命周期、批量输入文件 | 中低 |
-| **1.2** | 吞吐与多源 | FTP 后端、多文件并发、全局/单主机连接预算、镜像回退、任务优先级 | 中高 |
+| **1.1** | 生产化基础 | 代理、限速、可替换解压器、BlockingEngine 生命周期、批量输入文件 | 已发布 2026-11-19 |
+| **1.2** | 吞吐与多源 | FTP 后端、多文件并发、全局/单主机连接预算、镜像回退、任务优先级 | 已随 1.1.0 交付 |
 | **1.3** | Hub 差异化 | 可选 Xet 后端、通用 CAS 缓存、缓存维护 | 高，需先 spike |
 | **1.4** | 运维与观测 | 重试/连接/缓存指标、OpenTelemetry 适配、`doctor`/`clean`/`stats` | 低中 |
 
 ---
 
-## 1.1 生产化基础
+## 1.1 生产化基础（已随 1.1.0 发布）
 
 ### 代理
 
@@ -106,7 +106,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ---
 
-## 1.2 吞吐与多源
+## 1.2 吞吐与多源（已随 1.1.0 发布）
 
 ### FTP 后端
 
@@ -119,7 +119,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ### 多文件并发
 
-状态：`main` 已实现，待 1.2 发布。
+状态：已随 1.1.0 发布。
 
 - `DownloadConfig.file_jobs` / `TaskOptions.file_jobs`，默认 1。
 - Hub 快照和多文件 HTTP 任务内并发下载。
@@ -129,7 +129,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ### 全局连接预算
 
-状态：`main` 已实现，待 1.2 发布。
+状态：已随 1.1.0 发布。
 
 - 启用 `download.global` 作为跨任务的活动 HTTP 请求上限。
 - 新增 `download.per_host_active`，用共享 semaphore 限制单主机活动请求。
@@ -138,7 +138,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ### 镜像回退
 
-状态：`main` 已实现 fallback，待 1.2 发布。
+状态：已随 1.1.0 发布 fallback。
 
 - `TaskOptions.mirrors: Vec<Url>`，CLI `--mirror`（可重复）。
 - 主 URL 失败时尝试镜像；镜像必须通过 size/validator 兼容性检查。
