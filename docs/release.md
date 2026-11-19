@@ -135,8 +135,10 @@ release-plz 对 `shaul-cli` 关闭了 `git_release_enable`，但保留 tag 创�
   → major。
 - 首次 1.0 发布前，workspace 版本已手动设为 `1.0.0`；release-plz 对未发布
   crate 的首次 release PR 会沿用当前版本，不会再次自增。
-- `semver_check = false`，因为 1.0 tag 尚不存在、没有基线；1.0 发布后应打开
-  并接入 `cargo-semver-checks`。
+- `semver_check = true`；release-plz 使用 crates.io 上已发布的版本作为
+  baseline，并由 `cargo-semver-checks` 决定是否提升 major。`TaskOptions`
+  等刻意保持可穷举构造的例外在 `shaul-core/Cargo.toml` 的
+  `[package.metadata.cargo-semver-checks.lints]` 中声明为 minor。
 
 ## 发布顺序
 
