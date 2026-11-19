@@ -47,6 +47,10 @@ pub struct Cli {
     #[arg(long = "per-host-active", global = true, value_name = "N")]
     pub per_host_active: Option<usize>,
 
+    /// Per-host bandwidth limit (for example 10MiB, 500K)
+    #[arg(long = "per-host-limit", global = true, value_name = "RATE")]
+    pub per_host_limit: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }

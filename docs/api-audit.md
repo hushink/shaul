@@ -95,7 +95,8 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      避免把内部 helper 变成 1.0 承诺。
 6. **feature 边界**
    - `shaul` 的默认 features 为空；`bt` 才引入 `shaul-bt`，`ftp` 才引入
-     `shaul-ftp`。增加 feature 是 minor 变更，删除或改变默认值是 major 变更。
+     `shaul-ftp`，`xet` 才引入 `shaul-hub/xet` 与 `hf-xet`。增加 feature
+     是 minor 变更，删除或改变默认值是 major 变更。
 7. **跨平台 CI**
    - `.github/workflows/ci.yml` 覆盖 Linux/Windows/macOS 测试、rustfmt、
      clippy、rustdoc、feature 组合、release build 与 MSRV 1.92。
@@ -124,8 +125,9 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      backend/store 组装；`CancellationToken` 从 `shaul` 直接重导出，避免库
      用户额外依赖 `tokio-util`。
    - `NetworkConfig::proxy` / `no_proxy`、`DownloadConfig::rate_limit`、
-     `TaskOptions::rate_limit`、`DownloadConfig::file_jobs` 与
-     `TaskOptions::file_jobs` 提供代理、带宽和多文件并发控制；
+     `DownloadConfig::per_host_rate_limit`、`TaskOptions::rate_limit`、
+     `DownloadConfig::file_jobs` 与 `TaskOptions::file_jobs` 提供代理、
+     全局/单主机/单任务带宽和多文件并发控制；
      `DownloadConfig::global` / `per_host_active` 限制跨任务的活动 HTTP
      文件传输请求数。`TaskOptions.mirrors` / `ResolvedOptions.mirrors`
      提供兼容镜像回退。默认均为关闭/未设置，保持 1.0 行为。
@@ -136,6 +138,9 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    - `shaul-ftp` 是可选 crate：`FtpParser`/`FtpBackend` 通过 `ftp` feature
      暴露，不泄漏 `suppaftp` 类型。FTP 是单流后端，续传依赖服务器的
      `SIZE`/`MDTM`/`REST`；FTPS 暂未承诺。
+   - `shaul` 的 `xet` feature 启用 `shaul-hub/xet`，由 Hub 后端在树 API
+     返回 `xetHash` 时使用 `hf-xet`（Apache-2.0）下载；失败回退 HTTP。
+     `hf-xet` 类型不泄漏到 `shaul-core`，默认 feature 仍为空。
    - `Task.priority` / `TaskOptions.priority` 控制队列顺序：`run_pending`
      按高优先级、创建时间、任务 id 依次排序；默认优先级为 0。
    - `EventKind::Retry` 和 `metrics::RETRIES` 暴露重试尝试；指数 backoff

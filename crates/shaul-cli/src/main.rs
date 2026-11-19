@@ -46,6 +46,7 @@ async fn run(cli: Cli) -> Result<()> {
         no_proxy,
         global_connections,
         per_host_active,
+        per_host_limit,
         command,
     } = cli;
     let (mut config, config_path) = Config::load(config_arg.as_deref())?;
@@ -60,6 +61,10 @@ async fn run(cli: Cli) -> Result<()> {
     }
     if let Some(per_host) = per_host_active {
         config.download.per_host_active = per_host.max(1);
+    }
+    if let Some(limit) = per_host_limit {
+        let rate = shaul::config::parse_bytes(&limit)?;
+        config.download.per_host_rate_limit = (rate > 0).then_some(rate);
     }
 
     match command {

@@ -268,6 +268,9 @@ impl HubClient {
             if let Some(oid) = &entry.oid {
                 metadata.insert("hub.oid".to_string(), oid.clone());
             }
+            if let Some(xet_hash) = &entry.xet_hash {
+                metadata.insert("hub.xet_hash".to_string(), xet_hash.clone());
+            }
             let (size, checksum, blob) = match entry.lfs {
                 Some(lfs) => {
                     metadata.insert("hub.lfs".to_string(), "true".to_string());
@@ -453,6 +456,8 @@ struct HfEntry {
     size: Option<u64>,
     #[serde(default)]
     oid: Option<String>,
+    #[serde(rename = "xetHash", default)]
+    xet_hash: Option<String>,
     #[serde(default)]
     lfs: Option<HfLfs>,
 }
@@ -665,6 +670,13 @@ mod tests {
             parse_cookie_line("{\"m_session_id\": \"xyz\"}"),
             Some("xyz".to_string())
         );
+    }
+
+    #[test]
+    fn parses_xet_hash_from_tree_entries() {
+        let entry: HfEntry =
+            serde_json::from_str(r#"{"type":"file","path":"a","size":1,"xetHash":"abc"}"#).unwrap();
+        assert_eq!(entry.xet_hash.as_deref(), Some("abc"));
     }
 
     #[test]

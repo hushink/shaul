@@ -20,6 +20,7 @@ shaul-http.workspace = true
 default = []
 bt = ["dep:shaul-bt"]
 ftp = ["dep:shaul-ftp"]
+xet = ["shaul-hub/xet"]
 
 [dev-dependencies]
 async-trait.workspace = true

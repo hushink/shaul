@@ -39,26 +39,28 @@ impl RateLimiter {
     }
 }
 
-/// Global and per-task limiters applied to one transfer.
+/// Global, per-host and per-task limiters applied to one transfer.
 #[derive(Clone, Default)]
 pub(crate) struct RateLimiters {
     global: Option<Arc<RateLimiter>>,
+    host: Option<Arc<RateLimiter>>,
     task: Option<Arc<RateLimiter>>,
 }
 
 impl RateLimiters {
-    pub(crate) fn new(global: Option<Arc<RateLimiter>>, task: Option<Arc<RateLimiter>>) -> Self {
-        Self { global, task }
+    pub(crate) fn new(
+        global: Option<Arc<RateLimiter>>,
+        host: Option<Arc<RateLimiter>>,
+        task: Option<Arc<RateLimiter>>,
+    ) -> Self {
+        Self { global, host, task }
     }
 
     /// Reserves `bytes` on every configured limiter and returns the longest
-    /// wait. The effective rate is therefore the lower of the two limits.
+    /// wait. The effective rate is therefore the lower of the limits.
     pub(crate) fn reserve(&self, bytes: u64) -> Duration {
         let mut wait = Duration::ZERO;
-        if let Some(limiter) = &self.global {
-            wait = wait.max(limiter.reserve(bytes));
-        }
-        if let Some(limiter) = &self.task {
+        for limiter in [&self.global, &self.host, &self.task].into_iter().flatten() {
             wait = wait.max(limiter.reserve(bytes));
         }
         wait
@@ -96,7 +98,7 @@ mod tests {
     fn the_slowest_limiter_wins() {
         let global = Arc::new(RateLimiter::new(1_000));
         let task = Arc::new(RateLimiter::new(2_000));
-        let limiters = RateLimiters::new(Some(global), Some(task));
+        let limiters = RateLimiters::new(Some(global), None, Some(task));
         assert_eq!(limiters.reserve(100), Duration::ZERO);
 
         let wait = limiters.reserve(100);
@@ -106,9 +108,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn host_limiter_is_aggregated_with_the_others() {
+        let host = Arc::new(RateLimiter::new(1_000));
+        let limiters = RateLimiters::new(None, Some(host), None);
+        assert_eq!(limiters.reserve(100), Duration::ZERO);
+        let wait = limiters.reserve(100);
+        assert!(
+            wait >= Duration::from_millis(95) && wait <= Duration::from_millis(105),
+            "unexpected wait: {wait:?}"
+        );
+    }
+
     #[tokio::test]
     async fn cancellation_interrupts_a_reservation() {
-        let limiters = RateLimiters::new(Some(Arc::new(RateLimiter::new(1))), None);
+        let limiters = RateLimiters::new(Some(Arc::new(RateLimiter::new(1))), None, None);
         let cancel = CancellationToken::new();
         assert!(limiters.throttle(1, &cancel).await.is_ok());
 

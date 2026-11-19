@@ -1,7 +1,9 @@
 # Xet backend spike
 
 - Date: 2026-11-19
-- Decision: **defer implementation; keep HTTP resolve fallback**
+- Decision: **implement behind an opt-in `xet` feature in `shaul-hub`; keep
+  HTTP resolve fallback** (no separate `shaul-xet` crate, so 1.2.0 does not
+  need another new-crate bootstrap)
 
 ## Findings
 
@@ -27,16 +29,30 @@
   we do not want the default test suite to depend on Hugging Face's external
   CAS. This needs a dedicated fixture design.
 
-## Decision
+## Implemented design
 
-Do not add `hf-xet` in the 1.2.0 release. Keep the existing HTTP resolve
-fallback, and treat Xet as a separate `shaul-xet` crate behind an opt-in
-`xet` feature after the upstream API stabilizes or after a follow-up spike
-builds a local CAS fixture.
+Xet is an opt-in `xet` feature on `shaul-hub`, forwarded by `shaul` and
+enabled by the CLI. It is not a separate crate: this keeps the dependency
+graph optional without requiring another first-publish bootstrap.
 
-Acceptance criteria for a future implementation:
+- The HF tree parser records `xetHash` as `hub.xet_hash`.
+- The Hub backend asks the `xet-read-token` endpoint for a short-lived token,
+  then downloads through `hf-xet` using the existing provider auth headers.
+- Any token, protocol or CAS error removes the partial output and falls back
+  to the normal HTTP resolve path.
+- `shaul-core` and the default `shaul` feature set do not depend on `hf-xet`.
 
-1. `shaul-xet` is an optional crate; `shaul`'s default features do not change.
+## Remaining verification
+
+There is no external-network Xet test in the default suite. Unit tests cover
+metadata/header construction and the existing Hub e2e tests exercise the HTTP
+fallback. A local CAS fixture is still desirable before claiming full Xet
+coverage; it should cover success, token refresh, hash mismatch and fallback
+without external network.
+
+## Acceptance criteria
+
+1. `xet` is an optional feature; `shaul`'s default features do not change.
 2. HTTP fallback is preserved on token, CAS or protocol errors.
 3. No Xet-specific types leak into `shaul-core`.
 4. Local fixture tests cover success, token refresh, hash mismatch and

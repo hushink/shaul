@@ -21,6 +21,7 @@ fs2 = "0.4"
 futures-util = "0.3"
 globset = "0.4"
 hex = "0.4"
+hf-xet = "1.8"
 http = "1"
 indicatif = "0.18"
 librqbit = { version = "9.1", default-features = false, features = ["rust-tls"] }

@@ -66,6 +66,8 @@ pub struct HttpBackend {
     client: Client,
     budget: Arc<ConnectionBudget>,
     global_rate: Option<Arc<RateLimiter>>,
+    per_host_rate: Option<u64>,
+    host_rates: Arc<StdMutex<HashMap<String, Arc<RateLimiter>>>>,
     task_rates: TaskRates,
     active_connections: Arc<AtomicU64>,
 }
@@ -98,12 +100,17 @@ impl HttpBackend {
                 .rate_limit
                 .filter(|value| *value > 0)
                 .map(|rate| Arc::new(RateLimiter::new(rate))),
+            per_host_rate: config
+                .download
+                .per_host_rate_limit
+                .filter(|value| *value > 0),
+            host_rates: Arc::new(StdMutex::new(HashMap::new())),
             task_rates: Arc::new(StdMutex::new(HashMap::new())),
             active_connections: Arc::new(AtomicU64::new(0)),
         })
     }
 
-    fn request_rate(&self, request: &DownloadRequest) -> RateLimiters {
+    fn request_rate(&self, request: &DownloadRequest, host: &str) -> RateLimiters {
         let task = request
             .options
             .task_rate_limit
@@ -122,7 +129,17 @@ impl HttpBackend {
                 rates.insert(request.task_id, (rate, limiter.clone()));
                 limiter
             });
-        RateLimiters::new(self.global_rate.clone(), task)
+        let host = self.per_host_rate.map(|rate| {
+            let mut rates = self
+                .host_rates
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            rates
+                .entry(host.to_string())
+                .or_insert_with(|| Arc::new(RateLimiter::new(rate)))
+                .clone()
+        });
+        RateLimiters::new(self.global_rate.clone(), host, task)
     }
 
     /// Download one resource file, sharing the caller's task resume. This is
@@ -500,7 +517,7 @@ impl HttpBackend {
             progress_stop.clone(),
         );
 
-        let rate = self.request_rate(request);
+        let rate = self.request_rate(request, file.url.host_str().unwrap_or_default());
         let transfer_result = if let Some(0) = total {
             // Empty file: the pre-allocated part is already the final content.
             task_resume.files.insert(key.clone(), file_resume.clone());

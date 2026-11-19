@@ -30,6 +30,8 @@ download each file with the segmented HTTP backend.
   - Hugging Face: `models--org--repo/{blobs,refs,snapshots}` (Python-compatible)
   - ModelScope: shaul's own `models--org--repo` layout
 - hardlink-or-copy from cache blobs into the destination
+- optional Hugging Face Xet downloads through the `xet` feature (`hf-xet`,
+  Apache-2.0), with HTTP fallback
 - include/exclude globs for selecting files
 - provider credentials resolved at run time and never written to task sidecars
 

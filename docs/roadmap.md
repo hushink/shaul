@@ -19,10 +19,10 @@
 | 版本 | 主题 | 主要能力 | 状态 |
 | --- | --- | --- | --- |
 | **1.1** | 生产化基础 | 代理、限速、可替换解压器、BlockingEngine 生命周期、批量输入文件 | 已发布 2026-11-19 |
-| **1.2** | 吞吐与多源 | FTP 后端、多文件并发、全局/单主机连接预算、镜像回退、任务优先级 | 已随 1.1.0 交付 |
+| **1.2** | 吞吐与多源 | FTP 后端、多文件并发、全局/单主机连接预算、单主机限速、镜像回退、任务优先级 | 已随 1.1.0/1.2.0 交付 |
 | **1.2.0** | 运维闭环与缓存 | 内容寻址缓存、`doctor`/`stats`/`clean`、缓存/队列/连接指标 | 已实现，待发布 |
-| **1.3** | Hub 差异化 | 可选 Xet 后端、缓存维护、CAS 增量维护 | 高，需先 spike |
-| **1.4** | 运维与观测 | OpenTelemetry / Prometheus 适配、残留 `.part` 扫描、磁盘预检 | 低中 |
+| **1.3** | Hub 差异化 | 可选 Xet 后端、缓存维护、CAS 增量维护 | Xet 已实现，fixture 待补 |
+| **1.4** | 运维与观测 | OpenTelemetry / Prometheus 适配、残留 `.part` 扫描、磁盘预检 | 已实现（适配文档为主） |
 
 ---
 
@@ -198,17 +198,17 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ## 1.3 Hub 差异化
 
-### 可选 Xet 后端
+### 可选 Xet 后端（已随 1.2.0 实现）
 
-- [x] 完成 spike：`hf-xet` 为 Apache-2.0，可满足许可证要求，但 Rust API
-  仍在稳定过程中，依赖体积大，且需要 CAS fixture 才能做无外网 e2e。
-  结论：1.2.0 暂不引入，保留 HTTP resolve 回退；详见
-  [xet-spike.md](xet-spike.md)。
-- 新建可选 crate `shaul-xet`，facade 增加 `xet` feature，默认关闭。
-- 解析 `X-Xet-Hash`、`X-Xet-Cas-Url`、`X-Xet-Token-Expiration`、`X-Xet-Refresh-Route`。
-- 支持 CAS 下载、短期 token 刷新；失败回退到普通 HTTP resolve。
-- 后续实现前先建立本地 CAS fixture，确保测试不依赖外网。
-- 如果上游 API 或 Windows 构建仍不稳定，则推迟到 2.0，不阻塞 1.x 其他能力。
+- [x] `shaul-hub` 增加可选 `xet` feature，`shaul` 与 CLI 转发；不新建
+  crate，避免再次 bootstrap。`hf-xet` 为 Apache-2.0。
+- [x] HF tree API 的 `xetHash` 写入 `hub.xet_hash`。
+- [x] Hub 后端通过 `xet-read-token` 获取短期 token，使用 `hf-xet` 下载；
+  token/协议/CAS 失败自动回退普通 HTTP resolve。
+- [x] `hf-xet` 类型不进入 `shaul-core`，默认 feature 不引入依赖。
+- [ ] 本地 CAS fixture 与成功路径 e2e 仍是后续加固项；当前默认测试覆盖
+  metadata/header 构造和 HTTP 回退。
+- 详见 [xet-spike.md](xet-spike.md)。
 
 ### 通用 CAS 缓存（已随 1.2.0 实现）
 

@@ -35,6 +35,8 @@
 - **Hub 一等公民**：Hugging Face / ModelScope 仓库快照、revision、
   include/exclude glob、环境变量或官方凭据文件中的 token，以及可选的
   HF 兼容缓存。
+- **Xet（可选）**：启用 `xet` feature 后，带 `xetHash` 的 Hugging Face 文件
+  走 Xet CAS 下载；token 错误、协议错误或不支持的资源自动回退普通 HTTP。
 - **BitTorrent**：磁力链、裸 v1 info hash、本地 `.torrent`；通过 librqbit
   使用 DHT、tracker、peer wire、文件选择与 pause/resume。只做 leech：
   完成后立即暂停，不常驻做种。
@@ -138,8 +140,8 @@ v1 info hash 处理。
 常用参数：`--dir`、`--output`（单文件直链）、`--checksum`、
 `--verify/--no-verify`、`--extract/--no-extract`、`--extract-dir`、
 `--delete-archive`、`--header`、`--header-file`、`--bearer-token`、`--basic`、
-`--proxy`、`--no-proxy`、`--limit`、`--file-jobs`、`--content-cache`、
-`--no-content-cache`、`--mirror`、`--priority`、
+`--proxy`、`--no-proxy`、`--limit`、`--per-host-limit`、`--file-jobs`、
+`--content-cache`、`--no-content-cache`、`--mirror`、`--priority`、
 `--global-connections`、`--per-host-active`、`--input-file`、`--revision`、
 `--include`、`--exclude`、`--cache/--no-cache`、`--json`、`--force`、
 `--overwrite`、`--rename`。`download`/`add` 的 `--limit` 限制单个任务；
@@ -206,6 +208,7 @@ per_host_active = 16    # 跨任务的单主机活动 HTTP 文件传输上限
 global = 64             # 跨任务的活动 HTTP 文件传输上限
 segment_size = 8388608
 rate_limit = 0         # 全局共享字节/秒；0 = 不限速
+per_host_rate_limit = 0 # 单主机字节/秒；0 = 不限速
 file_jobs = 1          # 单任务内并发下载的文件数
 content_cache = false  # 按 checksum + size 复用已校验文件
 # content_cache_dir = "/path/to/shaul/content"
@@ -249,8 +252,8 @@ persistence = true
 
 网络相关环境变量包括 `SHAUL_RATE_LIMIT`、`SHAUL_FILE_JOBS`、
 `SHAUL_CONTENT_CACHE`、`SHAUL_CONTENT_CACHE_DIR`、`SHAUL_DISK_SPACE_CHECK`、
-`SHAUL_PER_HOST_ACTIVE`、`SHAUL_GLOBAL`、`SHAUL_PROXY`、`SHAUL_NO_PROXY`，
-以及常规的
+`SHAUL_PER_HOST_ACTIVE`、`SHAUL_PER_HOST_RATE_LIMIT`、`SHAUL_GLOBAL`、
+`SHAUL_PROXY`、`SHAUL_NO_PROXY`，以及常规的
 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY`。显式配置优先于
 环境变量。
 
@@ -302,7 +305,7 @@ header，并在任务视图中去掉 HTTP 链接的查询串。`config show` 与
   生命周期、`--input-file`、FTP、多文件并发、连接预算、镜像回退与任务优先级。
 - **1.2.0** —— 当前：可校验的内容寻址缓存、`doctor`/`stats`/`clean`、
   缓存/队列/连接指标。
-- **1.3** —— Hub 差异化：spike 通过后的可选 Xet 后端与缓存维护。
+- **1.3** —— Hub 差异化：可选 Xet feature 已实现；本地 CAS fixture 是剩余加固项。
 - **1.4** —— 运维：OpenTelemetry/Prometheus 适配、残留 `.part` 扫描与磁盘预检。
 
 详细计划、扩展边界与发布门槛见 [docs/roadmap.md](docs/roadmap.md)。

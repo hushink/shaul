@@ -109,6 +109,19 @@ fails. A mirror must match the primary's size and, when no checksum is known,
 must not expose a different strong ETag; incompatible mirrors are skipped with
 a warning. Cross-origin auth stripping still applies.
 
+## Does shaul use Hugging Face Xet?
+
+When the `shaul` crate is built with the `xet` feature, the CLI enables it by
+default. A Hub snapshot file whose tree entry contains `xetHash` is downloaded
+through `hf-xet` (Apache-2.0) using the Hub `xet-read-token` endpoint. Auth,
+protocol or token failures fall back to the normal HTTP resolve path, so a
+missing or expired token never blocks a file that is available over HTTP.
+Direct-link Xet URLs and non-Hub providers use HTTP.
+
+The Xet path currently has unit coverage for metadata/header construction and
+fallback, but no external-network test; Xet CAS downloads are verified through
+`hf-xet` and the normal checksum finalizer.
+
 ## Does shaul support FTP?
 
 Yes: plain `ftp://` links are available through the optional `ftp` feature (the
@@ -144,9 +157,9 @@ default priority is 0.
 `SHAUL_CONFIG` overrides the location. Common environment variables include
 `SHAUL_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_RATE_LIMIT`, `SHAUL_FILE_JOBS`,
 `SHAUL_CONTENT_CACHE`, `SHAUL_CONTENT_CACHE_DIR`, `SHAUL_DISK_SPACE_CHECK`,
-`SHAUL_PER_HOST_ACTIVE`, `SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`,
-`SHAUL_STATE_DIR`, `SHAUL_VERIFY`, `HF_TOKEN` and `MODELSCOPE_API_TOKEN`; see
-the README for the full list.
+`SHAUL_PER_HOST_ACTIVE`, `SHAUL_PER_HOST_RATE_LIMIT`, `SHAUL_GLOBAL`,
+`SHAUL_PROXY`, `SHAUL_NO_PROXY`, `SHAUL_STATE_DIR`, `SHAUL_VERIFY`, `HF_TOKEN`
+and `MODELSCOPE_API_TOKEN`; see the README for the full list.
 
 ## How do I enable logs and metrics?
 
@@ -177,6 +190,8 @@ Yes in the 1.1 line:
 - `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are read by
   `Config::load`; explicit config and CLI values win.
 - `download.rate_limit` sets a global bytes-per-second cap.
+- `download.per_host_rate_limit` / `--per-host-limit` adds a cap shared by all
+  transfers to one host.
 - `TaskOptions::rate_limit` adds a per-task cap. `shaul download --limit` and
   `shaul add --limit` set that field (and `add` persists it); `shaul run
   --limit` sets the worker's global cap.

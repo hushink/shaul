@@ -56,7 +56,8 @@ pub fn default_router(config: &Config) -> Result<Router> {
         .into_iter()
         .chain(ftp_backend)
         .chain([
-            Arc::new(HubBackend::with_http(client, http.clone())) as Arc<dyn DownloadBackend>,
+            Arc::new(HubBackend::with_http_and_xet(client, http.clone()))
+                as Arc<dyn DownloadBackend>,
             shaul_core::backend_arc(http),
         ])
         .collect();

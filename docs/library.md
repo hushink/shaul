@@ -25,8 +25,8 @@ The examples below are complete programs under
 shaul = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
-# Optional: add the BitTorrent and/or FTP parser/backend.
-# shaul = { version = "1.1", features = ["bt", "ftp"] }
+# Optional: BitTorrent, FTP and Hugging Face Xet support.
+# shaul = { version = "1.1", features = ["bt", "ftp", "xet"] }
 ```
 
 The async API needs a Tokio runtime. The blocking facade
@@ -38,7 +38,8 @@ The async API needs a Tokio runtime. The blocking facade
 opens the sidecar task store:
 
 - BitTorrent (only with the `bt` feature)
-- Hugging Face and ModelScope
+- Hugging Face and ModelScope (Xet downloads when the `xet` feature is on and
+  the tree API reports a `xetHash`)
 - FTP (only with the `ftp` feature; single-stream, no FTPS yet)
 - direct links as the fallback
 
@@ -92,6 +93,7 @@ fn configure() -> shaul::Result<(Config, TaskOptions)> {
     config.network.proxy = Some("socks5://127.0.0.1:1080".to_string());
     config.network.no_proxy = Some("localhost,127.0.0.1".to_string());
     config.download.rate_limit = Some(8 * 1024 * 1024); // global bytes/sec
+    config.download.per_host_rate_limit = Some(2 * 1024 * 1024); // per host
     config.download.file_jobs = 4; // files within one multi-file task
     config.download.global = 32; // active HTTP file transfers across tasks
     config.download.per_host_active = 8; // active HTTP file transfers per host
@@ -110,8 +112,9 @@ fn configure() -> shaul::Result<(Config, TaskOptions)> {
 }
 ```
 
-The global and per-task caps are combined: the effective rate is the lower of
-the two. `None` or `Some(0)` means no cap at that layer. `file_jobs` controls
+The global, per-host and per-task caps are combined: the effective rate is the
+lowest of the configured limits. `None` or `Some(0)` means no cap at that
+layer. `file_jobs` controls
 how many files in one task transfer concurrently. `mirrors` contains alternate
 full URLs for the same file and is used only after the primary fails.
 `global` and `per_host_active` cap active HTTP file-transfer requests. The

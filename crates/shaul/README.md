@@ -15,8 +15,8 @@ from [`shaul-core`](https://crates.io/crates/shaul-core),
 ```toml
 [dependencies]
 shaul = "1.1"
-# BitTorrent and/or FTP support:
-# shaul = { version = "1.1", features = ["bt", "ftp"] }
+# BitTorrent, FTP and/or Hugging Face Xet support:
+# shaul = { version = "1.1", features = ["bt", "ftp", "xet"] }
 ```
 
 MSRV is Rust 1.92.
@@ -64,6 +64,7 @@ runnable examples in
 - SHA-256/SHA-512/SHA-1/MD5 verification, toggleable per download
 - archive extraction (zip, tar, tar.gz, tar.zst, gzip, zstd) after verification
 - Hugging Face and ModelScope repositories with optional provider caches
+- optional Hugging Face Xet downloads via the `xet` feature, with HTTP fallback
 - BitTorrent / magnet / `.torrent` via the optional `bt` feature
 - single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume via the optional `ftp` feature
 - concurrent multi-file downloads with `file_jobs`

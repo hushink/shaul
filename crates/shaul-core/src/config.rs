@@ -51,6 +51,9 @@ pub struct DownloadConfig {
     /// Global bandwidth limit in bytes per second. `None` or `0` means
     /// unlimited. Direct HTTP and Hub file transfers share this limit.
     pub rate_limit: Option<u64>,
+    /// Additional bandwidth cap per destination host in bytes per second.
+    /// `None` or `0` means unlimited.
+    pub per_host_rate_limit: Option<u64>,
     /// Number of files downloaded concurrently within one multi-file task.
     pub file_jobs: usize,
     /// Reuse verified downloads through the content-addressed cache.
@@ -156,6 +159,7 @@ impl Default for DownloadConfig {
             per_host_active: 16,
             global: 64,
             rate_limit: None,
+            per_host_rate_limit: None,
             file_jobs: 1,
             content_cache: false,
             content_cache_dir: None,
@@ -204,6 +208,8 @@ pub struct ResolvedOptions {
     pub global: usize,
     /// Global bandwidth limit in bytes per second, if configured.
     pub rate_limit: Option<u64>,
+    /// Per-host bandwidth limit in bytes per second, if configured.
+    pub per_host_rate_limit: Option<u64>,
     /// Additional per-task bandwidth limit in bytes per second, if configured.
     pub task_rate_limit: Option<u64>,
     /// Number of files downloaded concurrently within this task.
@@ -398,6 +404,10 @@ impl Config {
         if let Some(value) = env("SHAUL_RATE_LIMIT") {
             self.download.rate_limit = Some(parse_bytes(&value)?).filter(|value| *value > 0);
         }
+        if let Some(value) = env("SHAUL_PER_HOST_RATE_LIMIT") {
+            self.download.per_host_rate_limit =
+                Some(parse_bytes(&value)?).filter(|value| *value > 0);
+        }
         if let Some(value) = env_parse::<usize>("SHAUL_FILE_JOBS")? {
             self.download.file_jobs = value.max(1);
         }
@@ -544,6 +554,7 @@ impl Config {
             per_host_active: self.download.per_host_active.max(1),
             global: self.download.global.max(1),
             rate_limit: self.download.rate_limit.filter(|value| *value > 0),
+            per_host_rate_limit: self.download.per_host_rate_limit.filter(|value| *value > 0),
             task_rate_limit: options.rate_limit.filter(|value| *value > 0),
             file_jobs: options.file_jobs.unwrap_or(self.download.file_jobs).max(1),
             content_cache: options.content_cache.unwrap_or(self.download.content_cache),
@@ -586,6 +597,11 @@ impl Config {
             "download.rate_limit" => self
                 .download
                 .rate_limit
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            "download.per_host_rate_limit" => self
+                .download
+                .per_host_rate_limit
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
             "download.file_jobs" => self.download.file_jobs.to_string(),
@@ -651,6 +667,13 @@ impl Config {
             "download.global" => self.download.global = parse_value(value)?,
             "download.rate_limit" => {
                 self.download.rate_limit = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(parse_bytes(value)?).filter(|value| *value > 0)
+                }
+            }
+            "download.per_host_rate_limit" => {
+                self.download.per_host_rate_limit = if value.trim().is_empty() {
                     None
                 } else {
                     Some(parse_bytes(value)?).filter(|value| *value > 0)
@@ -884,6 +907,8 @@ struct PartialDownload {
     #[serde(default)]
     rate_limit: Option<u64>,
     #[serde(default)]
+    per_host_rate_limit: Option<u64>,
+    #[serde(default)]
     file_jobs: Option<usize>,
     #[serde(default)]
     content_cache: Option<bool>,
@@ -973,6 +998,9 @@ impl PartialConfig {
             }
             if let Some(value) = download.rate_limit {
                 config.download.rate_limit = (value > 0).then_some(value);
+            }
+            if let Some(value) = download.per_host_rate_limit {
+                config.download.per_host_rate_limit = (value > 0).then_some(value);
             }
             if let Some(value) = download.file_jobs {
                 config.download.file_jobs = value.max(1);
@@ -1108,6 +1136,13 @@ mod tests {
             config.get_value("download.rate_limit").unwrap(),
             (2 * 1024 * 1024).to_string()
         );
+        config
+            .set_value("download.per_host_rate_limit", "1MiB")
+            .unwrap();
+        assert_eq!(
+            config.get_value("download.per_host_rate_limit").unwrap(),
+            (1024 * 1024).to_string()
+        );
         config.set_value("download.file_jobs", "3").unwrap();
         assert_eq!(config.get_value("download.file_jobs").unwrap(), "3");
         config.set_value("download.content_cache", "true").unwrap();
@@ -1143,6 +1178,7 @@ mod tests {
     fn resolves_proxy_and_rate_limits() {
         let mut config = Config::default();
         config.download.rate_limit = Some(1024);
+        config.download.per_host_rate_limit = Some(512);
         config.network.proxy = Some("http://127.0.0.1:8080".to_string());
         config.network.no_proxy = Some("localhost".to_string());
         config.download.file_jobs = 4;
@@ -1155,6 +1191,7 @@ mod tests {
         };
         let resolved = config.resolve(Path::new("."), &options).unwrap();
         assert_eq!(resolved.rate_limit, Some(1024));
+        assert_eq!(resolved.per_host_rate_limit, Some(512));
         assert_eq!(resolved.task_rate_limit, Some(2048));
         assert_eq!(resolved.file_jobs, 2);
         assert_eq!(resolved.per_host_active, 16);

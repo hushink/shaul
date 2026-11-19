@@ -1,23 +1,106 @@
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(feature = "xet")]
+use std::time::Duration;
 
 use async_trait::async_trait;
+#[cfg(feature = "xet")]
+use base64::Engine;
 use shaul_core::{
-    BackendCapabilities, Config, DownloadBackend, DownloadOutcome, DownloadRequest, Error,
-    EventKind, FileOutcome, HubProvider, HubRepoType, Resource, ResourceFile, ResourceKind, Result,
-    ResumeCheckpoint, TaskResume, compute_file_checksum, sanitize_file_name,
+    BackendCapabilities, Config, ContentCache, DownloadBackend, DownloadOutcome, DownloadRequest,
+    Error, EventKind, FileOutcome, HubProvider, HubRepoType, Resource, ResourceFile, ResourceKind,
+    Result, ResumeCheckpoint, TaskResume, compute_file_checksum, metrics, sanitize_file_name,
 };
+#[cfg(feature = "xet")]
+use shaul_core::{CancellationToken, ChecksumAlgorithm, expand_env};
 use shaul_http::HttpBackend;
 use tokio::sync::Mutex;
 
 use crate::cache;
 use crate::client::HubClient;
 
+#[cfg(feature = "xet")]
+use xet::xet_session::{HeaderMap, HeaderValue, XetFileInfo, XetSession, XetSessionBuilder};
+
 /// Backend for Hugging Face and ModelScope repository snapshots.
 #[derive(Clone)]
 pub struct HubBackend {
     client: Arc<HubClient>,
     http: HttpBackend,
+    #[cfg(feature = "xet")]
+    xet: Arc<std::sync::OnceLock<Option<XetSession>>>,
+}
+
+#[cfg(feature = "xet")]
+fn build_xet_session() -> Option<XetSession> {
+    let builder = XetSessionBuilder::new();
+    let builder = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        builder.with_tokio_handle(handle)
+    } else {
+        builder
+    };
+    match builder.build() {
+        Ok(session) => Some(session),
+        Err(error) => {
+            tracing::warn!(%error, "could not initialize Xet; Hub downloads will use HTTP");
+            None
+        }
+    }
+}
+
+#[cfg(feature = "xet")]
+fn xet_file_info(file: &ResourceFile) -> Option<XetFileInfo> {
+    let hash = file
+        .metadata
+        .get("hub.xet_hash")
+        .filter(|value| !value.is_empty())?
+        .clone();
+    let sha256 = file
+        .checksum
+        .as_ref()
+        .filter(|checksum| checksum.algorithm == ChecksumAlgorithm::Sha256)
+        .map(|checksum| checksum.hex.clone());
+    Some(XetFileInfo {
+        hash,
+        file_size: file.size,
+        sha256,
+    })
+}
+
+#[cfg(feature = "xet")]
+fn xet_headers(request: &shaul_core::RequestOptions) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    for header in &request.headers {
+        let value = expand_env(&header.value)?;
+        insert_xet_header(&mut headers, &header.name, &value)?;
+    }
+    if let Some(auth) = &request.auth {
+        match auth {
+            shaul_core::Auth::Bearer { token } => {
+                insert_xet_header(&mut headers, "authorization", &format!("Bearer {token}"))?
+            }
+            shaul_core::Auth::Basic { username, password } => {
+                let encoded = base64::engine::general_purpose::STANDARD
+                    .encode(format!("{username}:{password}"));
+                insert_xet_header(&mut headers, "authorization", &format!("Basic {encoded}"))?;
+            }
+            shaul_core::Auth::Header(header) => {
+                let value = expand_env(&header.value)?;
+                insert_xet_header(&mut headers, &header.name, &value)?;
+            }
+        }
+    }
+    Ok(headers)
+}
+
+#[cfg(feature = "xet")]
+fn insert_xet_header(headers: &mut HeaderMap, name: &str, value: &str) -> Result<()> {
+    let name = http::HeaderName::from_bytes(name.as_bytes())
+        .map_err(|_| Error::Config(format!("invalid header name: {name}")))?;
+    let value = HeaderValue::from_str(value)
+        .map_err(|_| Error::Config(format!("invalid header value for {name}")))?;
+    headers.insert(name, value);
+    Ok(())
 }
 
 impl HubBackend {
@@ -27,13 +110,289 @@ impl HubBackend {
         Ok(Self {
             client,
             http: HttpBackend::new(config)?,
+            #[cfg(feature = "xet")]
+            xet: Arc::new(std::sync::OnceLock::new()),
         })
     }
 
     /// Build a Hub backend around an existing HTTP backend, so direct and Hub
-    /// transfers share connection and bandwidth limits.
+    /// transfers share connection and bandwidth limits. Xet is not enabled
+    /// through this constructor; use [`HubBackend::with_http_and_xet`].
     pub fn with_http(client: Arc<HubClient>, http: HttpBackend) -> Self {
-        Self { client, http }
+        Self {
+            client,
+            http,
+            #[cfg(feature = "xet")]
+            xet: Arc::new(std::sync::OnceLock::new()),
+        }
+    }
+
+    /// Build a Hub backend around an existing HTTP backend and also enable the
+    /// optional Xet session when the `xet` feature is enabled.
+    pub fn with_http_and_xet(client: Arc<HubClient>, http: HttpBackend) -> Self {
+        Self::with_http(client, http)
+    }
+
+    #[cfg(feature = "xet")]
+    fn xet_token_url(&self, resource: &Resource) -> Result<String> {
+        let ResourceKind::Hub {
+            provider: HubProvider::HuggingFace,
+            repo,
+            repo_type,
+            revision,
+        } = &resource.kind
+        else {
+            return Err(Error::Backend(
+                "Xet is only available for Hugging Face Hub resources".to_string(),
+            ));
+        };
+        let repo_segment = match repo_type {
+            HubRepoType::Model => "models",
+            HubRepoType::Dataset => "datasets",
+            _ => {
+                return Err(Error::Backend(
+                    "unsupported Hugging Face repository type for Xet".to_string(),
+                ));
+            }
+        };
+        let revision = if revision.trim().is_empty() {
+            "main"
+        } else {
+            revision.as_str()
+        };
+        let mut url = self.client.hf_endpoint().clone();
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|_| Error::Backend("invalid Hugging Face endpoint".to_string()))?;
+            segments.push("api").push(repo_segment);
+            for part in repo.split('/').filter(|part| !part.is_empty()) {
+                segments.push(part);
+            }
+            segments.push("xet-read-token").push(revision);
+        }
+        Ok(url.to_string())
+    }
+
+    async fn try_content_cache(
+        &self,
+        request: &DownloadRequest,
+        task_resume: &TaskResume,
+        file: &ResourceFile,
+        relative: &str,
+    ) -> Result<Option<FileOutcome>> {
+        if !request.options.content_cache {
+            return Ok(None);
+        }
+        let checksum = request
+            .options
+            .checksum
+            .clone()
+            .or_else(|| file.checksum.clone())
+            .or_else(|| {
+                task_resume
+                    .files
+                    .get(file.url.as_str())
+                    .and_then(|entry| entry.checksum.clone())
+            });
+        let (Some(checksum), Some(size)) = (checksum, file.size) else {
+            return Ok(None);
+        };
+        let cache = match ContentCache::new(&request.options.content_cache_dir) {
+            Ok(cache) => cache,
+            Err(error) => {
+                warning(request, format!("could not open content cache: {error}"));
+                return Ok(None);
+            }
+        };
+        let Some(cached) = cache.lookup_verified(&checksum, size).await? else {
+            request
+                .events
+                .telemetry()
+                .counter(metrics::CACHE_MISSES, 1, &[]);
+            return Ok(None);
+        };
+        let destination = request
+            .destination
+            .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let action = cache::prepare_destination(&destination, Some(size), &request.options).await?;
+        let final_path = match action {
+            cache::DestinationAction::Reuse => return Ok(None),
+            cache::DestinationAction::Create(path) => path,
+        };
+        if let Err(error) = cache.materialize(&cached, &final_path, size).await {
+            warning(
+                request,
+                format!("could not materialize cached file: {error}"),
+            );
+            return Ok(None);
+        }
+        request
+            .events
+            .telemetry()
+            .counter(metrics::CACHE_HITS, 1, &[]);
+        request
+            .events
+            .telemetry()
+            .counter(metrics::CACHE_BYTES, size, &[]);
+        request.events.emit(EventKind::FileStarted {
+            task_id: request.task_id,
+            file: relative.to_string(),
+            total_bytes: Some(size),
+        });
+        request.events.emit(EventKind::Progress {
+            task_id: request.task_id,
+            file: relative.to_string(),
+            downloaded_bytes: size,
+            total_bytes: Some(size),
+        });
+        Ok(Some(FileOutcome::new(
+            final_path,
+            relative.to_string(),
+            size,
+            Some(checksum),
+            true,
+        )))
+    }
+
+    #[cfg(feature = "xet")]
+    async fn try_xet(
+        &self,
+        request: &DownloadRequest,
+        file: &ResourceFile,
+        relative: &str,
+        effective_request: &shaul_core::RequestOptions,
+    ) -> Result<Option<FileOutcome>> {
+        let Some(session) = self.xet.get_or_init(build_xet_session).as_ref() else {
+            return Ok(None);
+        };
+        let Some(info) = xet_file_info(file) else {
+            return Ok(None);
+        };
+        let token_url = match self.xet_token_url(&request.resource) {
+            Ok(url) => url,
+            Err(error) => {
+                tracing::debug!(%error, "Xet token URL is unavailable; using HTTP");
+                return Ok(None);
+            }
+        };
+        let headers = match xet_headers(effective_request) {
+            Ok(headers) => headers,
+            Err(error) => {
+                warning(request, format!("could not build Xet headers: {error}"));
+                return Ok(None);
+            }
+        };
+        let destination = request
+            .destination
+            .join(relative.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let action = cache::prepare_destination(&destination, file.size, &request.options).await?;
+        let final_path = match action {
+            cache::DestinationAction::Reuse => {
+                let size = tokio::fs::metadata(&destination).await?.len();
+                request.events.emit(EventKind::FileStarted {
+                    task_id: request.task_id,
+                    file: relative.to_string(),
+                    total_bytes: Some(size),
+                });
+                return Ok(Some(FileOutcome::new(
+                    destination,
+                    relative.to_string(),
+                    size,
+                    file.checksum
+                        .clone()
+                        .or_else(|| request.options.checksum.clone()),
+                    false,
+                )));
+            }
+            cache::DestinationAction::Create(path) => path,
+        };
+        if request.options.disk_space_check
+            && let Some(size) = file.size
+        {
+            shaul_core::ensure_free_space(&request.destination, size)?;
+        }
+
+        let group = match session.new_file_download_group() {
+            Ok(builder) => builder
+                .with_token_refresh_url(token_url, headers)
+                .build()
+                .await
+                .map_err(|error| Error::Backend(format!("Xet group: {error}")))?,
+            Err(error) => {
+                warning(request, format!("could not start Xet download: {error}"));
+                return Ok(None);
+            }
+        };
+        request.events.emit(EventKind::FileStarted {
+            task_id: request.task_id,
+            file: relative.to_string(),
+            total_bytes: file.size,
+        });
+        let stop = CancellationToken::new();
+        let progress_group = group.clone();
+        let progress_events = request.events.clone();
+        let progress_file = relative.to_string();
+        let progress_task_id = request.task_id;
+        let progress_total = file.size;
+        let progress_stop = stop.clone();
+        let progress = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = progress_stop.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                        let report = progress_group.progress();
+                        progress_events.emit(EventKind::Progress {
+                            task_id: progress_task_id,
+                            file: progress_file.clone(),
+                            downloaded_bytes: report.total_bytes_completed,
+                            total_bytes: progress_total.or(Some(report.total_bytes)),
+                        });
+                    }
+                }
+            }
+        });
+        if let Err(error) = group.download_file_to_path(info, final_path.clone()).await {
+            let _ = group.abort();
+            stop.cancel();
+            let _ = progress.await;
+            let _ = cache::remove_file_if_exists(&final_path).await;
+            warning(request, format!("Xet download failed: {error}"));
+            return Ok(None);
+        }
+        let finish_group = group.clone();
+        let finish = finish_group.finish();
+        let result = tokio::select! {
+            result = finish => result,
+            _ = request.cancel.cancelled() => {
+                let _ = group.abort();
+                stop.cancel();
+                let _ = progress.await;
+                let _ = cache::remove_file_if_exists(&final_path).await;
+                return Err(Error::Cancelled);
+            }
+        };
+        stop.cancel();
+        let _ = progress.await;
+        match result {
+            Ok(_) => {
+                let size = tokio::fs::metadata(&final_path).await?.len();
+                Ok(Some(FileOutcome::new(
+                    final_path,
+                    relative.to_string(),
+                    size,
+                    file.checksum
+                        .clone()
+                        .or_else(|| request.options.checksum.clone()),
+                    false,
+                )))
+            }
+            Err(error) => {
+                let _ = cache::remove_file_if_exists(&final_path).await;
+                warning(request, format!("Xet download failed: {error}"));
+                Ok(None)
+            }
+        }
     }
 
     async fn download_one(
@@ -44,11 +403,24 @@ impl HubBackend {
         file: &ResourceFile,
         relative: &str,
     ) -> Result<FileOutcome> {
+        if let Some(outcome) = self
+            .try_content_cache(request, task_resume, file, relative)
+            .await?
+        {
+            return Ok(outcome);
+        }
         // Provider credentials are resolved here, at run time, so they are
         // never written into the task sidecar.
         let effective_request = self
             .client
             .request_options(provider, &request.options.request)?;
+        #[cfg(feature = "xet")]
+        if let Some(outcome) = self
+            .try_xet(request, file, relative, &effective_request)
+            .await?
+        {
+            return Ok(outcome);
+        }
         let single_file = ResourceFile {
             path: relative.to_string(),
             url: file.url.clone(),
@@ -298,6 +670,46 @@ impl HubBackend {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "xet"))]
+mod xet_tests {
+    use super::*;
+    use shaul_core::{Checksum, Header, RequestOptions};
+
+    #[test]
+    fn builds_xet_file_info_from_tree_metadata() {
+        let checksum = Checksum::new(ChecksumAlgorithm::Sha256, "a".repeat(64)).unwrap();
+        let mut metadata = std::collections::BTreeMap::new();
+        metadata.insert("hub.xet_hash".to_string(), "xet-hash".to_string());
+        let file = ResourceFile {
+            path: "model.bin".to_string(),
+            url: "https://huggingface.co/org/repo/resolve/main/model.bin"
+                .parse()
+                .unwrap(),
+            size: Some(42),
+            checksum: Some(checksum),
+            headers: Vec::new(),
+            metadata,
+            use_response_filename: false,
+        };
+        let info = xet_file_info(&file).unwrap();
+        assert_eq!(info.hash, "xet-hash");
+        assert_eq!(info.file_size, Some(42));
+        assert_eq!(info.sha256, Some("a".repeat(64)));
+    }
+
+    #[test]
+    fn builds_authorization_headers_for_xet() {
+        let request = RequestOptions {
+            headers: vec![Header::new("X-Test", "yes").unwrap()],
+            auth: Some(shaul_core::Auth::bearer("secret")),
+            allow_cross_origin_auth: false,
+        };
+        let headers = xet_headers(&request).unwrap();
+        assert_eq!(headers.get("authorization").unwrap(), "Bearer secret");
+        assert_eq!(headers.get("x-test").unwrap(), "yes");
     }
 }
 

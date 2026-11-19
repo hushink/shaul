@@ -21,6 +21,7 @@ fn shaul() -> Command {
         "SHAUL_PER_HOST_ACTIVE",
         "SHAUL_GLOBAL",
         "SHAUL_RATE_LIMIT",
+        "SHAUL_PER_HOST_RATE_LIMIT",
         "SHAUL_FILE_JOBS",
         "SHAUL_CONTENT_CACHE",
         "SHAUL_CONTENT_CACHE_DIR",
@@ -174,6 +175,19 @@ fn proxy_flags_override_the_config() {
         "download.per_host_active",
     ]));
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+    let output = run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "--per-host-limit",
+        "1MiB",
+        "config",
+        "get",
+        "download.per_host_rate_limit",
+    ]));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        (1024 * 1024).to_string()
+    );
 }
 
 #[test]

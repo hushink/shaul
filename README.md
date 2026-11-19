@@ -40,6 +40,9 @@ backends:
 - **Hub-aware**: Hugging Face and ModelScope repository snapshots, revisions,
   include/exclude globs, provider tokens from environment/credential files,
   and an optional Hugging Face-compatible cache.
+- **Xet (optional)**: when `shaul` is built with the `xet` feature, Hugging
+  Face files carrying `xetHash` use the Xet CAS download path; token errors,
+  protocol errors and unsupported resources fall back to regular HTTP.
 - **BitTorrent**: magnet links, bare v1 info hashes and local `.torrent` files;
   DHT, trackers, peer wire, per-file selection and pause/resume through
   librqbit. Leech-only: the torrent is paused after completion, so shaul does
@@ -150,8 +153,8 @@ string is accepted as a bare BitTorrent v1 info hash.
 Useful flags: `--dir`, `--output` (single-file direct links), `--checksum`,
 `--verify/--no-verify`, `--extract/--no-extract`, `--extract-dir`,
 `--delete-archive`, `--header`, `--header-file`, `--bearer-token`, `--basic`,
-`--proxy`, `--no-proxy`, `--limit`, `--file-jobs`, `--content-cache`,
-`--no-content-cache`, `--mirror`, `--priority`,
+`--proxy`, `--no-proxy`, `--limit`, `--per-host-limit`, `--file-jobs`,
+`--content-cache`, `--no-content-cache`, `--mirror`, `--priority`,
 `--global-connections`, `--per-host-active`, `--input-file`, `--revision`,
 `--include`, `--exclude`, `--cache/--no-cache`, `--json`, `--force`,
 `--overwrite`, `--rename`. `--limit` on `download`/`add` caps that
@@ -221,6 +224,7 @@ per_host_active = 16    # active HTTP file transfers per host across tasks
 global = 64             # active HTTP file transfers across all tasks
 segment_size = 8388608
 rate_limit = 0         # bytes/sec shared by all tasks; 0 = unlimited
+per_host_rate_limit = 0 # bytes/sec per destination host; 0 = unlimited
 file_jobs = 1          # files downloaded concurrently within one task
 content_cache = false  # reuse verified files by checksum + size
 # content_cache_dir = "/path/to/shaul/content"
@@ -264,8 +268,8 @@ persistence = true
 
 Network environment variables include `SHAUL_RATE_LIMIT`, `SHAUL_FILE_JOBS`,
 `SHAUL_CONTENT_CACHE`, `SHAUL_CONTENT_CACHE_DIR`, `SHAUL_DISK_SPACE_CHECK`,
-`SHAUL_PER_HOST_ACTIVE`, `SHAUL_GLOBAL`, `SHAUL_PROXY`, `SHAUL_NO_PROXY`, and
-the conventional
+`SHAUL_PER_HOST_ACTIVE`, `SHAUL_PER_HOST_RATE_LIMIT`, `SHAUL_GLOBAL`,
+`SHAUL_PROXY`, `SHAUL_NO_PROXY`, and the conventional
 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` names. Explicit
 settings win over environment values.
 
@@ -329,8 +333,8 @@ and `config get network.proxy` redact proxy credentials.
   connection budgets, mirror fallback and task priority.
 - **1.2.0** — current: verified content-addressed cache, `doctor`/`stats`/
   `clean`, cache/queue/connection metrics.
-- **1.3** — Hub differentiation: optional Xet backend (after a spike) and
-  cache maintenance.
+- **1.3** — Hub differentiation: optional Xet feature implemented; a local
+  CAS fixture is the remaining hardening item.
 - **1.4** — operations: OpenTelemetry/Prometheus adapters, orphan `.part`
   discovery and disk-space preflight.
 
