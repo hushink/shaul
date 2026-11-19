@@ -210,12 +210,12 @@ pub struct ExtractorFinalizer { /* registry */ }
 - 后续实现前先建立本地 CAS fixture，确保测试不依赖外网。
 - 如果上游 API 或 Windows 构建仍不稳定，则推迟到 2.0，不阻塞 1.x 其他能力。
 
-### 通用 CAS 缓存
+### 通用 CAS 缓存（已随 1.2.0 实现）
 
-- 仅对“已知 checksum + 已知 size”的下载启用。
-- 以 `digest+size` 为 key，原子写入，硬链接/复制到目标。
-- 默认关闭，校验通过后才入缓存。
-- 提供 `clean`/`prune`，避免缓存无限增长。
+- [x] 仅对“已知 checksum + 已知 size”的下载启用。
+- [x] 以 `digest+size` 为 key，原子写入，硬链接/复制到目标。
+- [x] 默认关闭，校验通过后才入缓存。
+- [x] 提供 `clean`/`prune`，避免缓存无限增长。
 
 ---
 
@@ -226,7 +226,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 - [x] `shaul doctor`：配置、状态目录、代理、Hub token、目录权限。
 - [x] `shaul clean`：已完成/失败任务 sidecar 与内容缓存。
 - [x] `shaul stats`：任务数量、字节数、失败原因分布。
-- [ ] 残留 `.part` 扫描与磁盘空间预检（需要额外的跨平台能力，单独评估）。
+- [x] 残留 `.part` 扫描与磁盘空间预检（已随 1.2.0 实现）。
 
 ---
 
