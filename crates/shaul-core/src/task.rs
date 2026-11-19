@@ -39,6 +39,9 @@ pub struct Task {
     pub destination: PathBuf,
     /// Per-task options supplied when the task was added.
     pub options: TaskOptions,
+    /// Queue priority; larger values run first.
+    #[serde(default)]
+    pub priority: i32,
     /// Current lifecycle state of the task.
     pub state: TaskState,
     /// Per-file progress entries generated from the resource.
@@ -68,6 +71,7 @@ impl Task {
             resource: None,
             backend: None,
             destination,
+            priority: options.priority.unwrap_or(0),
             options,
             state: TaskState::Pending,
             files: Vec::new(),
@@ -194,6 +198,9 @@ pub struct TaskOptions {
     /// primary URL fails and must pass a size/validator compatibility check.
     #[serde(default)]
     pub mirrors: Vec<Url>,
+    /// Queue priority; larger values are scheduled first.
+    #[serde(default)]
+    pub priority: Option<i32>,
     /// Whether to resume from existing partial data.
     #[serde(default)]
     pub resume: Option<bool>,

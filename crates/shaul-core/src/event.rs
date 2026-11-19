@@ -1,10 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::checksum::Checksum;
 use crate::task::{TaskId, TaskState};
+use crate::telemetry::{NoopTelemetry, Telemetry, metrics};
 use crate::util::now_ms;
 
 /// A structured progress event. The CLI consumes the same stream for both
@@ -77,6 +79,17 @@ pub enum EventKind {
         downloaded_bytes: u64,
         /// Expected size in bytes, when known.
         total_bytes: Option<u64>,
+    },
+    /// A transfer attempt failed and the backend will retry it.
+    Retry {
+        /// Task being retried.
+        task_id: TaskId,
+        /// Destination-relative path of the file, using `/` separators.
+        file: String,
+        /// One-based retry attempt number.
+        attempt: u32,
+        /// Why the previous attempt failed.
+        error: String,
     },
     /// A file finished downloading and passed the engine's finalizers.
     FileCompleted {
@@ -177,6 +190,7 @@ pub enum EventKind {
 #[derive(Clone)]
 pub struct EventSink {
     sender: broadcast::Sender<DownloadEvent>,
+    telemetry: Arc<dyn Telemetry>,
 }
 
 impl EventSink {
@@ -184,11 +198,32 @@ impl EventSink {
     /// least 16 events even when `capacity` is smaller.
     pub fn channel(capacity: usize) -> (Self, broadcast::Receiver<DownloadEvent>) {
         let (sender, receiver) = broadcast::channel(capacity.max(16));
-        (Self { sender }, receiver)
+        (
+            Self {
+                sender,
+                telemetry: Arc::new(NoopTelemetry),
+            },
+            receiver,
+        )
+    }
+
+    /// Attach a telemetry sink used for events that also carry a count, such
+    /// as [`EventKind::Retry`].
+    pub fn with_telemetry(mut self, telemetry: Arc<dyn Telemetry>) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+
+    /// Replace the telemetry sink on an existing handle.
+    pub fn set_telemetry(&mut self, telemetry: Arc<dyn Telemetry>) {
+        self.telemetry = telemetry;
     }
 
     /// Broadcast a new event stamped with the current time.
     pub fn emit(&self, kind: EventKind) {
+        if matches!(&kind, EventKind::Retry { .. }) {
+            self.telemetry.counter(metrics::RETRIES, 1, &[]);
+        }
         let _ = self.sender.send(DownloadEvent::new(kind));
     }
 
@@ -206,3 +241,33 @@ impl Default for EventSink {
 
 #[allow(dead_code)]
 fn _assert_checksum_serializable(_: &Checksum) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct RetryCounter(Arc<AtomicUsize>);
+
+    impl Telemetry for RetryCounter {
+        fn counter(&self, name: &str, value: u64, _labels: &[(&str, &str)]) {
+            if name == metrics::RETRIES {
+                self.0.fetch_add(value as usize, Ordering::SeqCst);
+            }
+        }
+    }
+
+    #[test]
+    fn retry_events_increment_the_retry_metric() {
+        let (mut sink, _receiver) = EventSink::channel(16);
+        let count = Arc::new(AtomicUsize::new(0));
+        sink.set_telemetry(Arc::new(RetryCounter(count.clone())));
+        sink.emit(EventKind::Retry {
+            task_id: uuid::Uuid::new_v4(),
+            file: "file.bin".to_string(),
+            attempt: 1,
+            error: "temporary".to_string(),
+        });
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+    }
+}

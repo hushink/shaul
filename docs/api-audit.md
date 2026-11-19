@@ -133,6 +133,10 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    - `shaul-ftp` 是可选 crate：`FtpParser`/`FtpBackend` 通过 `ftp` feature
      暴露，不泄漏 `suppaftp` 类型。FTP 是单流后端，续传依赖服务器的
      `SIZE`/`MDTM`/`REST`；FTPS 暂未承诺。
+   - `Task.priority` / `TaskOptions.priority` 控制队列顺序：`run_pending`
+     按高优先级、创建时间、任务 id 依次排序；默认优先级为 0。
+   - `EventKind::Retry` 和 `metrics::RETRIES` 暴露重试尝试；指数 backoff
+     增加最多 25% jitter（服务器 `Retry-After` 仍优先）。
 
 ## 4. semver 规则
 

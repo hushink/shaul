@@ -148,6 +148,8 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ### 队列与重试
 
+状态：`priority`、jitter、重试事件与指标已实现；续传加固仍待评估。
+
 - 任务 `priority`，`run_pending` 按优先级取任务。
 - 重试增加 jitter 和 attempt 指标；保留现有 `Retry-After` 与指数 backoff。
 - 评估截断 `.part` 检测、已完成文件校验等续传加固。

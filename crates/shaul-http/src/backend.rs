@@ -483,6 +483,7 @@ impl HttpBackend {
                         return Err(error);
                     }
                     tracing::warn!(attempt, error = %error, "request failed; retrying");
+                    retry_event(request, file, attempt + 1, error.to_string());
                     sleep_or_cancel(backoff(attempt), &request.cancel).await?;
                     attempt += 1;
                 }
@@ -502,6 +503,7 @@ impl HttpBackend {
                             status = status.as_u16(),
                             "transient HTTP status; retrying"
                         );
+                        retry_event(request, file, attempt + 1, format!("HTTP {status}"));
                         sleep_or_cancel(
                             retry_after.unwrap_or_else(|| backoff(attempt)),
                             &request.cancel,
@@ -914,6 +916,7 @@ impl HttpBackend {
                         return Err(FetchError::Fatal(error));
                     }
                     tracing::warn!(attempt, error = %error, "transfer request failed; retrying");
+                    retry_event(request, file, attempt + 1, error.to_string());
                     sleep_or_cancel(backoff(attempt), cancel)
                         .await
                         .map_err(FetchError::Fatal)?;
@@ -944,6 +947,7 @@ impl HttpBackend {
                     status = status.as_u16(),
                     "transient HTTP status during transfer; retrying"
                 );
+                retry_event(request, file, attempt + 1, format!("HTTP {status}"));
                 sleep_or_cancel(retry_after.unwrap_or_else(|| backoff(attempt)), cancel)
                     .await
                     .map_err(FetchError::Fatal)?;
@@ -1036,11 +1040,11 @@ impl HttpBackend {
             // partial bytes from the progress counter first.
             let current = progress.load(Ordering::Relaxed);
             progress.fetch_sub(written.min(current), Ordering::Relaxed);
+            let message = retry_message.unwrap_or_else(|| "range transfer failed".to_string());
             if attempt >= request.options.retries {
-                return Err(FetchError::Retryable(
-                    retry_message.unwrap_or_else(|| "range transfer failed".to_string()),
-                ));
+                return Err(FetchError::Retryable(message));
             }
+            retry_event(request, file, attempt + 1, message);
             sleep_or_cancel(backoff(attempt), cancel)
                 .await
                 .map_err(FetchError::Fatal)?;
@@ -1122,6 +1126,7 @@ impl HttpBackend {
                     if attempt >= request.options.retries {
                         return Err(error);
                     }
+                    retry_event(request, file, attempt + 1, error.to_string());
                     sleep_or_cancel(backoff(attempt), &request.cancel).await?;
                     attempt += 1;
                     continue;
@@ -1143,6 +1148,7 @@ impl HttpBackend {
                 if attempt >= request.options.retries {
                     return Err(http_error(status, &captured));
                 }
+                retry_event(request, file, attempt + 1, format!("HTTP {status}"));
                 sleep_or_cancel(
                     retry_after.unwrap_or_else(|| backoff(attempt)),
                     &request.cancel,
@@ -1249,11 +1255,11 @@ impl HttpBackend {
 
             part.flush().await?;
             checkpoint_single(request, &mut task_resume, key, &mut file_resume, offset).await?;
+            let message = retry_message.unwrap_or_else(|| "download failed".to_string());
             if attempt >= request.options.retries {
-                return Err(Error::Backend(
-                    retry_message.unwrap_or_else(|| "download failed".to_string()),
-                ));
+                return Err(Error::Backend(message));
             }
+            retry_event(request, file, attempt + 1, message);
             sleep_or_cancel(backoff(attempt), &request.cancel).await?;
             attempt += 1;
         }
@@ -1388,6 +1394,20 @@ fn warning(request: &DownloadRequest, message: impl Into<String>) {
     request.events.emit(EventKind::Warning {
         task_id: Some(request.task_id),
         message: message.into(),
+    });
+}
+
+fn retry_event(
+    request: &DownloadRequest,
+    file: &ResourceFile,
+    attempt: u32,
+    error: impl Into<String>,
+) {
+    request.events.emit(EventKind::Retry {
+        task_id: request.task_id,
+        file: file.path.clone(),
+        attempt,
+        error: error.into(),
     });
 }
 
@@ -1573,7 +1593,12 @@ fn retry_after(headers: &HeaderMap) -> Option<Duration> {
 }
 
 fn backoff(attempt: u32) -> Duration {
-    Duration::from_millis(250u64.saturating_mul(1u64 << attempt.min(5)))
+    let base = 250u64.saturating_mul(1u64 << attempt.min(5));
+    let jitter = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::from(elapsed.subsec_nanos()) % (base / 4 + 1))
+        .unwrap_or(0);
+    Duration::from_millis(base.saturating_add(jitter))
 }
 
 async fn sleep_or_cancel(duration: Duration, cancel: &CancellationToken) -> Result<()> {
@@ -1878,6 +1903,13 @@ mod tests {
             &validator(None, None),
             true
         ));
+    }
+
+    #[test]
+    fn backoff_is_jittered_but_bounded() {
+        let delay = backoff(0);
+        assert!(delay >= Duration::from_millis(250));
+        assert!(delay <= Duration::from_millis(312));
     }
 
     #[test]

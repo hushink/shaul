@@ -266,6 +266,7 @@ Stable metric names live in `shaul::metrics`:
 | `shaul.task.duration_seconds` | histogram | `backend`, `state` |
 | `shaul.bytes.downloaded` | counter | `backend` |
 | `shaul.active_tasks` | gauge | none |
+| `shaul.retries` | counter | none |
 
 Callbacks run on the task executor; do not block. Use a channel or batch when
 exporting to a slow backend. Task ids are deliberately not metric labels to
@@ -297,7 +298,10 @@ subscriber; library users install their own. Both systems can be used together:
 tracing for logs/spans and `Telemetry` for numeric aggregation.
 
 For per-task progress, subscribe with `DownloadEngine::subscribe()`; the same
-typed events drive the CLI progress bars and NDJSON output. A custom store can
+typed events drive the CLI progress bars and NDJSON output. Backend retry
+attempts are reported as `EventKind::Retry` and counted in the `shaul.retries`
+metric, so event consumers and metrics backends can observe the same retry
+activity. A custom store can
 be supplied to `DownloadEngine::new` by implementing `TaskStore`; `update` must
 be atomic with respect to other processes.
 

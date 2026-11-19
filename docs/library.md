@@ -250,9 +250,10 @@ async fn run_queue() -> shaul::Result<()> {
 ```
 
 - `run_pending(jobs, cancel)` runs only tasks in `Pending` state, at most
-  `jobs` concurrently (clamped to at least one), all sharing `cancel`. Tasks
-  that fail are omitted from the returned `Vec<Task>`; inspect the store or
-  the event stream for their errors.
+  `jobs` concurrently (clamped to at least one), all sharing `cancel`. It
+  selects higher `TaskOptions::priority` first, then older tasks. Tasks that
+  fail are omitted from the returned `Vec<Task>`; inspect the store or the
+  event stream for their errors.
 - `pause`, `resume` and `cancel` update the sidecar. A running `run_task`
   observes a pause/cancel written by another process within about 500 ms and
   stops. `resume` moves any non-completed task back to `Pending` and clears

@@ -231,6 +231,8 @@ fn add_list_status_and_cancel_roundtrip() {
         "https://example.com/file.bin",
         "--dir",
         override_dir.to_str().unwrap(),
+        "--priority",
+        "7",
     ]));
     let added = json_stdout(&output);
     let tasks = added.as_array().expect("add output should be an array");
@@ -238,6 +240,7 @@ fn add_list_status_and_cancel_roundtrip() {
     let task = &tasks[0];
     assert_eq!(task["state"], "pending");
     assert_eq!(task["backend"], "http");
+    assert_eq!(task["priority"], 7);
     assert!(
         task["destination"]
             .as_str()

@@ -94,6 +94,12 @@ that processes pending tasks; it holds a state-directory lock so only one
 worker runs per state directory. `pause`/`resume`/`cancel` edit the sidecar,
 and a running worker notices within about 500 ms.
 
+## How does queue priority work?
+
+`shaul add --priority N` stores a per-task priority; larger values are selected
+first by `shaul run`. Tasks with the same priority run in creation order. The
+default priority is 0.
+
 ## What is the configuration precedence?
 
 **CLI flags > config file > environment variables > defaults.**

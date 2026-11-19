@@ -58,13 +58,15 @@ impl DownloadEngine {
     /// Replaces the no-op telemetry sink. Builder form; use
     /// [`DownloadEngine::set_telemetry`] to change it after construction.
     pub fn with_telemetry(mut self, telemetry: Arc<dyn Telemetry>) -> Self {
-        self.telemetry = telemetry;
+        self.telemetry = telemetry.clone();
+        self.events.set_telemetry(telemetry);
         self
     }
 
     /// Replaces the telemetry sink used for subsequent tasks.
     pub fn set_telemetry(&mut self, telemetry: Arc<dyn Telemetry>) {
-        self.telemetry = telemetry;
+        self.telemetry = telemetry.clone();
+        self.events.set_telemetry(telemetry);
     }
 
     /// Returns the installed telemetry sink.
@@ -503,15 +505,11 @@ impl DownloadEngine {
     }
 
     /// Runs every task currently in `Pending` state, at most `jobs` at a time
-    /// (`jobs` is clamped to at least one). All tasks share `cancel`; tasks
-    /// whose run fails are omitted from the returned list.
+    /// (`jobs` is clamped to at least one). Higher-priority tasks are selected
+    /// first, then older tasks. All tasks share `cancel`; tasks whose run fails
+    /// are omitted from the returned list.
     pub async fn run_pending(&self, jobs: usize, cancel: CancellationToken) -> Result<Vec<Task>> {
-        let tasks = self.store.list().await?;
-        let ids: Vec<TaskId> = tasks
-            .into_iter()
-            .filter(|task| task.state == TaskState::Pending)
-            .map(|task| task.id)
-            .collect();
+        let ids = pending_task_ids(self.store.list().await?);
         let jobs = jobs.max(1);
         let results = futures_util::stream::iter(ids.into_iter().map(|id| {
             let cancel = cancel.clone();
@@ -634,6 +632,18 @@ impl DownloadEngine {
     }
 }
 
+fn pending_task_ids(mut tasks: Vec<Task>) -> Vec<TaskId> {
+    tasks.retain(|task| task.state == TaskState::Pending);
+    tasks.sort_by(|left, right| {
+        right
+            .priority
+            .cmp(&left.priority)
+            .then_with(|| left.created_at_ms.cmp(&right.created_at_ms))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    tasks.into_iter().map(|task| task.id).collect()
+}
+
 struct StoreCheckpoint {
     store: Arc<dyn TaskStore>,
     task_id: TaskId,
@@ -674,3 +684,41 @@ fn file_items(files: &[FileOutcome]) -> Vec<FileItem> {
 
 #[allow(dead_code)]
 fn _assert_resource(_: &Resource) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::link::Link;
+
+    fn task(link: &str, priority: Option<i32>, created_at_ms: u64) -> Task {
+        let mut task = Task::new(
+            Link::new(link).unwrap(),
+            PathBuf::from("."),
+            TaskOptions {
+                priority,
+                ..TaskOptions::default()
+            },
+        );
+        task.created_at_ms = created_at_ms;
+        task
+    }
+
+    #[test]
+    fn orders_pending_tasks_by_priority_then_age() {
+        let low = task("low", Some(-1), 1);
+        let high_old = task("high-old", Some(10), 2);
+        let high_new = task("high-new", Some(10), 3);
+        let normal = task("normal", None, 4);
+        let mut paused = task("paused", Some(100), 0);
+        paused.state = TaskState::Paused;
+
+        let ordered = pending_task_ids(vec![
+            normal.clone(),
+            high_new.clone(),
+            paused,
+            low.clone(),
+            high_old.clone(),
+        ]);
+        assert_eq!(ordered, vec![high_old.id, high_new.id, normal.id, low.id]);
+    }
+}

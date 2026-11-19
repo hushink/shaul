@@ -67,7 +67,8 @@ runnable examples in
 - BitTorrent / magnet / `.torrent` via the optional `bt` feature
 - single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume via the optional `ftp` feature
 - concurrent multi-file downloads with `file_jobs`
-- persistent task queue, pause/resume/cancel, NDJSON events
+- persistent task queue with priorities, pause/resume/cancel and retry events
+- NDJSON events and low-cardinality telemetry metrics
 
 ## Extending
 

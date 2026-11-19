@@ -41,8 +41,9 @@
 - **FTP**：可选 `ftp` feature，支持 `ftp://`；服务器提供
   `SIZE`/`MDTM`/`REST` 时支持续传。FTP 没有 Range 语义，因此是单流下载；
   FTPS 尚未启用。
-- **持久队列**：`shaul add`、`shaul run` worker，以及跨进程
-  pause/resume/cancel。
+- **持久队列**：`shaul add`、`shaul run` worker、跨进程
+  pause/resume/cancel，以及优先级调度和带 jitter 的重试；重试可通过事件与
+  metrics 观测。
 - **网络控制**：显式 HTTP/HTTPS/SOCKS5 代理与 `NO_PROXY`，全局及单任务限速，
   以及全局/单主机活动文件传输请求预算。
 - **多文件并发**：`download.file_jobs` / `--file-jobs` 可并发下载 Hub 快照或
@@ -128,7 +129,7 @@ v1 info hash 处理。
 常用参数：`--dir`、`--output`（单文件直链）、`--checksum`、
 `--verify/--no-verify`、`--extract/--no-extract`、`--extract-dir`、
 `--delete-archive`、`--header`、`--header-file`、`--bearer-token`、`--basic`、
-`--proxy`、`--no-proxy`、`--limit`、`--file-jobs`、`--mirror`、
+`--proxy`、`--no-proxy`、`--limit`、`--file-jobs`、`--mirror`、`--priority`、
 `--global-connections`、`--per-host-active`、`--input-file`、`--revision`、
 `--include`、`--exclude`、`--cache/--no-cache`、`--json`、`--force`、
 `--overwrite`、`--rename`。`download`/`add` 的 `--limit` 限制单个任务；

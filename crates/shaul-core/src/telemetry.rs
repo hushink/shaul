@@ -51,4 +51,6 @@ pub mod metrics {
     pub const BYTES_DOWNLOADED: &str = "shaul.bytes.downloaded";
     /// Number of tasks currently owned by this engine. No labels.
     pub const ACTIVE_TASKS: &str = "shaul.active_tasks";
+    /// Transfer retry attempts reported by backends. No labels.
+    pub const RETRIES: &str = "shaul.retries";
 }

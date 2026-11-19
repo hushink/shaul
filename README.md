@@ -47,8 +47,9 @@ backends:
 - **FTP**: optional `ftp` feature for `ftp://` links, with `SIZE`/`MDTM`/`REST`
   resume when the server supports them. FTP has no Range requests, so it is
   single-stream; FTPS is not enabled yet.
-- **Persistent queue**: `shaul add`, a `shaul run` worker, and
-  pause/resume/cancel across processes.
+- **Persistent queue**: `shaul add`, a `shaul run` worker,
+  pause/resume/cancel across processes, priority scheduling and jittered
+  retries exposed through events and metrics.
 - **Network controls**: explicit HTTP/HTTPS/SOCKS5 proxy with `NO_PROXY`,
   global and per-task bandwidth caps, and global/per-host active
   file-transfer request budgets.
@@ -138,7 +139,7 @@ string is accepted as a bare BitTorrent v1 info hash.
 Useful flags: `--dir`, `--output` (single-file direct links), `--checksum`,
 `--verify/--no-verify`, `--extract/--no-extract`, `--extract-dir`,
 `--delete-archive`, `--header`, `--header-file`, `--bearer-token`, `--basic`,
-`--proxy`, `--no-proxy`, `--limit`, `--file-jobs`, `--mirror`,
+`--proxy`, `--no-proxy`, `--limit`, `--file-jobs`, `--mirror`, `--priority`,
 `--global-connections`, `--per-host-active`, `--input-file`, `--revision`,
 `--include`, `--exclude`, `--cache/--no-cache`, `--json`, `--force`,
 `--overwrite`, `--rename`. `--limit` on `download`/`add` caps that

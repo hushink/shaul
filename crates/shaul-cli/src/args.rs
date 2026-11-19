@@ -134,6 +134,10 @@ pub struct DownloadArgs {
     #[arg(long, value_name = "URL")]
     pub mirror: Vec<String>,
 
+    /// Queue priority; larger values run first
+    #[arg(long, value_name = "N")]
+    pub priority: Option<i32>,
+
     /// Enable resume (default)
     #[arg(long, conflicts_with = "no_resume")]
     pub resume: bool,
@@ -367,6 +371,7 @@ impl DownloadArgs {
             rate_limit,
             file_jobs: self.file_jobs.map(|value| value.max(1)),
             mirrors,
+            priority: self.priority,
             resume,
             verify,
             checksum,
