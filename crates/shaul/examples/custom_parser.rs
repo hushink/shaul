@@ -61,7 +61,9 @@ async fn main() -> Result<()> {
     let task = engine
         .add(link, std::env::current_dir()?, TaskOptions::default())
         .await?;
-    let task = engine.run_task(task.id).await?;
-    println!("{:?}: {}", task.state, task.link);
+    println!("parsed: {}", task.link);
+    println!("backend: {}", task.backend.as_deref().unwrap_or("-"));
+    println!("files:   {}", task.files.len());
+    println!("state:   {:?}", task.state);
     Ok(())
 }

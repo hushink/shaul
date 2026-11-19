@@ -54,6 +54,10 @@ Run it with:
 $ cargo run -p shaul --example custom_parser -- demo://model.bin
 ```
 
+The parser example only resolves and persists the task, so it works offline.
+The [custom_protocol example](../crates/shaul/examples/custom_protocol.rs)
+runs a complete parser + backend + telemetry pipeline.
+
 Guidelines:
 
 - `supports()` must be cheap and side-effect free.
@@ -80,7 +84,10 @@ impl DownloadBackend for MyBackend {
     }
 
     fn supports(&self, resource: &Resource) -> bool {
-        matches!(resource.kind, ResourceKind::Http)
+        matches!(
+            &resource.kind,
+            ResourceKind::Custom { protocol } if protocol == "my-protocol"
+        )
     }
 
     async fn download(&self, request: DownloadRequest) -> Result<DownloadOutcome> {
@@ -121,6 +128,11 @@ A backend must:
 `BackendCapabilities` is descriptive: advertise `segmented`, `resume` and
 `multi_file` accurately so callers can make policy decisions.
 
+Third-party protocols should use `ResourceKind::Custom { protocol }` and put
+their data in `Resource::metadata` / `ResourceFile::metadata`. The complete
+parser + backend + telemetry example is
+[`crates/shaul/examples/custom_protocol.rs`](../crates/shaul/examples/custom_protocol.rs).
+
 ## Routing order
 
 `Router` uses first-match semantics:
@@ -131,6 +143,103 @@ A backend must:
 
 For a custom protocol, register its parser before `DirectLinkParser`. For a
 backend that should win over the built-in HTTP backend, register it first.
+
+## Finalizers
+
+The default pipeline verifies checksums and extracts archives. Replace it with
+`with_finalizers` or `set_finalizers`; finalizers run in order and stop at the
+first error:
+
+```rust,ignore
+struct AuditFinalizer;
+
+#[async_trait]
+impl Finalizer for AuditFinalizer {
+    fn name(&self) -> &'static str { "audit" }
+
+    async fn finalize(&self, context: &FinalizeContext<'_>) -> Result<FinalizeResult> {
+        tracing::info!(task_id = %context.task_id, file = %context.file.relative_path);
+        Ok(FinalizeResult::default())
+    }
+}
+
+let pipeline = FinalizerPipeline::new(vec![
+    Arc::new(VerifyFinalizer),
+    Arc::new(ExtractFinalizer),
+    Arc::new(AuditFinalizer),
+]);
+let engine = engine.with_finalizers(pipeline);
+```
+
+`FinalizeContext` gives you the task id, destination, completed `FileOutcome`,
+resolved options and the event sink. Verification and extraction emit their own
+events; custom steps should emit `EventKind::Warning`/`FileCompleted` as needed.
+
+## Telemetry
+
+`Telemetry` is a low-cardinality metrics hook. Every method defaults to a no-op,
+so an implementation can override only counters, gauges or histograms:
+
+```rust,ignore
+struct Metrics;
+
+impl Telemetry for Metrics {
+    fn counter(&self, name: &str, value: u64, labels: &[(&str, &str)]) {
+        // forward to Prometheus/OpenTelemetry/StatsD
+    }
+    fn histogram(&self, name: &str, value: f64, labels: &[(&str, &str)]) {}
+}
+
+let engine = engine.with_telemetry(Arc::new(Metrics));
+```
+
+Stable metric names live in `shaul::metrics`:
+
+| Metric | Kind | Labels |
+| --- | --- | --- |
+| `shaul.tasks.added` | counter | `backend` |
+| `shaul.tasks.started` | counter | `backend` |
+| `shaul.tasks.completed` | counter | `backend` |
+| `shaul.tasks.failed` | counter | `backend` |
+| `shaul.tasks.paused` | counter | `backend` |
+| `shaul.tasks.cancelled` | counter | `backend` |
+| `shaul.task.duration_seconds` | histogram | `backend`, `state` |
+| `shaul.bytes.downloaded` | counter | `backend` |
+| `shaul.active_tasks` | gauge | none |
+
+Callbacks run on the task executor; do not block. Use a channel or batch when
+exporting to a slow backend. Task ids are deliberately not metric labels to
+avoid unbounded cardinality; use `EventSink` for per-task detail.
+
+## Logging and tracing
+
+The engine and backends use the [`tracing`](https://docs.rs/tracing) facade.
+Applications choose a subscriber:
+
+```rust,ignore
+use tracing_subscriber::EnvFilter;
+
+tracing_subscriber::fmt()
+    .with_env_filter(EnvFilter::from_default_env())
+    .init();
+```
+
+```console
+$ RUST_LOG=shaul_core=debug,shaul_http=debug,shaul_hub=debug,shaul_bt=debug \
+    shaul download https://example.com/file.bin
+```
+
+Spans include `shaul.engine.add`, `shaul.engine.run_task`,
+`shaul.engine.attempt`, `shaul.engine.finalize`, `shaul.http.download`,
+`shaul.http.file`, `shaul.hub.download` and `shaul.bittorrent.download`, with
+fields such as `task_id`, `backend`, `file` and `state`. The CLI initializes a
+subscriber; library users install their own. Both systems can be used together:
+tracing for logs/spans and `Telemetry` for numeric aggregation.
+
+For per-task progress, subscribe with `DownloadEngine::subscribe()`; the same
+typed events drive the CLI progress bars and NDJSON output. A custom store can
+be supplied to `DownloadEngine::new` by implementing `TaskStore`; `update` must
+be atomic with respect to other processes.
 
 ## Tests
 

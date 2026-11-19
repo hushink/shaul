@@ -39,7 +39,8 @@
   完成后立即暂停，不常驻做种。
 - **持久队列**：`shaul add`、`shaul run` worker，以及跨进程
   pause/resume/cancel。
-- **可观测性**：同一条类型化事件流同时驱动人类可读进度条与 NDJSON 输出。
+- **可观测性**：同一条类型化事件流同时驱动人类可读进度条与 NDJSON 输出；
+  `tracing` span 与可插拔 `Telemetry` 指标钩子支持日志、监控和外部接入。
 
 ## 架构
 

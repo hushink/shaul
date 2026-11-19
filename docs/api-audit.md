@@ -99,6 +99,17 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      会阻止新增未文档化的公开 API。
    - 扩展指南、FAQ 与可编译的 `custom_parser` 示例见
      [docs/extending.md](extending.md) 和 [docs/faq.md](faq.md)。
+9. **1.x 扩展能力**
+   - `ResourceKind::Custom { protocol }` 允许第三方 parser/backend 接入没有
+     内置协议类型的新协议；协议数据放在 `Resource::metadata`。
+   - `Telemetry` / `NoopTelemetry` / `metrics` 提供低基数计数器、gauge 和
+     histogram；通过 `DownloadEngine::with_telemetry` 或 `set_telemetry` 注入。
+     指标名是 1.x 稳定契约。
+   - `DownloadEngine::with_finalizers` / `set_finalizers` 允许替换
+     verify/extract 管线。
+   - `tracing` span（`shaul.engine.*`、`shaul.http.*`、`shaul.hub.*`、
+     `shaul.bittorrent.*`）和事件流是对外可观测接口；用户自行安装 tracing
+     subscriber，并通过 `subscribe()` 消费任务事件。
 
 ## 4. semver 规则
 

@@ -45,7 +45,8 @@ backends:
 - **Persistent queue**: `shaul add`, a `shaul run` worker, and
   pause/resume/cancel across processes.
 - **Observability**: one typed event stream feeds both human progress bars and
-  NDJSON output.
+  NDJSON output; `tracing` spans and a pluggable `Telemetry` hook cover logs,
+  metrics and external monitoring.
 
 ## Architecture
 

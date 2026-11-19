@@ -80,6 +80,24 @@ and a running worker notices within about 500 ms.
 `SHAUL_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_STATE_DIR`, `SHAUL_VERIFY`,
 `HF_TOKEN` and `MODELSCOPE_API_TOKEN`; see the README for the full list.
 
+## How do I enable logs and metrics?
+
+Add `tracing-subscriber` in your application and install a subscriber; the
+library only emits `tracing` spans/events. The CLI already initializes one:
+
+```console
+$ RUST_LOG=shaul_core=debug,shaul_http=debug shaul download https://example.com/file.bin
+```
+
+For numeric metrics, implement `shaul::Telemetry` and attach it with
+`engine.with_telemetry(...)`. Stable names include `shaul.tasks.*`,
+`shaul.bytes.downloaded`, `shaul.task.duration_seconds` and
+`shaul.active_tasks`. Task events (`engine.subscribe()`) carry per-task detail
+and avoid the high-cardinality labels you would not want in a metrics backend.
+
+See [docs/extending.md](extending.md) for complete parser, backend, finalizer
+and telemetry examples.
+
 ## Does shaul support proxies or bandwidth limits?
 
 Not yet. These are candidates for a later 1.x release. `--header` can supply
