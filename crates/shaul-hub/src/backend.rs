@@ -308,6 +308,12 @@ impl DownloadBackend for HubBackend {
         matches!(&resource.kind, ResourceKind::Hub { .. })
     }
 
+    #[tracing::instrument(
+        name = "shaul.hub.download",
+        level = "debug",
+        skip(self, request),
+        fields(task_id = %request.task_id, files = request.resource.files.len())
+    )]
     async fn download(&self, request: DownloadRequest) -> Result<DownloadOutcome> {
         let (provider, repo, repo_type, revision) = match &request.resource.kind {
             ResourceKind::Hub {

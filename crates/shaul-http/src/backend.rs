@@ -80,6 +80,12 @@ impl HttpBackend {
     /// Download one resource file, sharing the caller's task resume. This is
     /// public so protocol-specific backends (Hub) can reuse the segmented,
     /// resumable HTTP transfer without duplicating it.
+    #[tracing::instrument(
+        name = "shaul.http.file",
+        level = "debug",
+        skip(self, request, file, task_resume),
+        fields(task_id = %request.task_id, file = %file.path)
+    )]
     pub async fn download_file(
         &self,
         request: &DownloadRequest,
@@ -357,6 +363,7 @@ impl HttpBackend {
                     if attempt >= request.options.retries {
                         return Err(error);
                     }
+                    tracing::warn!(attempt, error = %error, "request failed; retrying");
                     sleep_or_cancel(backoff(attempt), &request.cancel).await?;
                     attempt += 1;
                 }
@@ -371,6 +378,11 @@ impl HttpBackend {
                         if attempt >= request.options.retries {
                             return Err(http_error(status, &captured));
                         }
+                        tracing::warn!(
+                            attempt,
+                            status = status.as_u16(),
+                            "transient HTTP status; retrying"
+                        );
                         sleep_or_cancel(
                             retry_after.unwrap_or_else(|| backoff(attempt)),
                             &request.cancel,
@@ -771,6 +783,7 @@ impl HttpBackend {
                     if attempt >= request.options.retries {
                         return Err(FetchError::Fatal(error));
                     }
+                    tracing::warn!(attempt, error = %error, "transfer request failed; retrying");
                     sleep_or_cancel(backoff(attempt), cancel)
                         .await
                         .map_err(FetchError::Fatal)?;
@@ -796,6 +809,11 @@ impl HttpBackend {
                 if attempt >= request.options.retries {
                     return Err(FetchError::Fatal(http_error(status, &captured)));
                 }
+                tracing::warn!(
+                    attempt,
+                    status = status.as_u16(),
+                    "transient HTTP status during transfer; retrying"
+                );
                 sleep_or_cancel(retry_after.unwrap_or_else(|| backoff(attempt)), cancel)
                     .await
                     .map_err(FetchError::Fatal)?;
@@ -1121,6 +1139,12 @@ impl DownloadBackend for HttpBackend {
         matches!(&resource.kind, ResourceKind::Http)
     }
 
+    #[tracing::instrument(
+        name = "shaul.http.download",
+        level = "debug",
+        skip(self, request),
+        fields(task_id = %request.task_id, files = request.resource.files.len())
+    )]
     async fn download(&self, request: DownloadRequest) -> Result<DownloadOutcome> {
         let mut task_resume = request.resume.clone().unwrap_or_default();
         let mut outcomes = Vec::new();

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -23,6 +23,7 @@ use crate::store::TaskStore;
 use crate::task::{
     FileItem, FileState, Task, TaskId, TaskOptions, TaskResume, TaskState, part_path,
 };
+use crate::telemetry::{NoopTelemetry, Telemetry, metrics};
 
 /// Coordinates the task lifecycle: resolving links, adding and running tasks,
 /// pausing, resuming, cancelling and requeueing tasks left behind by a crashed
@@ -34,6 +35,7 @@ pub struct DownloadEngine {
     events: EventSink,
     running: Arc<Mutex<HashMap<TaskId, CancellationToken>>>,
     finalizers: FinalizerPipeline,
+    telemetry: Arc<dyn Telemetry>,
 }
 
 impl DownloadEngine {
@@ -49,7 +51,37 @@ impl DownloadEngine {
             events,
             running: Arc::new(Mutex::new(HashMap::new())),
             finalizers: FinalizerPipeline::default(),
+            telemetry: Arc::new(NoopTelemetry),
         }
+    }
+
+    /// Replaces the no-op telemetry sink. Builder form; use
+    /// [`DownloadEngine::set_telemetry`] to change it after construction.
+    pub fn with_telemetry(mut self, telemetry: Arc<dyn Telemetry>) -> Self {
+        self.telemetry = telemetry;
+        self
+    }
+
+    /// Replaces the telemetry sink used for subsequent tasks.
+    pub fn set_telemetry(&mut self, telemetry: Arc<dyn Telemetry>) {
+        self.telemetry = telemetry;
+    }
+
+    /// Returns the installed telemetry sink.
+    pub fn telemetry(&self) -> &Arc<dyn Telemetry> {
+        &self.telemetry
+    }
+
+    /// Replaces the post-download finalizer pipeline. The default verifies
+    /// checksums and extracts archives.
+    pub fn with_finalizers(mut self, finalizers: FinalizerPipeline) -> Self {
+        self.finalizers = finalizers;
+        self
+    }
+
+    /// Replaces the finalizer pipeline used for subsequent tasks.
+    pub fn set_finalizers(&mut self, finalizers: FinalizerPipeline) {
+        self.finalizers = finalizers;
     }
 
     /// Subscribes to the engine's event stream. Only events emitted after the
@@ -83,6 +115,11 @@ impl DownloadEngine {
     /// Unless [`TaskOptions::force`] is set, an active (pending, running or
     /// paused) task with the same canonical link and destination is returned
     /// instead of creating a duplicate.
+    #[tracing::instrument(
+        name = "shaul.engine.add",
+        level = "debug",
+        skip(self, link, destination, options)
+    )]
     pub async fn add(
         &self,
         link: Link,
@@ -114,6 +151,10 @@ impl DownloadEngine {
             task_id: task.id,
             link: task.link.to_string(),
         });
+        let backend = task.backend.as_deref().unwrap_or("unknown");
+        self.telemetry
+            .counter(metrics::TASKS_ADDED, 1, &[("backend", backend)]);
+        tracing::debug!(task_id = %task.id, backend, "task added");
         Ok(task)
     }
 
@@ -128,6 +169,12 @@ impl DownloadEngine {
     /// cancelled task is an error. A pause or cancel requested through the
     /// store (for example by another process) is observed while the transfer
     /// runs and stops it.
+    #[tracing::instrument(
+        name = "shaul.engine.run_task",
+        level = "debug",
+        skip(self, external_cancel),
+        fields(task_id = %id)
+    )]
     pub async fn run_task_with_cancel(
         &self,
         id: TaskId,
@@ -142,6 +189,12 @@ impl DownloadEngine {
             _ => {}
         }
 
+        let backend_name = task
+            .backend
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let metric_labels = [("backend", backend_name.as_str())];
+        let started = Instant::now();
         let resource = task
             .resource
             .clone()
@@ -165,6 +218,11 @@ impl DownloadEngine {
             task_id: id,
             link: task.link.to_string(),
         });
+        self.telemetry
+            .counter(metrics::TASKS_STARTED, 1, &metric_labels);
+        let active = self.running.lock().await.len() as f64;
+        self.telemetry.gauge(metrics::ACTIVE_TASKS, active, &[]);
+        tracing::debug!(task_id = %id, backend = %backend_name, "task started");
 
         let checkpoint = Arc::new(StoreCheckpoint {
             store: self.store.clone(),
@@ -208,9 +266,56 @@ impl DownloadEngine {
         let result = self.run_attempts(&request, backend, &options).await;
         watcher.abort();
         self.running.lock().await.remove(&id);
+
+        let state = match &result {
+            Ok(task) => match task.state {
+                TaskState::Completed => "completed",
+                TaskState::Paused => "paused",
+                TaskState::Cancelled => "cancelled",
+                _ => "unknown",
+            },
+            Err(_) => "failed",
+        };
+        let state_labels = [("backend", backend_name.as_str()), ("state", state)];
+        self.telemetry.histogram(
+            metrics::TASK_DURATION_SECONDS,
+            started.elapsed().as_secs_f64(),
+            &state_labels,
+        );
+        match state {
+            "completed" => {
+                self.telemetry
+                    .counter(metrics::TASKS_COMPLETED, 1, &metric_labels);
+                if let Ok(task) = &result {
+                    self.telemetry.counter(
+                        metrics::BYTES_DOWNLOADED,
+                        task.downloaded_bytes(),
+                        &metric_labels,
+                    );
+                }
+            }
+            "paused" => self
+                .telemetry
+                .counter(metrics::TASKS_PAUSED, 1, &metric_labels),
+            "cancelled" => self
+                .telemetry
+                .counter(metrics::TASKS_CANCELLED, 1, &metric_labels),
+            _ => self
+                .telemetry
+                .counter(metrics::TASKS_FAILED, 1, &metric_labels),
+        }
+        let active = self.running.lock().await.len() as f64;
+        self.telemetry.gauge(metrics::ACTIVE_TASKS, active, &[]);
+        tracing::debug!(task_id = %id, backend = %backend_name, state, "task finished");
         result
     }
 
+    #[tracing::instrument(
+        name = "shaul.engine.attempt",
+        level = "debug",
+        skip(self, request, backend, options),
+        fields(task_id = %request.task_id)
+    )]
     async fn run_attempts(
         &self,
         request: &DownloadRequest,
@@ -252,6 +357,10 @@ impl DownloadEngine {
                         }
                         Err(Error::Verification { .. }) if verification_retries < 1 => {
                             verification_retries += 1;
+                            tracing::warn!(
+                                task_id = %request.task_id,
+                                "checksum mismatch; retrying once from scratch"
+                            );
                             self.events.emit(EventKind::Warning {
                                 task_id: Some(request.task_id),
                                 message: "checksum mismatch; retrying once from scratch"
@@ -282,6 +391,12 @@ impl DownloadEngine {
         }
     }
 
+    #[tracing::instrument(
+        name = "shaul.engine.finalize",
+        level = "debug",
+        skip(self, destination, options, files),
+        fields(task_id = %task_id, files = files.len())
+    )]
     async fn finalize_files(
         &self,
         task_id: TaskId,
@@ -330,8 +445,15 @@ impl DownloadEngine {
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "shaul.engine.fail",
+        level = "debug",
+        skip(self, error),
+        fields(task_id = %id)
+    )]
     async fn fail(&self, id: TaskId, error: Error) -> Result<()> {
         let message = error.to_string();
+        tracing::warn!(task_id = %id, error = %message, "task failed");
         let stored = message.clone();
         self.store
             .update(

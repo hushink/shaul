@@ -303,6 +303,12 @@ impl DownloadBackend for BtBackend {
         matches!(&resource.kind, ResourceKind::BitTorrent { .. })
     }
 
+    #[tracing::instrument(
+        name = "shaul.bittorrent.download",
+        level = "debug",
+        skip(self, request),
+        fields(task_id = %request.task_id)
+    )]
     async fn download(&self, request: DownloadRequest) -> Result<DownloadOutcome> {
         self.download_inner(request).await
     }

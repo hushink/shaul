@@ -60,6 +60,16 @@ pub enum ResourceKind {
         /// Display name taken from the torrent metadata, when available.
         name: Option<String>,
     },
+    /// A third-party protocol selected by a custom parser and consumed by a
+    /// custom [`DownloadBackend`](crate::backend::DownloadBackend).
+    ///
+    /// `protocol` is matched by the backend's `supports` method; protocol
+    /// data belongs in [`Resource::metadata`] and
+    /// [`ResourceFile::metadata`].
+    Custom {
+        /// Parser-defined protocol identifier, for example `demo`.
+        protocol: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

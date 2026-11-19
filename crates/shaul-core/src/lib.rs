@@ -44,6 +44,8 @@ pub mod router;
 pub mod store;
 /// Task, file and resume state bookkeeping.
 pub mod task;
+/// Numeric metrics hooks for external monitoring systems.
+pub mod telemetry;
 mod util;
 
 pub use backend::{
@@ -56,7 +58,10 @@ pub use config::{BtConfig, Config, DownloadConfig, HubConfig, NetworkConfig, Res
 pub use engine::DownloadEngine;
 pub use error::{Error, Result};
 pub use event::{DownloadEvent, EventKind, EventSink};
-pub use finalizer::{FinalizeContext, FinalizeResult, Finalizer, FinalizerPipeline};
+pub use finalizer::{
+    ExtractFinalizer, FinalizeContext, FinalizeResult, Finalizer, FinalizerPipeline,
+    VerifyFinalizer,
+};
 pub use header::{Auth, Header, RequestOptions, expand_env};
 pub use link::Link;
 pub use parser::{LinkParser, ParseOptions, ParserRegistry};
@@ -71,3 +76,4 @@ pub use task::{
     FileItem, FileResume, FileState, Task, TaskId, TaskOptions, TaskResume, TaskState, Validator,
     VerifyMode, destination_file, part_path,
 };
+pub use telemetry::{NoopTelemetry, Telemetry, metrics};

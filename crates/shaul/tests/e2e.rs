@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
 use shaul::{
     ByteRange, Checksum, ChecksumAlgorithm, Config, FileResume, Header, Link, TaskOptions,
-    TaskResume, TaskState, Validator, part_path,
+    TaskResume, TaskState, Telemetry, Validator, metrics, part_path,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -272,6 +272,84 @@ async fn downloads_with_segments_and_verifies() {
     let output = config.download.dir.join(&server.filename);
     assert_eq!(tokio::fs::read(&output).await.unwrap(), data);
     assert!(!tokio::fs::try_exists(part_path(&output)).await.unwrap());
+}
+
+#[tokio::test]
+async fn emits_task_telemetry() {
+    let data = test_data(512 * 1024);
+    let server = TestServer::spawn(data, RangeMode::Supported, None, "mock.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let telemetry = Arc::new(RecordingTelemetry::default());
+    let engine = engine.with_telemetry(telemetry.clone());
+
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+
+    let counters = telemetry.counters.lock().unwrap();
+    assert!(
+        counters
+            .iter()
+            .any(|(name, value, _)| { name == metrics::TASKS_ADDED && *value == 1 })
+    );
+    assert!(
+        counters
+            .iter()
+            .any(|(name, value, _)| { name == metrics::TASKS_STARTED && *value == 1 })
+    );
+    assert!(
+        counters
+            .iter()
+            .any(|(name, value, _)| { name == metrics::TASKS_COMPLETED && *value == 1 })
+    );
+    assert!(
+        counters
+            .iter()
+            .any(|(name, value, _)| { name == metrics::BYTES_DOWNLOADED && *value == 512 * 1024 })
+    );
+    let histograms = telemetry.histograms.lock().unwrap();
+    assert!(
+        histograms
+            .iter()
+            .any(|(name, _)| { name == metrics::TASK_DURATION_SECONDS })
+    );
+}
+
+type RecordedCounter = (String, u64, Vec<(String, String)>);
+
+#[derive(Default)]
+struct RecordingTelemetry {
+    counters: Mutex<Vec<RecordedCounter>>,
+    histograms: Mutex<Vec<(String, f64)>>,
+}
+
+impl Telemetry for RecordingTelemetry {
+    fn counter(&self, name: &str, value: u64, labels: &[(&str, &str)]) {
+        self.counters.lock().unwrap().push((
+            name.to_string(),
+            value,
+            labels
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        ));
+    }
+
+    fn histogram(&self, name: &str, value: f64, _labels: &[(&str, &str)]) {
+        self.histograms
+            .lock()
+            .unwrap()
+            .push((name.to_string(), value));
+    }
 }
 
 #[tokio::test]
