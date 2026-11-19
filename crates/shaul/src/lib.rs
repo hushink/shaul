@@ -51,10 +51,22 @@ pub fn default_router(config: &Config) -> Result<Router> {
     Ok(Router::new(parsers, backends))
 }
 
+fn default_parts(config: &Config) -> Result<(Router, Arc<dyn TaskStore>)> {
+    let router = default_router(config)?;
+    let store: Arc<dyn TaskStore> = Arc::new(SidecarStore::new(config.state_dir()?)?);
+    Ok((router, store))
+}
+
 /// Build the default engine (BT + Hub + direct-link backends + sidecar store).
 pub fn default_engine(config: Config) -> Result<(DownloadEngine, Arc<dyn TaskStore>)> {
-    let router = default_router(&config)?;
-    let store: Arc<dyn TaskStore> = Arc::new(SidecarStore::new(config.state_dir()?)?);
+    let (router, store) = default_parts(&config)?;
     let engine = DownloadEngine::new(Arc::new(router), store.clone(), config);
     Ok((engine, store))
+}
+
+/// Build the blocking engine facade over the same default backends and
+/// sidecar store. Use this when the caller does not own a Tokio runtime.
+pub fn default_blocking_engine(config: Config) -> Result<BlockingEngine> {
+    let (router, store) = default_parts(&config)?;
+    BlockingEngine::new(router, store, config)
 }

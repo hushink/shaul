@@ -47,7 +47,11 @@ async fn main() -> shaul::Result<()> {
 ```
 
 Subscribe to `engine.subscribe()` for typed events. If you do not want to own a
-Tokio runtime, use `shaul::BlockingEngine`.
+Tokio runtime, use `default_blocking_engine`. The
+[library guide](https://github.com/hushink/shaul/blob/main/docs/library.md)
+covers events, the persistent queue, cancellation, telemetry and tracing, with
+runnable examples in
+[`crates/shaul/examples`](https://github.com/hushink/shaul/tree/main/crates/shaul/examples).
 
 ## Capabilities
 
@@ -77,6 +81,8 @@ $ cargo install shaul-cli
 ## Links
 
 - [Project README](https://github.com/hushink/shaul/blob/main/README.md)
+- [Library guide](https://github.com/hushink/shaul/blob/main/docs/library.md)
+- [Extension guide](https://github.com/hushink/shaul/blob/main/docs/extending.md)
 - [API audit](https://github.com/hushink/shaul/blob/main/docs/api-audit.md)
 - [Release process](https://github.com/hushink/shaul/blob/main/docs/release.md)
 

@@ -77,3 +77,4 @@ pub use task::{
     VerifyMode, destination_file, part_path,
 };
 pub use telemetry::{NoopTelemetry, Telemetry, metrics};
+pub use tokio_util::sync::CancellationToken;

@@ -10,7 +10,7 @@ A resumable, pluggable download engine for Rust — library and CLI.
 
 [简体中文](README.zh-CN.md)
 
-> **Status: 1.0.2** — HTTP, Hugging Face, ModelScope and BitTorrent are
+> **Status: 1.0.3** — HTTP, Hugging Face, ModelScope and BitTorrent are
 > implemented and published to [crates.io](https://crates.io/crates/shaul).
 > See the [API audit](docs/api-audit.md) for the 1.x stability policy.
 
@@ -152,13 +152,23 @@ async fn main() -> shaul::Result<()> {
 `default_engine` registers the Hub and direct HTTP parsers/backends; enable the
 `bt` feature on the `shaul` dependency to add BitTorrent. Subscribe to
 `engine.subscribe()` for typed events. If you do not want to own a Tokio
-runtime, use `shaul::BlockingEngine`.
+runtime, use `default_blocking_engine`.
+
+The [library guide](docs/library.md) covers configuration, events, the
+persistent queue, cancellation, the blocking facade, telemetry and tracing,
+with runnable examples:
+
+- [`library_basic`](crates/shaul/examples/library_basic.rs) — add and run a task
+- [`library_events`](crates/shaul/examples/library_events.rs) — typed events
+- [`library_blocking`](crates/shaul/examples/library_blocking.rs) — sync API
+- [`library_queue`](crates/shaul/examples/library_queue.rs) — pause/resume and batch runs
 
 To add a new protocol, implement `LinkParser` and/or `DownloadBackend`, then
 assemble a `Router` with `ParserRegistry` and the backends in priority order.
-See the [extension guide](docs/extending.md) and the
-[`custom_parser` example](crates/shaul/examples/custom_parser.rs).
-Extension is compile-time: no unstable dynamic-plugin ABI is involved.
+See the [extension guide](docs/extending.md),
+[`custom_parser`](crates/shaul/examples/custom_parser.rs) and
+[`custom_protocol`](crates/shaul/examples/custom_protocol.rs). Extension is
+compile-time: no unstable dynamic-plugin ABI is involved.
 
 ## Configuration
 
@@ -184,7 +194,7 @@ delete_archive = false
 timeout_secs = 60
 connect_timeout_secs = 15
 retries = 5
-user_agent = "shaul/1.0.2"
+user_agent = "shaul/1.0.3"
 allow_cross_origin_auth = false
 
 [hub]
@@ -287,6 +297,8 @@ plus rustfmt, clippy, rustdoc, feature combinations and MSRV 1.92.
 
 ## Documentation
 
+- [Library guide](docs/library.md) — embedding, events, queue, blocking API
+  and observability
 - [Extension guide](docs/extending.md) — custom parsers/backends, routing and
   testing
 - [FAQ](docs/faq.md) — resume, verification, extraction, Hub caches and the

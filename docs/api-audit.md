@@ -17,7 +17,7 @@
 | `shaul-http` | `HttpBackend`、`DirectLinkParser`、默认 router | `filename` 已改为私有 |
 | `shaul-hub` | `HubBackend`、`HubClient`、`HubEntry`、两个 parser、默认 router | `cache` 已改为私有 |
 | `shaul-bt` | `BtBackend`、`TorrentParser`、默认 router | 不泄漏 `librqbit` 类型 |
-| `shaul` | 重新导出上述稳定项 + `default_engine`/`default_router`/`BlockingEngine` | `bt` 为可选 feature |
+| `shaul` | 重新导出上述稳定项 + `default_engine`/`default_blocking_engine`/`default_router`/`BlockingEngine`/`CancellationToken` | `bt` 为可选 feature |
 | `shaul-cli` | `shaul` 二进制、命令、配置键、JSON 事件输出 | 进程边界，不是 Rust API |
 
 第三方依赖类型只出现在明确接受的位置：`tokio::sync::broadcast::Receiver`
@@ -36,7 +36,8 @@
 `FileItem`、`FileState`、`TaskResume`、`FileResume`、`Validator`、
 `Config` 及其子配置、`RequestOptions`、`Auth`、`Header`、
 `EventKind`/`DownloadEvent`/`EventSink`、`Checksum`/`ChecksumAlgorithm`、
-`Error`/`Result`、`TaskStore`/`SidecarStore`、`Finalizer` 管线。
+`Error`/`Result`、`TaskStore`/`SidecarStore`、`Finalizer` 管线、
+`Telemetry`/`NoopTelemetry`/`metrics`。
 
 这些项遵循第 4 节的 semver 规则。
 
@@ -110,6 +111,9 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    - `tracing` span（`shaul.engine.*`、`shaul.http.*`、`shaul.hub.*`、
      `shaul.bittorrent.*`）和事件流是对外可观测接口；用户自行安装 tracing
      subscriber，并通过 `subscribe()` 消费任务事件。
+   - `default_blocking_engine` 让无 Tokio runtime 的同步应用也能使用默认
+     backend/store 组装；`CancellationToken` 从 `shaul` 直接重导出，避免库
+     用户额外依赖 `tokio-util`。
 
 ## 4. semver 规则
 

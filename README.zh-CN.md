@@ -10,7 +10,7 @@
 
 [English](README.md)
 
-> **状态：1.0.2** —— 直链 HTTP、Hugging Face、ModelScope 与 BitTorrent
+> **状态：1.0.3** —— 直链 HTTP、Hugging Face、ModelScope 与 BitTorrent
 > 已实现并发布到 [crates.io](https://crates.io/crates/shaul)。1.x 稳定性
 > 规则见 [API 审计](docs/api-audit.md)。
 
@@ -143,11 +143,20 @@ async fn main() -> shaul::Result<()> {
 
 `default_engine` 会注册 Hub 与直链 HTTP 的 parser/backend；在 `shaul` 依赖上
 启用 `bt` feature 即可加入 BitTorrent。通过 `engine.subscribe()` 订阅类型化
-事件；不想自己持有 Tokio runtime 时可用 `shaul::BlockingEngine`。
+事件；不想自己持有 Tokio runtime 时可用 `default_blocking_engine`。
+
+[库使用指南](docs/library.md) 覆盖配置、事件、持久队列、取消、阻塞 API、
+telemetry 与 tracing，并附可直接运行的示例：
+
+- [`library_basic`](crates/shaul/examples/library_basic.rs) —— 添加并运行单个任务
+- [`library_events`](crates/shaul/examples/library_events.rs) —— 类型化事件流
+- [`library_blocking`](crates/shaul/examples/library_blocking.rs) —— 同步 API
+- [`library_queue`](crates/shaul/examples/library_queue.rs) —— 暂停/恢复与批量运行
 
 新增协议时，实现 `LinkParser` 和/或 `DownloadBackend`，再用 `ParserRegistry`
-与后端优先级组装 `Router`。参考 [扩展开发指南](docs/extending.md) 与
-[`custom_parser` 示例](crates/shaul/examples/custom_parser.rs)。扩展是编译期
+与后端优先级组装 `Router`。参考 [扩展开发指南](docs/extending.md)、
+[`custom_parser`](crates/shaul/examples/custom_parser.rs) 与
+[`custom_protocol`](crates/shaul/examples/custom_protocol.rs) 示例。扩展是编译期
 完成的，不涉及不稳定的动态插件 ABI。
 
 ## 配置
@@ -174,7 +183,7 @@ delete_archive = false
 timeout_secs = 60
 connect_timeout_secs = 15
 retries = 5
-user_agent = "shaul/1.0.2"
+user_agent = "shaul/1.0.3"
 allow_cross_origin_auth = false
 
 [hub]
@@ -265,6 +274,7 @@ rustfmt、clippy、rustdoc、feature 组合和 MSRV 1.92。
 
 ## 文档
 
+- [库使用指南](docs/library.md) —— 嵌入、事件、队列、阻塞 API 与可观测性
 - [扩展开发指南](docs/extending.md) —— 自定义 Parser/Backend、路由与测试
 - [FAQ](docs/faq.md) —— 续传、校验、解压、Hub 缓存与队列
 - [API 审计](docs/api-audit.md) —— 1.x semver 规则与已知风险
