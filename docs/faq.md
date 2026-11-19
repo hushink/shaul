@@ -58,6 +58,13 @@ Provider tokens come from the environment or official credential files and are
 never written into task sidecars. User-supplied `--bearer-token`/`--basic`/
 headers are stored in the sidecar; prefer `${env:NAME}` placeholders.
 
+## Can a Hub snapshot download files in parallel?
+
+Yes. Set `download.file_jobs` (or `--file-jobs N`) to the number of files a
+multi-file task may download concurrently. The default is 1, which preserves
+the previous sequential behavior. Per-file checkpoints are merged into the
+same sidecar, so pause/resume still works across the whole task.
+
 ## Does shaul support FTP?
 
 Yes: plain `ftp://` links are available through the optional `ftp` feature (the
@@ -85,9 +92,9 @@ and a running worker notices within about 500 ms.
 
 `shaul config path` prints the resolved file. `--config PATH` or
 `SHAUL_CONFIG` overrides the location. Common environment variables include
-`SHAUL_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_RATE_LIMIT`, `SHAUL_PROXY`,
-`SHAUL_NO_PROXY`, `SHAUL_STATE_DIR`, `SHAUL_VERIFY`, `HF_TOKEN` and
-`MODELSCOPE_API_TOKEN`; see the README for the full list.
+`SHAUL_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_RATE_LIMIT`, `SHAUL_FILE_JOBS`,
+`SHAUL_PROXY`, `SHAUL_NO_PROXY`, `SHAUL_STATE_DIR`, `SHAUL_VERIFY`, `HF_TOKEN`
+and `MODELSCOPE_API_TOKEN`; see the README for the full list.
 
 ## How do I enable logs and metrics?
 

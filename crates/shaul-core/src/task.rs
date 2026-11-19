@@ -187,6 +187,9 @@ pub struct TaskOptions {
     /// `Some(0)` means no task-specific cap; the global limit still applies.
     #[serde(default)]
     pub rate_limit: Option<u64>,
+    /// Number of files downloaded concurrently within this task.
+    #[serde(default)]
+    pub file_jobs: Option<usize>,
     /// Whether to resume from existing partial data.
     #[serde(default)]
     pub resume: Option<bool>,

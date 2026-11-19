@@ -219,6 +219,9 @@ async fn command_run(config: &mut Config, args: RunArgs, json: bool, quiet: bool
         let rate = shaul::config::parse_bytes(limit)?;
         config.download.rate_limit = (rate > 0).then_some(rate);
     }
+    if let Some(file_jobs) = args.file_jobs {
+        config.download.file_jobs = file_jobs.max(1);
+    }
     let state_dir = config.state_dir()?;
     let _lock = acquire_run_lock(&state_dir)?;
     let engine = build_engine(config)?;

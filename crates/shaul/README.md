@@ -65,6 +65,7 @@ runnable examples in
 - Hugging Face and ModelScope repositories with optional provider caches
 - BitTorrent / magnet / `.torrent` via the optional `bt` feature
 - single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume via the optional `ftp` feature
+- concurrent multi-file downloads with `file_jobs`
 - persistent task queue, pause/resume/cancel, NDJSON events
 
 ## Extending

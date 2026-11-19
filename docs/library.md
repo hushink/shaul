@@ -93,9 +93,11 @@ fn configure() -> shaul::Result<(Config, TaskOptions)> {
     config.network.proxy = Some("socks5://127.0.0.1:1080".to_string());
     config.network.no_proxy = Some("localhost,127.0.0.1".to_string());
     config.download.rate_limit = Some(8 * 1024 * 1024); // global bytes/sec
+    config.download.file_jobs = 4; // files within one multi-file task
 
     let options = TaskOptions {
         rate_limit: Some(1024 * 1024), // additional per-task cap
+        file_jobs: Some(4),
         ..TaskOptions::default()
     };
     Ok((config, options))

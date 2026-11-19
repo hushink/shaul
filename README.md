@@ -51,6 +51,8 @@ backends:
   pause/resume/cancel across processes.
 - **Network controls**: explicit HTTP/HTTPS/SOCKS5 proxy with `NO_PROXY`, plus
   global and per-task bandwidth caps.
+- **Parallel files**: `download.file_jobs` / `--file-jobs` downloads several
+  files of a Hub snapshot or multi-file task concurrently.
 - **Observability**: one typed event stream feeds both human progress bars and
   NDJSON output; `tracing` spans and a pluggable `Telemetry` hook cover logs,
   metrics and external monitoring.
@@ -135,10 +137,10 @@ string is accepted as a bare BitTorrent v1 info hash.
 Useful flags: `--dir`, `--output` (single-file direct links), `--checksum`,
 `--verify/--no-verify`, `--extract/--no-extract`, `--extract-dir`,
 `--delete-archive`, `--header`, `--header-file`, `--bearer-token`, `--basic`,
-`--proxy`, `--no-proxy`, `--limit`, `--input-file`, `--revision`,
-`--include`, `--exclude`, `--cache/--no-cache`, `--json`, `--force`,
-`--overwrite`, `--rename`. `--limit` on `download`/`add` caps that task;
-`shaul run --limit` caps the worker globally.
+`--proxy`, `--no-proxy`, `--limit`, `--file-jobs`, `--input-file`,
+`--revision`, `--include`, `--exclude`, `--cache/--no-cache`, `--json`,
+`--force`, `--overwrite`, `--rename`. `--limit` on `download`/`add` caps that
+task; `shaul run --limit` caps the worker globally.
 
 ### Library
 
@@ -203,6 +205,7 @@ per_host = 16
 global = 64             # reserved; not enforced yet
 segment_size = 8388608
 rate_limit = 0         # bytes/sec shared by all tasks; 0 = unlimited
+file_jobs = 1          # files downloaded concurrently within one task
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
@@ -240,9 +243,10 @@ persistence = true
 # Authorization = "Bearer ${env:MY_TOKEN}"
 ```
 
-Network environment variables include `SHAUL_RATE_LIMIT`, `SHAUL_PROXY`,
-`SHAUL_NO_PROXY`, and the conventional `HTTP_PROXY` / `HTTPS_PROXY` /
-`ALL_PROXY` / `NO_PROXY` names. Explicit settings win over environment values.
+Network environment variables include `SHAUL_RATE_LIMIT`, `SHAUL_FILE_JOBS`,
+`SHAUL_PROXY`, `SHAUL_NO_PROXY`, and the conventional `HTTP_PROXY` /
+`HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` names. Explicit settings win over
+environment values.
 
 Hub-related environment variables include `HF_TOKEN`,
 `HUGGING_FACE_HUB_TOKEN`, `HF_HOME`, `HF_HUB_CACHE`, `HF_ENDPOINT`,

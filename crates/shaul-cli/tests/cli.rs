@@ -20,6 +20,7 @@ fn shaul() -> Command {
         "SHAUL_PER_HOST",
         "SHAUL_GLOBAL",
         "SHAUL_RATE_LIMIT",
+        "SHAUL_FILE_JOBS",
         "SHAUL_SEGMENT_SIZE",
         "SHAUL_RESUME",
         "SHAUL_VERIFY",

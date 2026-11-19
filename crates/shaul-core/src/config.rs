@@ -49,6 +49,8 @@ pub struct DownloadConfig {
     /// Global bandwidth limit in bytes per second. `None` or `0` means
     /// unlimited. Direct HTTP and Hub file transfers share this limit.
     pub rate_limit: Option<u64>,
+    /// Number of files downloaded concurrently within one multi-file task.
+    pub file_jobs: usize,
     /// Size in bytes of each ranged HTTP segment.
     pub segment_size: u64,
     /// Resume interrupted downloads from checkpoints by default.
@@ -144,6 +146,7 @@ impl Default for DownloadConfig {
             per_host: 16,
             global: 64,
             rate_limit: None,
+            file_jobs: 1,
             segment_size: 8 * 1024 * 1024,
             resume: true,
             verify: VerifyMode::Auto,
@@ -187,6 +190,8 @@ pub struct ResolvedOptions {
     pub rate_limit: Option<u64>,
     /// Additional per-task bandwidth limit in bytes per second, if configured.
     pub task_rate_limit: Option<u64>,
+    /// Number of files downloaded concurrently within this task.
+    pub file_jobs: usize,
     /// Byte size of each ranged HTTP segment.
     pub segment_size: u64,
     /// Whether resume is enabled for this task.
@@ -355,6 +360,9 @@ impl Config {
         if let Some(value) = env("SHAUL_RATE_LIMIT") {
             self.download.rate_limit = Some(parse_bytes(&value)?).filter(|value| *value > 0);
         }
+        if let Some(value) = env_parse::<usize>("SHAUL_FILE_JOBS")? {
+            self.download.file_jobs = value.max(1);
+        }
         if let Some(value) = env("SHAUL_SEGMENT_SIZE") {
             self.download.segment_size = parse_bytes(&value)?;
         }
@@ -489,6 +497,7 @@ impl Config {
             global: self.download.global.max(1),
             rate_limit: self.download.rate_limit.filter(|value| *value > 0),
             task_rate_limit: options.rate_limit.filter(|value| *value > 0),
+            file_jobs: options.file_jobs.unwrap_or(self.download.file_jobs).max(1),
             segment_size: self.download.segment_size.max(64 * 1024),
             resume: options.resume.unwrap_or(self.download.resume),
             verify: options.verify.unwrap_or(self.download.verify),
@@ -526,6 +535,7 @@ impl Config {
                 .rate_limit
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
+            "download.file_jobs" => self.download.file_jobs.to_string(),
             "download.segment_size" => self.download.segment_size.to_string(),
             "download.resume" => self.download.resume.to_string(),
             "download.verify" => verify_mode_str(self.download.verify).to_string(),
@@ -587,6 +597,7 @@ impl Config {
                     Some(parse_bytes(value)?).filter(|value| *value > 0)
                 }
             }
+            "download.file_jobs" => self.download.file_jobs = parse_value::<usize>(value)?.max(1),
             "download.segment_size" => self.download.segment_size = parse_bytes(value)?,
             "download.resume" => self.download.resume = parse_value(value)?,
             "download.verify" => self.download.verify = parse_verify_mode(value)?,
@@ -803,6 +814,8 @@ struct PartialDownload {
     #[serde(default)]
     rate_limit: Option<u64>,
     #[serde(default)]
+    file_jobs: Option<usize>,
+    #[serde(default)]
     segment_size: Option<u64>,
     #[serde(default)]
     resume: Option<bool>,
@@ -881,6 +894,9 @@ impl PartialConfig {
             }
             if let Some(value) = download.rate_limit {
                 config.download.rate_limit = (value > 0).then_some(value);
+            }
+            if let Some(value) = download.file_jobs {
+                config.download.file_jobs = value.max(1);
             }
             if let Some(value) = download.segment_size {
                 config.download.segment_size = value;
@@ -1003,6 +1019,8 @@ mod tests {
             config.get_value("download.rate_limit").unwrap(),
             (2 * 1024 * 1024).to_string()
         );
+        config.set_value("download.file_jobs", "3").unwrap();
+        assert_eq!(config.get_value("download.file_jobs").unwrap(), "3");
         config
             .set_value("network.proxy", "http://127.0.0.1:8080")
             .unwrap();
@@ -1027,13 +1045,16 @@ mod tests {
         config.download.rate_limit = Some(1024);
         config.network.proxy = Some("http://127.0.0.1:8080".to_string());
         config.network.no_proxy = Some("localhost".to_string());
+        config.download.file_jobs = 4;
         let options = TaskOptions {
             rate_limit: Some(2048),
+            file_jobs: Some(2),
             ..TaskOptions::default()
         };
         let resolved = config.resolve(Path::new("."), &options).unwrap();
         assert_eq!(resolved.rate_limit, Some(1024));
         assert_eq!(resolved.task_rate_limit, Some(2048));
+        assert_eq!(resolved.file_jobs, 2);
 
         let partial: PartialConfig = toml::from_str(
             "[download]\nrate_limit = 0\n[network]\nproxy = \"\"\nno_proxy = \"\"\n",

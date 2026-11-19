@@ -15,8 +15,9 @@ use reqwest::{Client, Response, StatusCode};
 use shaul_core::{
     BackendCapabilities, Checksum, ChecksumAlgorithm, Config, DownloadBackend, DownloadOutcome,
     DownloadRequest, Error, EventKind, EventSink, FileOutcome, FileResume, Header, Resource,
-    ResourceFile, ResourceKind, Result, TaskId, TaskResume, Validator, VerifyMode, completed_bytes,
-    merge_ranges, missing_ranges, part_path, sanitize_file_name, split_range,
+    ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskId, TaskResume, Validator,
+    VerifyMode, completed_bytes, merge_ranges, missing_ranges, part_path, sanitize_file_name,
+    split_range,
 };
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Mutex;
@@ -1200,17 +1201,106 @@ impl DownloadBackend for HttpBackend {
         fields(task_id = %request.task_id, files = request.resource.files.len())
     )]
     async fn download(&self, request: DownloadRequest) -> Result<DownloadOutcome> {
+        if request.options.file_jobs > 1 && request.resource.files.len() > 1 {
+            self.download_concurrent(&request).await
+        } else {
+            self.download_sequential(&request).await
+        }
+    }
+}
+
+impl HttpBackend {
+    async fn download_sequential(&self, request: &DownloadRequest) -> Result<DownloadOutcome> {
         let mut task_resume = request.resume.clone().unwrap_or_default();
         let mut outcomes = Vec::new();
         for file in &request.resource.files {
             if request.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let outcome = self.download_file(&request, file, &mut task_resume).await?;
+            let outcome = self.download_file(request, file, &mut task_resume).await?;
             outcomes.push(outcome);
             request.checkpoint.save(&task_resume).await?;
         }
         Ok(DownloadOutcome::Completed(outcomes))
+    }
+
+    async fn download_concurrent(&self, request: &DownloadRequest) -> Result<DownloadOutcome> {
+        let shared = Arc::new(Mutex::new(request.resume.clone().unwrap_or_default()));
+        let cancel = request.cancel.child_token();
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(
+            request.options.file_jobs.max(1),
+        ));
+        let mut tasks = tokio::task::JoinSet::new();
+        for (index, file) in request.resource.files.iter().cloned().enumerate() {
+            let key = file.url.as_str().to_string();
+            let mut local = TaskResume::default();
+            if let Some(stored) = shared.lock().await.files.get(&key).cloned() {
+                local.files.insert(key, stored);
+            }
+            let mut file_request = request.clone();
+            file_request.cancel = cancel.clone();
+            let checkpoint = Arc::new(FileCheckpoint {
+                shared: shared.clone(),
+                inner: request.checkpoint.clone(),
+            });
+            file_request.checkpoint = checkpoint.clone();
+            let backend = self.clone();
+            let permit = semaphore.clone();
+            tasks.spawn(async move {
+                let _permit = permit
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| Error::Other("file job semaphore closed".to_string()))?;
+                let mut local = local;
+                let outcome = backend
+                    .download_file(&file_request, &file, &mut local)
+                    .await?;
+                checkpoint.save(&local).await?;
+                Ok::<_, Error>((index, outcome))
+            });
+        }
+
+        let mut outcomes: Vec<Option<FileOutcome>> =
+            (0..request.resource.files.len()).map(|_| None).collect();
+        let mut first_error = None;
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok(Ok((index, outcome))) => outcomes[index] = Some(outcome),
+                Ok(Err(error)) => {
+                    first_error.get_or_insert(error);
+                    cancel.cancel();
+                }
+                Err(error) => {
+                    first_error
+                        .get_or_insert_with(|| Error::Other(format!("file job failed: {error}")));
+                    cancel.cancel();
+                }
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+        let outcomes = outcomes
+            .into_iter()
+            .map(|outcome| outcome.ok_or_else(|| Error::Other("missing file outcome".to_string())))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(DownloadOutcome::Completed(outcomes))
+    }
+}
+
+struct FileCheckpoint {
+    shared: Arc<Mutex<TaskResume>>,
+    inner: Arc<dyn ResumeCheckpoint>,
+}
+
+#[async_trait]
+impl ResumeCheckpoint for FileCheckpoint {
+    async fn save(&self, resume: &TaskResume) -> Result<()> {
+        let mut shared = self.shared.lock().await;
+        for (key, file) in &resume.files {
+            shared.files.insert(key.clone(), file.clone());
+        }
+        self.inner.save(&shared).await
     }
 }
 

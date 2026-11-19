@@ -119,6 +119,8 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ### 多文件并发
 
+状态：`main` 已实现，待 1.2 发布。
+
 - `DownloadConfig.file_jobs` / `TaskOptions.file_jobs`，默认 1。
 - Hub 快照和多文件 HTTP 任务内并发下载。
 - 每个文件独立 checkpoint；sidecar 保存串行化，避免竞态。

@@ -44,6 +44,8 @@
 - **持久队列**：`shaul add`、`shaul run` worker，以及跨进程
   pause/resume/cancel。
 - **网络控制**：显式 HTTP/HTTPS/SOCKS5 代理与 `NO_PROXY`，全局及单任务限速。
+- **多文件并发**：`download.file_jobs` / `--file-jobs` 可并发下载 Hub 快照或
+  多文件任务中的多个文件。
 - **可观测性**：同一条类型化事件流同时驱动人类可读进度条与 NDJSON 输出；
   `tracing` span 与可插拔 `Telemetry` 指标钩子支持日志、监控和外部接入。
 
@@ -125,7 +127,7 @@ v1 info hash 处理。
 常用参数：`--dir`、`--output`（单文件直链）、`--checksum`、
 `--verify/--no-verify`、`--extract/--no-extract`、`--extract-dir`、
 `--delete-archive`、`--header`、`--header-file`、`--bearer-token`、`--basic`、
-`--proxy`、`--no-proxy`、`--limit`、`--input-file`、`--revision`、
+`--proxy`、`--no-proxy`、`--limit`、`--file-jobs`、`--input-file`、`--revision`、
 `--include`、`--exclude`、`--cache/--no-cache`、`--json`、`--force`、
 `--overwrite`、`--rename`。`download`/`add` 的 `--limit` 限制单个任务；
 `shaul run --limit` 限制 worker 的全局速率。
@@ -190,6 +192,7 @@ per_host = 16
 global = 64             # 预留；尚未强制执行
 segment_size = 8388608
 rate_limit = 0         # 全局共享字节/秒；0 = 不限速
+file_jobs = 1          # 单任务内并发下载的文件数
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
@@ -227,7 +230,7 @@ persistence = true
 # Authorization = "Bearer ${env:MY_TOKEN}"
 ```
 
-网络相关环境变量包括 `SHAUL_RATE_LIMIT`、`SHAUL_PROXY`、
+网络相关环境变量包括 `SHAUL_RATE_LIMIT`、`SHAUL_FILE_JOBS`、`SHAUL_PROXY`、
 `SHAUL_NO_PROXY`，以及常规的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` /
 `NO_PROXY`。显式配置优先于环境变量。
 

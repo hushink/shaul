@@ -462,6 +462,32 @@ async fn hf_repo_downloads_and_populates_compatible_cache() {
 }
 
 #[tokio::test]
+async fn hf_repo_downloads_with_multiple_file_jobs() {
+    let files = mock_files();
+    let server = spawn_hf(files.clone(), "test-token", "commit123").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path(), Provider::HuggingFace, &server.endpoint());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let mut task_options = options("test-token");
+    task_options.cache = Some(true);
+    task_options.file_jobs = Some(2);
+    let task = engine
+        .add(
+            Link::new(format!("{}/org/repo", server.endpoint())).unwrap(),
+            config.download.dir.clone(),
+            task_options,
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    for file in &files {
+        let output = config.download.dir.join("repo").join(&file.path);
+        assert_eq!(tokio::fs::read(&output).await.unwrap(), file.data);
+    }
+}
+
+#[tokio::test]
 async fn hf_include_filter_limits_files() {
     let files = mock_files();
     let server = spawn_hf(files, "test-token", "commit123").await;

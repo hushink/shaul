@@ -8,11 +8,14 @@ use flate2::Compression;
 use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
 use shaul::{
-    ByteRange, Checksum, ChecksumAlgorithm, Config, FileResume, Header, Link, TaskOptions,
-    TaskResume, TaskState, Telemetry, Validator, metrics, part_path,
+    ByteRange, CancellationToken, Checksum, ChecksumAlgorithm, Config, DownloadBackend,
+    DownloadOutcome, DownloadRequest, EventSink, FileResume, Header, HttpBackend, Link, Resource,
+    ResourceFile, ResourceKind, ResumeCheckpoint, TaskOptions, TaskResume, TaskState, Telemetry,
+    Validator, metrics, part_path,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use url::Url;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RangeMode {
@@ -761,6 +764,103 @@ async fn downloads_through_an_http_proxy() {
         data
     );
     assert!(proxy.requests() >= 2, "expected probe and range requests");
+}
+
+struct TestCheckpoint {
+    resume: Arc<Mutex<TaskResume>>,
+}
+
+#[async_trait::async_trait]
+impl ResumeCheckpoint for TestCheckpoint {
+    async fn save(&self, resume: &TaskResume) -> shaul::Result<()> {
+        *self.resume.lock().unwrap() = resume.clone();
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn downloads_multiple_http_files_concurrently() {
+    let first_data = test_data(192 * 1024);
+    let second_data = test_data(256 * 1024);
+    let first =
+        TestServer::spawn(first_data.clone(), RangeMode::Supported, None, "second.bin").await;
+    let second =
+        TestServer::spawn(second_data.clone(), RangeMode::Supported, None, "first.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let options = config
+        .resolve(
+            &config.download.dir,
+            &TaskOptions {
+                file_jobs: Some(2),
+                connections: Some(2),
+                ..TaskOptions::default()
+            },
+        )
+        .unwrap();
+    let resource = Resource {
+        kind: ResourceKind::Http,
+        name: "multi".to_string(),
+        files: vec![
+            ResourceFile {
+                path: "a.bin".to_string(),
+                url: Url::parse(&first.file_url()).unwrap(),
+                size: None,
+                checksum: None,
+                headers: Vec::new(),
+                metadata: Default::default(),
+                use_response_filename: false,
+            },
+            ResourceFile {
+                path: "b.bin".to_string(),
+                url: Url::parse(&second.file_url()).unwrap(),
+                size: None,
+                checksum: None,
+                headers: Vec::new(),
+                metadata: Default::default(),
+                use_response_filename: false,
+            },
+        ],
+        request: Default::default(),
+        checksum: None,
+        revision: None,
+        metadata: Default::default(),
+    };
+    let shared = Arc::new(Mutex::new(TaskResume::default()));
+    let (events, _receiver) = EventSink::channel(32);
+    let request = DownloadRequest {
+        task_id: shaul::TaskId::new_v4(),
+        resource,
+        destination: config.download.dir.clone(),
+        options,
+        resume: None,
+        cancel: CancellationToken::new(),
+        events,
+        checkpoint: Arc::new(TestCheckpoint {
+            resume: shared.clone(),
+        }),
+    };
+    let backend = HttpBackend::new(&config).unwrap();
+    let outcome = backend.download(request).await.unwrap();
+    let DownloadOutcome::Completed(files) = outcome else {
+        panic!("expected completed HTTP downloads");
+    };
+    assert_eq!(files.len(), 2);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("a.bin"))
+            .await
+            .unwrap(),
+        first_data
+    );
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("b.bin"))
+            .await
+            .unwrap(),
+        second_data
+    );
+    let resume = shared.lock().unwrap();
+    assert_eq!(resume.files.len(), 2);
+    assert!(resume.files.values().all(|file| file.is_complete()));
 }
 
 fn tar_gz(contents: &[u8]) -> Vec<u8> {

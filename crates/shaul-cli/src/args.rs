@@ -118,6 +118,10 @@ pub struct DownloadArgs {
     #[arg(long, value_name = "RATE")]
     pub limit: Option<String>,
 
+    /// Files downloaded concurrently within a multi-file task
+    #[arg(long, value_name = "N")]
+    pub file_jobs: Option<usize>,
+
     /// Enable resume (default)
     #[arg(long, conflicts_with = "no_resume")]
     pub resume: bool,
@@ -230,6 +234,10 @@ pub struct RunArgs {
     #[arg(long, value_name = "RATE")]
     pub limit: Option<String>,
 
+    /// Files downloaded concurrently within each task
+    #[arg(long, value_name = "N")]
+    pub file_jobs: Option<usize>,
+
     /// Exit when the queue is empty instead of waiting for new tasks
     #[arg(long)]
     pub once: bool,
@@ -330,6 +338,7 @@ impl DownloadArgs {
             output: self.output.clone(),
             connections: self.connections,
             rate_limit,
+            file_jobs: self.file_jobs.map(|value| value.max(1)),
             resume,
             verify,
             checksum,
