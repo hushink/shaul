@@ -186,7 +186,8 @@ pub struct ExtractorFinalizer { /* registry */ }
 - [x] `shaul.http.active_connections`
 - [x] `shaul.queue.depth`
 - [x] `shaul.cache.hits` / `misses` / `bytes` / `inserts`
-- [ ] OpenTelemetry / Prometheus 适配示例或可选 crate（下一小步）
+- [x] OpenTelemetry / Prometheus 适配说明与接入路径（见
+  [extending.md](extending.md)；不引入核心依赖）
 
 ---
 
@@ -212,7 +213,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 ## 1.4 运维与观测（后续）
 
 - [x] 重试、活动连接、缓存命中/未命中、队列深度指标（已随 1.2.0 实现）。
-- [ ] 提供 OpenTelemetry / Prometheus 适配示例或可选 crate，不让核心依赖变重。
+- [x] 提供 OpenTelemetry / Prometheus 适配说明；SDK 由应用引入，核心依赖不变。
 - [x] `shaul doctor`：配置、状态目录、代理、Hub token、目录权限。
 - [x] `shaul clean`：已完成/失败任务 sidecar 与内容缓存。
 - [x] `shaul stats`：任务数量、字节数、失败原因分布。
