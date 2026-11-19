@@ -268,6 +268,17 @@ fn json_output_redacts_auth_and_query_strings() {
         text.contains("<redacted>"),
         "missing redaction marker: {text}"
     );
+
+    let output = run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "--json",
+        "add",
+        "ftp://user:ftp-secret@example.com/file.bin",
+    ]));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!text.contains("ftp-secret"), "leaked FTP password: {text}");
+    assert!(text.contains("redacted"), "missing FTP redaction: {text}");
 }
 
 #[test]
@@ -283,6 +294,21 @@ fn info_reports_the_direct_http_route() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("backend: http"), "output: {text}");
     assert!(text.contains("parser:  direct"), "output: {text}");
+}
+
+#[test]
+fn info_reports_the_ftp_route() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let output = run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "info",
+        "ftp://example.com/file.bin",
+    ]));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("backend: ftp"), "output: {text}");
+    assert!(text.contains("parser:  ftp"), "output: {text}");
 }
 
 #[test]

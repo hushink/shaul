@@ -2,9 +2,10 @@
 
 发布由 `.github/workflows/release-plz.yml` 驱动，配置在 `release-plz.toml`。
 
-当前状态：1.0.2 已发布；六个 crate 已配置 crates.io trusted publishing，
-`CARGO_REGISTRY_TOKEN` secret 已删除。后续发布直接使用 GitHub OIDC 获取短期
-token。
+当前状态：1.0.3 已发布；六个已发布 crate 已配置 crates.io trusted
+publishing，`CARGO_REGISTRY_TOKEN` secret 已删除。新增的 `shaul-ftp` 尚未
+发布，首次发布需要一次性的 bootstrap token 或先创建 crate 后配置 trusted
+publishing。
 
 ## 流程
 
@@ -39,6 +40,15 @@ crates.io 不允许通过 trusted publishing 创建全新 crate。六个 crate �
    Release；
 5. 确认六个 crate 在 crates.io 可见后，立即撤销这个 API token；
 6. 删除 GitHub secret `CARGO_REGISTRY_TOKEN`。
+
+#### `shaul-ftp` 首次发布
+
+`shaul-ftp` 是新增 crate，crates.io trusted publishing 不能创建全新 crate。
+首次发布前需要：
+
+1. 用一次性 token 创建 `shaul-ftp`，或先在 crates.io 手动创建 crate；
+2. 在 crates.io 为 `shaul-ftp` 配置 trusted publishing；
+3. 之后删除 bootstrap token，后续继续使用 OIDC。
 
 #### 本地 bootstrap（不配置 GitHub secret 的替代方案）
 
@@ -133,7 +143,7 @@ release-plz 对 `shaul-cli` 关闭了 `git_release_enable`，但保留 tag 创�
 release-plz 根据 workspace 依赖自动确定顺序：
 
 1. `shaul-core`
-2. `shaul-http`、`shaul-hub`、`shaul-bt`
+2. `shaul-http`、`shaul-hub`、`shaul-bt`、`shaul-ftp`
 3. `shaul`
 4. `shaul-cli`
 

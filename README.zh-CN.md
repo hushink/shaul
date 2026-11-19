@@ -11,8 +11,9 @@
 [English](README.md)
 
 > **状态：1.0.3** —— 直链 HTTP、Hugging Face、ModelScope 与 BitTorrent
-> 已实现并发布到 [crates.io](https://crates.io/crates/shaul)。1.x 稳定性
-> 规则见 [API 审计](docs/api-audit.md)。
+> 已实现并发布到 [crates.io](https://crates.io/crates/shaul)。FTP 已在
+> `main` 上，将于下一个 minor 版本发布。1.x 稳定性规则见
+> [API 审计](docs/api-audit.md)。
 
 ## 为什么做 shaul
 
@@ -37,6 +38,9 @@
 - **BitTorrent**：磁力链、裸 v1 info hash、本地 `.torrent`；通过 librqbit
   使用 DHT、tracker、peer wire、文件选择与 pause/resume。只做 leech：
   完成后立即暂停，不常驻做种。
+- **FTP**：可选 `ftp` feature，支持 `ftp://`；服务器提供
+  `SIZE`/`MDTM`/`REST` 时支持续传。FTP 没有 Range 语义，因此是单流下载；
+  FTPS 尚未启用。
 - **持久队列**：`shaul add`、`shaul run` worker，以及跨进程
   pause/resume/cancel。
 - **网络控制**：显式 HTTP/HTTPS/SOCKS5 代理与 `NO_PROXY`，全局及单任务限速。
@@ -61,8 +65,9 @@ Workspace crate：
 - `shaul-http` —— 直链 HTTP 解析器与分片传输后端。
 - `shaul-hub` —— Hugging Face / ModelScope 解析器、REST 客户端与后端。
 - `shaul-bt` —— BitTorrent 解析器与 leech-only 后端（可选）。
+- `shaul-ftp` —— `ftp://` 解析器与单流续传后端（可选）。
 - `shaul-cli` —— `shaul` 二进制。
-- `shaul` —— 默认组装；库用户通过 `bt` feature 选择是否引入 BT，CLI 默认启用。
+- `shaul` —— 默认组装；库用户通过 `bt`/`ftp` feature 选择是否引入，CLI 默认启用。
 
 `LinkParser` 允许发起网络请求补全元数据（Hub 链接）；本地 `.torrent` 路径
 直接解析。`Resource` 与协议无关；`Router` 选择第一个支持该资源的后端。
@@ -95,6 +100,9 @@ $ shaul download https://modelscope.cn/models/org/repo
 # BitTorrent
 $ shaul download 'magnet:?xt=urn:btih:<info-hash>&dn=example'
 $ shaul download ./example.torrent --include '*.mkv' --dir ./media
+
+# FTP（单流，支持 REST 续传）
+$ shaul download ftp://user:password@example.com/pub/file.bin --dir ./downloads
 
 # 代理与限速
 $ shaul download https://example.com/file.bin \
@@ -274,8 +282,8 @@ header，并在任务视图中去掉 HTTP 链接的查询串。`config show` 与
 详细计划、扩展边界与发布门槛见 [docs/roadmap.md](docs/roadmap.md)。
 
 1.x 暂不做：daemon/RPC、做种、aria2 控制文件兼容、内置 7z/rar/xz 解压
-（第三方可实现 `ArchiveExtractor`）、FTP/SFTP/WebDAV/S3 签名、动态插件 ABI
-与 WASM。
+（第三方可实现 `ArchiveExtractor`）、FTPS/SFTP/WebDAV/S3 签名、动态插件 ABI
+与 WASM。普通 FTP 已通过可选 `ftp` feature 提供。
 
 ## 测试
 
@@ -284,9 +292,9 @@ $ cargo test --workspace
 ```
 
 测试覆盖分片下载、续传、200 回退、重定向、自定义 header、校验、
-tar.gz/zip 解压、HF/MS 仓库下载、include 过滤、鉴权失败、缓存填充与缓存命中，
-以及本地 BitTorrent peer（创建种子、seeder session、leech 下载）。
-不依赖外网。
+tar.gz/zip 解压、HF/MS 仓库下载、include 过滤、鉴权失败、缓存填充与缓存命中、
+本地 FTP server（完整下载、Basic 认证、空文件与 `REST` 续传），以及本地
+BitTorrent peer（创建种子、seeder session、leech 下载）。不依赖外网。
 
 ## API 稳定性
 

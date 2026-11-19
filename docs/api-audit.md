@@ -4,7 +4,7 @@
 - 基线：`0.3.0`（commit `9e7226f`）
 - 目标：`1.0.0` 的公开 API 稳定性契约
 - 状态：`1.0.0` 已于 2026-11-18 发布到 crates.io；后续按本文的 semver 规则维护
-- 范围：`shaul-core`、`shaul-http`、`shaul-hub`、`shaul-bt`、`shaul`、`shaul-cli`
+- 范围：`shaul-core`、`shaul-http`、`shaul-hub`、`shaul-bt`、`shaul-ftp`、`shaul`、`shaul-cli`
 
 本文只记录**对外承诺**和**已知风险**，不重复 README 的功能说明。CLI 参数与
 `config.toml` 的兼容性也在承诺范围内，但以行为兼容为主，不承诺内部字段顺序。
@@ -17,7 +17,8 @@
 | `shaul-http` | `HttpBackend`、`DirectLinkParser`、默认 router | `filename` 已改为私有 |
 | `shaul-hub` | `HubBackend`、`HubClient`、`HubEntry`、两个 parser、默认 router | `cache` 已改为私有 |
 | `shaul-bt` | `BtBackend`、`TorrentParser`、默认 router | 不泄漏 `librqbit` 类型 |
-| `shaul` | 重新导出上述稳定项 + `default_engine`/`default_blocking_engine`/`default_router`/`BlockingEngine`/`CancellationToken` | `bt` 为可选 feature |
+| `shaul-ftp` | `FtpBackend`、`FtpParser`、默认 router | 不泄漏 `suppaftp` 类型 |
+| `shaul` | 重新导出上述稳定项 + `default_engine`/`default_blocking_engine`/`default_router`/`BlockingEngine`/`CancellationToken` | `bt`、`ftp` 为可选 feature |
 | `shaul-cli` | `shaul` 二进制、命令、配置键、JSON 事件输出 | 进程边界，不是 Rust API |
 
 第三方依赖类型只出现在明确接受的位置：`tokio::sync::broadcast::Receiver`
@@ -35,6 +36,7 @@
 `DownloadEngine`、`BlockingEngine`、`Task`、`TaskOptions`、`TaskState`、
 `FileItem`、`FileState`、`TaskResume`、`FileResume`、`Validator`、
 `Config` 及其子配置、`RequestOptions`、`Auth`、`Header`、
+`FtpBackend`/`FtpParser`（启用 `ftp` 时）、
 `EventKind`/`DownloadEvent`/`EventSink`、`Checksum`/`ChecksumAlgorithm`、
 `Error`/`Result`、`TaskStore`/`SidecarStore`、`Finalizer` 管线、
 `Telemetry`/`NoopTelemetry`/`metrics`。
@@ -86,13 +88,13 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      cache 前缀，而不是让新增变体导致编译失败。
    - `shaul-bt` 对未知 `BitTorrentSource` 返回 `Error::InvalidLink`。
 4. **`#![forbid(unsafe_code)]`**
-   - 六个 crate 的根模块全部启用；不安全代码只能来自依赖。
+   - 七个 crate 的根模块全部启用；不安全代码只能来自依赖。
 5. **公开面收缩**
    - `shaul-core::util`、`shaul-hub::cache`、`shaul-http::filename` 改为私有，
      避免把内部 helper 变成 1.0 承诺。
 6. **feature 边界**
-   - `shaul` 的默认 features 为空；`bt` 才引入 `shaul-bt`。
-     增加 feature 是 minor 变更，删除或改变默认值是 major 变更。
+   - `shaul` 的默认 features 为空；`bt` 才引入 `shaul-bt`，`ftp` 才引入
+     `shaul-ftp`。增加 feature 是 minor 变更，删除或改变默认值是 major 变更。
 7. **跨平台 CI**
    - `.github/workflows/ci.yml` 覆盖 Linux/Windows/macOS 测试、rustfmt、
      clippy、rustdoc、feature 组合、release build 与 MSRV 1.92。
@@ -124,6 +126,9 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      `run_pending`/`requeue_stale`。
    - 本能力遵循“库与 CLI 尽量对齐”：库通过公开配置/任务字段获得同等能力，
      CLI 额外负责从用户配置、环境变量和 flags 填充这些字段。
+   - `shaul-ftp` 是可选 crate：`FtpParser`/`FtpBackend` 通过 `ftp` feature
+     暴露，不泄漏 `suppaftp` 类型。FTP 是单流后端，续传依赖服务器的
+     `SIZE`/`MDTM`/`REST`；FTPS 暂未承诺。
 
 ## 4. semver 规则
 

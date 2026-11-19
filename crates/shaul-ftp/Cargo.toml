@@ -1,0 +1,23 @@
+[package]
+name = "shaul-ftp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "FTP backend for shaul"
+readme = "README.md"
+
+[dependencies]
+async-trait.workspace = true
+percent-encoding.workspace = true
+shaul-core.workspace = true
+suppaftp.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

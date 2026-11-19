@@ -58,6 +58,14 @@ Provider tokens come from the environment or official credential files and are
 never written into task sidecars. User-supplied `--bearer-token`/`--basic`/
 headers are stored in the sidecar; prefer `${env:NAME}` placeholders.
 
+## Does shaul support FTP?
+
+Yes: plain `ftp://` links are available through the optional `ftp` feature (the
+CLI enables it). FTP has no HTTP Range semantics, so downloads are
+single-stream; resume uses `REST` plus `SIZE`/`MDTM` when the server supports
+them. FTP authentication uses Basic credentials (`--basic` or URL userinfo).
+FTPS, FTP proxies and recursive directory downloads are not enabled yet.
+
 ## Does BitTorrent seed after completion?
 
 No. shaul is leech-only: it responds to uploads while downloading, then pauses
@@ -112,9 +120,9 @@ Yes in the 1.1 line:
   `shaul add --limit` set that field (and `add` persists it); `shaul run
   --limit` sets the worker's global cap.
 
-The proxy covers HTTP/Hub metadata and file transfers. BitTorrent DHT/UDP
-traffic is not proxied. BitTorrent rate limiting is not part of this slice.
-The library does not read environment variables unless the caller uses
+The proxy covers HTTP/Hub metadata and file transfers. FTP and BitTorrent
+traffic are not proxied, and BitTorrent rate limiting is not part of this
+slice. The library does not read environment variables unless the caller uses
 `Config::load`; `Config::default()` requires the caller to fill these fields.
 
 ## What do the JSON outputs contain?

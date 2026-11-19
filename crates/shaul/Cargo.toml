@@ -12,12 +12,14 @@ readme = "README.md"
 [dependencies]
 shaul-bt = { workspace = true, optional = true }
 shaul-core.workspace = true
+shaul-ftp = { workspace = true, optional = true }
 shaul-hub.workspace = true
 shaul-http.workspace = true
 
 [features]
 default = []
 bt = ["dep:shaul-bt"]
+ftp = ["dep:shaul-ftp"]
 
 [dev-dependencies]
 async-trait.workspace = true

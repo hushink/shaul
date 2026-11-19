@@ -22,11 +22,12 @@ The examples below are complete programs under
 
 ```toml
 [dependencies]
-shaul = "1.0.3"
+shaul = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
-# Optional: add the BitTorrent parser/backend.
-# shaul = { version = "1.0.3", features = ["bt"] }
+# Optional: add the BitTorrent and/or FTP parser/backend.
+# FTP requires the next minor release (1.2) or a local `main` build.
+# shaul = { version = "1.2", features = ["bt", "ftp"] }
 ```
 
 The async API needs a Tokio runtime. The blocking facade
@@ -39,6 +40,7 @@ opens the sidecar task store:
 
 - BitTorrent (only with the `bt` feature)
 - Hugging Face and ModelScope
+- FTP (only with the `ftp` feature; single-stream, no FTPS yet)
 - direct links as the fallback
 
 ```rust

@@ -23,11 +23,14 @@ use std::sync::Arc;
 #[cfg(feature = "bt")]
 pub use shaul_bt::{BtBackend, TorrentParser};
 pub use shaul_core::*;
+#[cfg(feature = "ftp")]
+pub use shaul_ftp::{FtpBackend, FtpParser};
 pub use shaul_http::{DirectLinkParser, HttpBackend};
 pub use shaul_hub::{HubBackend, HubClient, HuggingFaceParser, ModelScopeParser};
 
 /// Build the default router. BitTorrent (when the `bt` feature is enabled) is
-/// registered first, then Hub parsers/backends, then the direct HTTP fallback.
+/// registered first, then Hub parsers/backends, then FTP (when enabled), then
+/// the direct HTTP fallback.
 pub fn default_router(config: &Config) -> Result<Router> {
     let client = Arc::new(HubClient::new(config)?);
     let mut parsers = ParserRegistry::new();
@@ -35,6 +38,8 @@ pub fn default_router(config: &Config) -> Result<Router> {
     parsers.register(Arc::new(TorrentParser));
     parsers.register(Arc::new(HuggingFaceParser::new(client.clone())));
     parsers.register(Arc::new(ModelScopeParser::new(client.clone())));
+    #[cfg(feature = "ftp")]
+    parsers.register(Arc::new(FtpParser));
     parsers.register(shaul_core::parser_arc(DirectLinkParser));
 
     #[cfg(feature = "bt")]
@@ -42,8 +47,14 @@ pub fn default_router(config: &Config) -> Result<Router> {
     #[cfg(not(feature = "bt"))]
     let bt_backend: Option<Arc<dyn DownloadBackend>> = None;
     let http = HttpBackend::new(config)?;
+    #[cfg(feature = "ftp")]
+    let ftp_backend: Option<Arc<dyn DownloadBackend>> =
+        Some(Arc::new(FtpBackend::new()) as Arc<dyn DownloadBackend>);
+    #[cfg(not(feature = "ftp"))]
+    let ftp_backend: Option<Arc<dyn DownloadBackend>> = None;
     let backends: Vec<Arc<dyn DownloadBackend>> = bt_backend
         .into_iter()
+        .chain(ftp_backend)
         .chain([
             Arc::new(HubBackend::with_http(client, http.clone())) as Arc<dyn DownloadBackend>,
             shaul_core::backend_arc(http),

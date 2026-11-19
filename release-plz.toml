@@ -19,7 +19,7 @@ pr_labels = ["release"]
 [[package]]
 name = "shaul"
 changelog_update = true
-changelog_include = ["shaul-core", "shaul-http", "shaul-hub", "shaul-bt", "shaul-cli"]
+changelog_include = ["shaul-core", "shaul-http", "shaul-hub", "shaul-bt", "shaul-ftp", "shaul-cli"]
 
 # cargo-dist creates the GitHub Release for the CLI so it can attach binaries.
 # release-plz still publishes the crate and creates the git tag.

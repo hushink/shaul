@@ -7,6 +7,7 @@ async-trait = "0.1"
 shaul = { version = "1.0.3", path = "crates/shaul" }
 shaul-bt = { version = "1.0.3", path = "crates/shaul-bt" }
 shaul-core = { version = "1.0.3", path = "crates/shaul-core" }
+shaul-ftp = { version = "1.0.3", path = "crates/shaul-ftp" }
 shaul-hub = { version = "1.0.3", path = "crates/shaul-hub" }
 shaul-http = { version = "1.0.3", path = "crates/shaul-http" }
 base64 = "0.23"
@@ -31,6 +32,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 sha1 = "0.11"
 sha2 = "0.11"
+suppaftp = { version = "13", default-features = false, features = ["tokio"] }
 tar = "0.4"
 tempfile = "3"
 thiserror = "2"

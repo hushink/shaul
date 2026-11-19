@@ -6,16 +6,17 @@ ModelScope, BitTorrent and magnet links.
 `shaul` is the facade crate. It assembles the parser/router/backend pipeline
 from [`shaul-core`](https://crates.io/crates/shaul-core),
 [`shaul-http`](https://crates.io/crates/shaul-http),
-[`shaul-hub`](https://crates.io/crates/shaul-hub) and optionally
-[`shaul-bt`](https://crates.io/crates/shaul-bt).
+[`shaul-hub`](https://crates.io/crates/shaul-hub), optionally
+[`shaul-bt`](https://crates.io/crates/shaul-bt) and
+[`shaul-ftp`](https://crates.io/crates/shaul-ftp).
 
 ## Install
 
 ```toml
 [dependencies]
 shaul = "1.0"
-# BitTorrent support:
-# shaul = { version = "1.0", features = ["bt"] }
+# BitTorrent and/or FTP support:
+# shaul = { version = "1.0", features = ["bt", "ftp"] }
 ```
 
 MSRV is Rust 1.92.
@@ -63,6 +64,7 @@ runnable examples in
 - archive extraction (zip, tar, tar.gz, tar.zst, gzip, zstd) after verification
 - Hugging Face and ModelScope repositories with optional provider caches
 - BitTorrent / magnet / `.torrent` via the optional `bt` feature
+- single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume via the optional `ftp` feature
 - persistent task queue, pause/resume/cancel, NDJSON events
 
 ## Extending

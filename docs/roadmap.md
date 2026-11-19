@@ -18,7 +18,7 @@
 | 版本 | 主题 | 主要能力 | 风险 |
 | --- | --- | --- | --- |
 | **1.1** | 生产化基础 | 代理、限速、可替换解压器、BlockingEngine 生命周期、批量输入文件 | 中低 |
-| **1.2** | 吞吐与多源 | 多文件并发、全局/单主机连接预算、镜像回退、任务优先级 | 中高 |
+| **1.2** | 吞吐与多源 | FTP 后端、多文件并发、全局/单主机连接预算、镜像回退、任务优先级 | 中高 |
 | **1.3** | Hub 差异化 | 可选 Xet 后端、通用 CAS 缓存、缓存维护 | 高，需先 spike |
 | **1.4** | 运维与观测 | 重试/连接/缓存指标、OpenTelemetry 适配、`doctor`/`clean`/`stats` | 低中 |
 
@@ -108,6 +108,15 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ## 1.2 吞吐与多源
 
+### FTP 后端
+
+- 新增可选 crate `shaul-ftp` 与 facade `ftp` feature。
+- `FtpParser` 解析 `ftp://`，使用 `ResourceKind::Custom { protocol: "ftp" }`，不把 FTP 类型泄漏进 core。
+- `FtpBackend` 单流下载，`BackendCapabilities::new(false, true, false)`；使用 `SIZE`/`MDTM`/`REST` 保守续传，服务器不支持时明确报错。
+- 认证使用 `Auth::Basic`；URL userinfo 会转成 Basic auth，并从 Resource URL 中剥离。
+- 本地 mock FTP server e2e：完整下载、Basic 认证、REST 续传。
+- 第一版只支持 plain FTP；FTPS、代理和目录递归下载后续评估。
+
 ### 多文件并发
 
 - `DownloadConfig.file_jobs` / `TaskOptions.file_jobs`，默认 1。
@@ -169,7 +178,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ## 扩展边界
 
-1. **协议扩展**：现有 `LinkParser` + `DownloadBackend` + `ResourceKind::Custom` 保持不变，用户可自行实现任意协议。1.x 不为 FTP、SFTP、WebDAV、S3 签名等非目标新增专门支持或抽象。
+1. **协议扩展**：现有 `LinkParser` + `DownloadBackend` + `ResourceKind::Custom` 保持不变，用户可自行实现任意协议。1.x 不再为 SFTP、WebDAV、S3 签名等非目标新增专门支持；FTP 作为可选 `ftp` feature 提供。
 2. **解压扩展**：1.x 唯一新增的专用扩展点是 `ArchiveExtractor` + `ExtractorRegistry`；7z/rar/xz 由用户实现。
 3. **任务存储扩展**：`TaskStore` 保持可替换；`SidecarStore` 只是默认实现。
 4. **观测扩展**：`Telemetry`、`tracing`、事件流保持独立，不绑定具体后端。
@@ -181,7 +190,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 - BitTorrent seeding（保持 leech-only）
 - aria2 control-file 兼容
 - 内置 7z / rar / xz 解压（仅提供扩展点）
-- FTP / SFTP / WebDAV / S3 SigV4 签名
+- FTPS / SFTP / WebDAV / S3 SigV4 签名
 - 动态插件 ABI
 - WASM
 

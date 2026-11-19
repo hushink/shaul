@@ -12,7 +12,8 @@ A resumable, pluggable download engine for Rust — library and CLI.
 
 > **Status: 1.0.3** — HTTP, Hugging Face, ModelScope and BitTorrent are
 > implemented and published to [crates.io](https://crates.io/crates/shaul).
-> See the [API audit](docs/api-audit.md) for the 1.x stability policy.
+> FTP support is on `main` for the next minor release. See the
+> [API audit](docs/api-audit.md) for the 1.x stability policy.
 
 ## Why shaul
 
@@ -43,6 +44,9 @@ backends:
   DHT, trackers, peer wire, per-file selection and pause/resume through
   librqbit. Leech-only: the torrent is paused after completion, so shaul does
   not keep seeding.
+- **FTP**: optional `ftp` feature for `ftp://` links, with `SIZE`/`MDTM`/`REST`
+  resume when the server supports them. FTP has no Range requests, so it is
+  single-stream; FTPS is not enabled yet.
 - **Persistent queue**: `shaul add`, a `shaul run` worker, and
   pause/resume/cancel across processes.
 - **Network controls**: explicit HTTP/HTTPS/SOCKS5 proxy with `NO_PROXY`, plus
@@ -69,9 +73,10 @@ Workspace crates:
 - `shaul-http` — direct-link HTTP parser and segmented transfer backend.
 - `shaul-hub` — Hugging Face/ModelScope parsers, REST clients and backend.
 - `shaul-bt` — BitTorrent parser and leech-only backend (optional).
+- `shaul-ftp` — `ftp://` parser and single-stream resumable backend (optional).
 - `shaul-cli` — the `shaul` binary.
-- `shaul` — default assembly; `bt` is an opt-in feature for library users and
-  enabled by the CLI.
+- `shaul` — default assembly; `bt` and `ftp` are opt-in features for library
+  users and enabled by the CLI.
 
 `LinkParser` may perform network I/O to discover metadata (Hub links); a local
 `.torrent` path is resolved immediately. `Resource` is protocol-agnostic;
@@ -105,6 +110,9 @@ $ shaul download https://modelscope.cn/models/org/repo
 # BitTorrent
 $ shaul download 'magnet:?xt=urn:btih:<info-hash>&dn=example'
 $ shaul download ./example.torrent --include '*.mkv' --dir ./media
+
+# FTP (single-stream, REST resume)
+$ shaul download ftp://user:password@example.com/pub/file.bin --dir ./downloads
 
 # Proxy and bandwidth limit
 $ shaul download https://example.com/file.bin \
@@ -302,7 +310,8 @@ The detailed plan, extension boundaries and release gates live in
 
 Not planned for 1.x: daemon/RPC, seeding, aria2 control-file compatibility,
 built-in 7z/rar/xz extraction (third parties can implement `ArchiveExtractor`),
-FTP/SFTP/WebDAV/S3 signing, dynamic plugin ABI and WASM.
+FTPS/SFTP/WebDAV/S3 signing, dynamic plugin ABI and WASM. Plain FTP is
+available through the optional `ftp` feature.
 
 ## Testing
 
@@ -312,7 +321,8 @@ $ cargo test --workspace
 
 The suite covers segmented downloads, resume, 200 fallback, redirects, custom
 headers, checksum verification, tar.gz/zip extraction, HF/MS repository
-downloads, include filters, auth failures, cache population/cache hits, and a
+downloads, include filters, auth failures, cache population/cache hits, a local
+FTP server (full download, Basic auth, empty file and `REST` resume), and a
 local BitTorrent peer (torrent creation, seeder session and leech download).
 No external network is required.
 

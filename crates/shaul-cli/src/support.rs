@@ -160,7 +160,19 @@ pub fn redact_link_text(raw: &str) -> String {
     if raw.starts_with("magnet:") {
         return raw.to_string();
     }
-    raw.split(['?', '#']).next().unwrap_or(raw).to_string()
+    let Ok(mut url) = url::Url::parse(raw) else {
+        return raw.split(['?', '#']).next().unwrap_or(raw).to_string();
+    };
+    if url.username().is_empty() && url.password().is_none() {
+        return raw.split(['?', '#']).next().unwrap_or(raw).to_string();
+    }
+    let _ = url.set_username("redacted");
+    if url.password().is_some() {
+        let _ = url.set_password(Some("redacted"));
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
 }
 
 pub fn redacted_task(task: &shaul::Task) -> shaul::Task {
