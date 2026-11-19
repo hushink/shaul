@@ -24,10 +24,14 @@ creation and engine construction happen during Criterion setup.
 
 | Case | Criterion estimate | Throughput |
 | --- | ---: | ---: |
-| Full, 1 connection | 242.8 ms | 62.9 – 68.8 MiB/s |
-| Full, 4 connections | 231.6 ms | 68.4 – 69.7 MiB/s |
-| Full, 8 connections | 237.5 ms | 66.2 – 68.5 MiB/s |
-| Resume from 50%, 8 connections | 163.4 ms | 47.3 – 51.0 MiB/s |
+| Full, 1 connection | 220.0 ms | 68.6 – 77.1 MiB/s |
+| Full, 4 connections | 205.0 ms | 76.8 – 79.3 MiB/s |
+| Full, 8 connections | 202.2 ms | 78.3 – 80.1 MiB/s |
+| Resume from 50%, 8 connections | 151.9 ms | 52.0 – 53.5 MiB/s |
+
+These numbers are from a second, warmed run. The first run on the same machine
+was 10–15% slower (for example 242.8 ms / 65.9 MiB/s for one connection), so
+treat small differences as run-to-run noise rather than regressions.
 
 The resume case pre-writes the first 8 MiB of the `.part` file and a matching
 `TaskResume` manifest, so it measures probe + resume-validation + transfer of
@@ -35,11 +39,12 @@ the remaining 8 MiB. Throughput is computed over the remaining bytes.
 
 ### Observations
 
-- At 16 MiB over loopback, 1/4/8 connections are within roughly 5% of each
-  other. The local disk and the single-process test server are the likely
-  bottlenecks; this is not a WAN throughput measurement.
+- At 16 MiB over loopback, 4 and 8 connections are within ~1.5% of each other
+  and only ~9% faster than one connection. The local disk and the
+  single-process test server are the likely bottlenecks; this is not a WAN
+  throughput measurement.
 - The resume case avoids downloading the first half, but its per-byte cost is
-  higher: probe, validator matching and checkpoint writes add roughly 40–50 ms
+  higher: probe, validator matching and checkpoint writes add roughly 50 ms
   over the ideal half-size transfer.
 - These numbers are a regression baseline, not a claim about remote-server
   performance. A future benchmark should add a throttled/latency-injected
