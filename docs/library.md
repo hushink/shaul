@@ -26,7 +26,7 @@ shaul = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 # Optional: BitTorrent, FTP and Hugging Face Xet support.
-# shaul = { version = "1.1", features = ["bt", "ftp", "xet"] }
+# shaul = { version = "1.2", features = ["bt", "ftp", "xet"] }
 ```
 
 The async API needs a Tokio runtime. The blocking facade

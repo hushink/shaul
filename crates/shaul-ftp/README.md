@@ -11,7 +11,7 @@ Most applications should depend on the `shaul` facade with the `ftp` feature:
 
 ```toml
 [dependencies]
-shaul = { version = "1.1", features = ["ftp"] }
+shaul = { version = "1.2", features = ["ftp"] }
 ```
 
 The backend is protocol-isolated: `shaul-core` does not depend on FTP or

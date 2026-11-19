@@ -10,10 +10,9 @@ A resumable, pluggable download engine for Rust — library and CLI.
 
 [简体中文](README.zh-CN.md)
 
-> **Status: 1.1.0** — HTTP, Hugging Face, ModelScope, BitTorrent and FTP are
-> published to [crates.io](https://crates.io/crates/shaul). The content cache
-> and `doctor`/`stats`/`clean` commands are on `main` for 1.2.0. See the
-> [API audit](docs/api-audit.md) for the 1.x stability policy.
+> **Status: 1.2.0** — HTTP, Hugging Face, ModelScope, BitTorrent, FTP and
+> optional Xet are published to [crates.io](https://crates.io/crates/shaul).
+> See the [API audit](docs/api-audit.md) for the 1.x stability policy.
 
 ## Why shaul
 
@@ -105,7 +104,7 @@ through to downloading an HTML page. See [GLOSSARY.md](GLOSSARY.md) and
 
 ```console
 $ cargo install shaul-cli
-# Prebuilt archives and installers: shaul-cli-v1.1.0 GitHub release
+# Prebuilt archives and installers: shaul-cli-v1.2.0 GitHub release
 
 # Direct link
 $ shaul download https://example.com/model.bin \
@@ -239,7 +238,7 @@ delete_archive = false
 timeout_secs = 60
 connect_timeout_secs = 15
 retries = 5
-user_agent = "shaul/1.1.0"
+user_agent = "shaul/1.2.0"
 allow_cross_origin_auth = false
 # proxy = "http://127.0.0.1:8080"   # http://, https:// or socks5://
 # no_proxy = "localhost,127.0.0.1"

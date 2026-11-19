@@ -10,10 +10,9 @@
 
 [English](README.md)
 
-> **状态：1.1.0** —— 直链 HTTP、Hugging Face、ModelScope、BitTorrent 与 FTP
-> 已发布到 [crates.io](https://crates.io/crates/shaul)。内容缓存与
-> `doctor`/`stats`/`clean` 已在 `main` 上，计划随 1.2.0 发布。1.x 稳定性规则见
-> [API 审计](docs/api-audit.md)。
+> **状态：1.2.0** —— 直链 HTTP、Hugging Face、ModelScope、BitTorrent、FTP
+> 与可选 Xet 已发布到 [crates.io](https://crates.io/crates/shaul)。
+> 1.x 稳定性规则见 [API 审计](docs/api-audit.md)。
 
 ## 为什么做 shaul
 
@@ -92,7 +91,7 @@ Workspace crate：
 
 ```console
 $ cargo install shaul-cli
-# 预编译包与安装脚本：shaul-cli-v1.1.0 的 GitHub Release
+# 预编译包与安装脚本：shaul-cli-v1.2.0 的 GitHub Release
 
 # 直链
 $ shaul download https://example.com/model.bin \
@@ -223,7 +222,7 @@ delete_archive = false
 timeout_secs = 60
 connect_timeout_secs = 15
 retries = 5
-user_agent = "shaul/1.1.0"
+user_agent = "shaul/1.2.0"
 allow_cross_origin_auth = false
 # proxy = "http://127.0.0.1:8080"   # http://、https:// 或 socks5://
 # no_proxy = "localhost,127.0.0.1"

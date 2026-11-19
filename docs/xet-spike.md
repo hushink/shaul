@@ -41,6 +41,9 @@ graph optional without requiring another first-publish bootstrap.
 - Any token, protocol or CAS error removes the partial output and falls back
   to the normal HTTP resolve path.
 - `shaul-core` and the default `shaul` feature set do not depend on `hf-xet`.
+- `hf-xet` and `xet-*` are pinned to 1.6.0: 1.7+ pulls `sysinfo` 0.39, which
+  requires Rust 1.95 and would break the 1.92 MSRV. The 1.6 line still pulls
+  `humantime`, covered by the documented RUSTSEC-2026-0542 ignore.
 
 ## Remaining verification
 

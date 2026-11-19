@@ -14,9 +14,9 @@ from [`shaul-core`](https://crates.io/crates/shaul-core),
 
 ```toml
 [dependencies]
-shaul = "1.1"
+shaul = "1.2"
 # BitTorrent, FTP and/or Hugging Face Xet support:
-# shaul = { version = "1.1", features = ["bt", "ftp", "xet"] }
+# shaul = { version = "1.2", features = ["bt", "ftp", "xet"] }
 ```
 
 MSRV is Rust 1.92.
