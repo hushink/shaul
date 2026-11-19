@@ -270,11 +270,21 @@ sensitive headers and strips HTTP query strings from task views.
 - **0.3** — done: BitTorrent backend via `librqbit`, leech-only.
 - **1.0** — done: 1.0 API freeze, per-crate READMEs, cross-platform CI and
   release-plz publishing.
-- **1.x** — additive features and fixes; see the semver policy in
-  [docs/api-audit.md](docs/api-audit.md).
+- **1.1** — next: proxy, bandwidth limiting, replaceable archive extractors,
+  full `BlockingEngine` lifecycle and `--input-file`.
+- **1.2** — throughput and multi-source: parallel files, enforced connection
+  budgets, mirror fallback and task priority.
+- **1.3** — Hub differentiation: optional Xet backend (after a spike), CAS
+  cache and cache maintenance.
+- **1.4** — operations: retry/connection/cache metrics, OpenTelemetry
+  adapters, `doctor`/`clean`/`stats`.
 
-Not planned yet: daemon/RPC, seeding, aria2 control-file compatibility,
-7z/rar/xz extraction, native Xet transport.
+The detailed plan, extension boundaries and release gates live in
+[docs/roadmap.md](docs/roadmap.md).
+
+Not planned for 1.x: daemon/RPC, seeding, aria2 control-file compatibility,
+built-in 7z/rar/xz extraction (third parties can implement `ArchiveExtractor`),
+FTP/SFTP/WebDAV/S3 signing, dynamic plugin ABI and WASM.
 
 ## Testing
 
@@ -299,6 +309,8 @@ plus rustfmt, clippy, rustdoc, feature combinations and MSRV 1.92.
 
 - [Library guide](docs/library.md) — embedding, events, queue, blocking API
   and observability
+- [Roadmap](docs/roadmap.md) — 1.x capabilities, extension boundaries and
+  release gates
 - [Extension guide](docs/extending.md) — custom parsers/backends, routing and
   testing
 - [FAQ](docs/faq.md) — resume, verification, extraction, Hub caches and the

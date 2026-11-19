@@ -249,10 +249,17 @@ header，并在任务视图中去掉 HTTP 链接的查询串。
 
 - **0.3** —— 已完成：通过 `librqbit` 实现 BitTorrent 后端（只做 leech）。
 - **1.0** —— 已完成：API 冻结、各 crate README、跨平台 CI 与 release-plz 发布。
-- **1.x** —— 增量功能与修复；semver 规则见
-  [docs/api-audit.md](docs/api-audit.md)。
+- **1.1** —— 下一步：代理、限速、可替换解压器、完整 `BlockingEngine`
+  生命周期与 `--input-file`。
+- **1.2** —— 吞吐与多源：多文件并发、真正执行连接预算、镜像回退与任务优先级。
+- **1.3** —— Hub 差异化：spike 通过后的可选 Xet 后端、CAS 缓存与缓存维护。
+- **1.4** —— 运维：重试/连接/缓存指标、OpenTelemetry 适配、`doctor`/`clean`/`stats`。
 
-暂不做：daemon/RPC、做种、aria2 控制文件兼容、7z/rar/xz 解压、原生 Xet 传输。
+详细计划、扩展边界与发布门槛见 [docs/roadmap.md](docs/roadmap.md)。
+
+1.x 暂不做：daemon/RPC、做种、aria2 控制文件兼容、内置 7z/rar/xz 解压
+（第三方可实现 `ArchiveExtractor`）、FTP/SFTP/WebDAV/S3 签名、动态插件 ABI
+与 WASM。
 
 ## 测试
 
@@ -275,6 +282,7 @@ rustfmt、clippy、rustdoc、feature 组合和 MSRV 1.92。
 ## 文档
 
 - [库使用指南](docs/library.md) —— 嵌入、事件、队列、阻塞 API 与可观测性
+- [路线图](docs/roadmap.md) —— 1.x 能力、扩展边界与发布门槛
 - [扩展开发指南](docs/extending.md) —— 自定义 Parser/Backend、路由与测试
 - [FAQ](docs/faq.md) —— 续传、校验、解压、Hub 缓存与队列
 - [API 审计](docs/api-audit.md) —— 1.x semver 规则与已知风险
