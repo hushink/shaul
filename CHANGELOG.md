@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1](https://github.com/hushink/shaul/compare/shaul-v1.2.0...shaul-v1.2.1) - 2026-11-21
+
+### Fixed
+
+- *(cli)* show live download progress
+
+### Other
+
+- rewrite READMEs for users
+- update release status to 1.2.0
+
 ## [1.2.0](https://github.com/hushink/shaul/compare/shaul-v1.1.0...shaul-v1.2.0) - 2026-11-19
 
 ### Added
