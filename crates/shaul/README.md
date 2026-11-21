@@ -1,12 +1,16 @@
 # shaul
 
-A unified, resumable download engine for direct HTTP links, Hugging Face,
-ModelScope, BitTorrent and magnet links.
+[![crates.io](https://img.shields.io/crates/v/shaul.svg)](https://crates.io/crates/shaul)
+[![docs.rs](https://docs.rs/shaul/badge.svg)](https://docs.rs/shaul)
+[![MSRV](https://img.shields.io/badge/MSRV-1.92-blue)](https://github.com/hushink/shaul/blob/main/Cargo.toml)
 
-`shaul` is the facade crate. It assembles the parser/router/backend pipeline
-from [`shaul-core`](https://crates.io/crates/shaul-core),
+A unified, resumable download engine for direct HTTP links, Hugging Face,
+ModelScope, BitTorrent, FTP and optional Hugging Face Xet.
+
+`shaul` is the facade crate. It assembles the parser → router → backend
+pipeline from [`shaul-core`](https://crates.io/crates/shaul-core),
 [`shaul-http`](https://crates.io/crates/shaul-http),
-[`shaul-hub`](https://crates.io/crates/shaul-hub), optionally
+[`shaul-hub`](https://crates.io/crates/shaul-hub) and, when enabled,
 [`shaul-bt`](https://crates.io/crates/shaul-bt) and
 [`shaul-ftp`](https://crates.io/crates/shaul-ftp).
 
@@ -15,11 +19,17 @@ from [`shaul-core`](https://crates.io/crates/shaul-core),
 ```toml
 [dependencies]
 shaul = "1.2"
-# BitTorrent, FTP and/or Hugging Face Xet support:
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# Optional protocol support:
 # shaul = { version = "1.2", features = ["bt", "ftp", "xet"] }
 ```
 
-MSRV is Rust 1.92.
+| Feature | Adds |
+| --- | --- |
+| `bt` | BitTorrent, magnet links and `.torrent` files |
+| `ftp` | Single-stream resumable `ftp://` downloads |
+| `xet` | Hugging Face Xet downloads with HTTP fallback |
 
 ## Example
 
@@ -30,49 +40,48 @@ use std::path::PathBuf;
 #[tokio::main]
 async fn main() -> shaul::Result<()> {
     let (engine, _store) = shaul::default_engine(Config::default())?;
+
     let options = TaskOptions {
         connections: Some(8),
         extract: Some(true),
         ..TaskOptions::default()
     };
+
     let task = engine
         .add(
             Link::new("https://example.com/data.tar.gz")?,
-            PathBuf::from("."),
+            PathBuf::from("./downloads"),
             options,
         )
         .await?;
+
     engine.run_task(task.id).await?;
     Ok(())
 }
 ```
 
-Subscribe to `engine.subscribe()` for typed events. If you do not want to own a
-Tokio runtime, use `default_blocking_engine`. The
-[library guide](https://github.com/hushink/shaul/blob/main/docs/library.md)
-covers events, the persistent queue, cancellation, telemetry and tracing, with
-runnable examples in
-[`crates/shaul/examples`](https://github.com/hushink/shaul/tree/main/crates/shaul/examples).
+Subscribe to `engine.subscribe()` for typed progress events. If you do not
+want to own a Tokio runtime, use `default_blocking_engine`.
 
 ## Capabilities
 
-- segmented HTTP downloads with work-stealing range scheduling
-- resume with ETag / Last-Modified / size validation
-- custom headers and bearer/basic/header authentication
-- HTTP/HTTPS/SOCKS5 proxy with `NO_PROXY`, plus global/per-task bandwidth caps and global/per-host request budgets
-- compatible mirror fallback with `TaskOptions::mirrors` / `--mirror`
+- Segmented HTTP downloads with a work-stealing range queue and adaptive
+  segment sizing
+- Safe resume with `ETag`, `Last-Modified` and size validation
+- Custom headers and bearer, basic or header authentication
+- HTTP/HTTPS/SOCKS5 proxy with `NO_PROXY`
+- Global, per-host and per-task bandwidth limits; active request budgets
+- Compatible mirror fallback
 - SHA-256/SHA-512/SHA-1/MD5 verification, toggleable per download
-- archive extraction (zip, tar, tar.gz, tar.zst, gzip, zstd) after verification
+- Archive extraction after verification, with a pluggable extractor API
 - Hugging Face and ModelScope repositories with optional provider caches
-- optional Hugging Face Xet downloads via the `xet` feature, with HTTP fallback
-- BitTorrent / magnet / `.torrent` via the optional `bt` feature
-- single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume via the optional `ftp` feature
-- concurrent multi-file downloads with `file_jobs`
-- opt-in content-addressed cache for verified files (`ContentCache`)
-- persistent task queue with priorities, pause/resume/cancel and retry events
-- NDJSON events and low-cardinality telemetry metrics, including cache hits,
-  active connections and queue depth
-- `doctor`, `stats` and `clean` operations commands in the CLI
+- Optional Xet downloads for Hugging Face files with `xetHash`
+- BitTorrent, magnet and `.torrent` support through the `bt` feature
+- Single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume
+- Concurrent multi-file downloads
+- Opt-in content-addressed cache for verified files
+- Persistent queue with priorities, pause/resume/cancel and retry events
+- Typed events, NDJSON output and low-cardinality telemetry metrics
 
 ## Extending
 
@@ -89,13 +98,11 @@ the `shaul` command:
 $ cargo install shaul-cli
 ```
 
-## Links
+## Documentation
 
-- [Project README](https://github.com/hushink/shaul/blob/main/README.md)
+- [Project README](https://github.com/hushink/shaul#readme)
 - [Library guide](https://github.com/hushink/shaul/blob/main/docs/library.md)
-- [Resume and hardening](https://github.com/hushink/shaul/blob/main/docs/resume.md)
 - [Extension guide](https://github.com/hushink/shaul/blob/main/docs/extending.md)
-- [API audit](https://github.com/hushink/shaul/blob/main/docs/api-audit.md)
-- [Release process](https://github.com/hushink/shaul/blob/main/docs/release.md)
-
-License: Apache-2.0.
+- [Resume and hardening](https://github.com/hushink/shaul/blob/main/docs/resume.md)
+- [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
+- [API reference](https://docs.rs/shaul)
