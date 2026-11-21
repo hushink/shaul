@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{IsTerminal, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use shaul::{DownloadEvent, EventKind};
@@ -61,6 +61,7 @@ async fn render_plain(
     quiet: bool,
     stop: CancellationToken,
 ) {
+    let mut progress: HashMap<String, PlainProgress> = HashMap::new();
     loop {
         let received = tokio::select! {
             _ = stop.cancelled() => break,
@@ -68,7 +69,92 @@ async fn render_plain(
         };
         match received {
             Ok(event) => match event.kind {
-                EventKind::FileCompleted { path, .. } => println!("{}", path.display()),
+                EventKind::TaskStarted { task_id, link } => {
+                    if !quiet {
+                        eprintln!(
+                            "[{}] starting {}",
+                            short_id(&task_id),
+                            redact_link_text(&link)
+                        );
+                    }
+                }
+                EventKind::FileStarted {
+                    task_id,
+                    file,
+                    total_bytes,
+                } => {
+                    progress.insert(
+                        format!("{task_id}:{file}"),
+                        PlainProgress {
+                            file,
+                            task_id,
+                            total_bytes,
+                            last_bytes: 0,
+                            last_print: Instant::now(),
+                        },
+                    );
+                }
+                EventKind::Progress {
+                    task_id,
+                    file,
+                    downloaded_bytes,
+                    total_bytes,
+                } => {
+                    if quiet {
+                        continue;
+                    }
+                    let key = format!("{task_id}:{file}");
+                    let entry = progress.entry(key).or_insert_with(|| PlainProgress {
+                        file,
+                        task_id,
+                        total_bytes,
+                        last_bytes: 0,
+                        last_print: Instant::now(),
+                    });
+                    if let Some(total) = total_bytes {
+                        entry.total_bytes = Some(total);
+                    }
+                    if entry.last_print.elapsed() < Duration::from_secs(1)
+                        && downloaded_bytes < entry.total_bytes.unwrap_or(u64::MAX)
+                    {
+                        continue;
+                    }
+                    let elapsed = entry.last_print.elapsed().as_secs_f64().max(0.001);
+                    let delta = downloaded_bytes.saturating_sub(entry.last_bytes);
+                    let speed = (delta as f64 / elapsed) as u64;
+                    let total = entry
+                        .total_bytes
+                        .map(|total| format!(" / {}", human_bytes(total)))
+                        .unwrap_or_default();
+                    let percent = entry
+                        .total_bytes
+                        .filter(|total| *total > 0)
+                        .map(|total| {
+                            format!(" ({:.0}%)", downloaded_bytes as f64 * 100.0 / total as f64)
+                        })
+                        .unwrap_or_default();
+                    eprintln!(
+                        "[{}] {}{}{}  {}/s",
+                        short_id(&entry.task_id),
+                        entry.file,
+                        total,
+                        percent,
+                        human_bytes(speed)
+                    );
+                    entry.last_bytes = downloaded_bytes;
+                    entry.last_print = Instant::now();
+                }
+                EventKind::FileCompleted {
+                    task_id,
+                    file,
+                    path,
+                    ..
+                } => {
+                    progress.remove(&format!("{task_id}:{file}"));
+                    if !quiet {
+                        println!("[{}] saved {}", short_id(&task_id), path.display());
+                    }
+                }
                 EventKind::TaskCompleted {
                     task_id,
                     files,
@@ -106,6 +192,14 @@ async fn render_plain(
     }
 }
 
+struct PlainProgress {
+    task_id: shaul::TaskId,
+    file: String,
+    total_bytes: Option<u64>,
+    last_bytes: u64,
+    last_print: Instant,
+}
+
 async fn render_progress(
     mut receiver: broadcast::Receiver<DownloadEvent>,
     stop: CancellationToken,
@@ -118,6 +212,13 @@ async fn render_progress(
             _ = stop.cancelled() => break,
             received = receiver.recv() => match received {
                 Ok(event) => match event.kind {
+                    EventKind::TaskStarted { task_id, link } => {
+                        let _ = multi.println(format!(
+                            "[{}] starting {}",
+                            short_id(&task_id),
+                            redact_link_text(&link)
+                        ));
+                    }
                     EventKind::FileStarted {
                         task_id,
                         file,

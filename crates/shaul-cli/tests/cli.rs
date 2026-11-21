@@ -555,6 +555,35 @@ fn clean_removes_orphan_parts() {
 }
 
 #[test]
+fn download_prints_progress_without_a_terminal() {
+    let data: Vec<u8> = (0..2 * 1024 * 1024)
+        .map(|index| (index % 251) as u8)
+        .collect();
+    let (url, handle) = spawn_streaming_file_server(data.clone(), 12, Duration::from_millis(150));
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let output_path = dir.path().join("progress.bin");
+
+    let output = run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "download",
+        &url,
+        "--output",
+        output_path.to_str().unwrap(),
+        "--connections",
+        "1",
+    ]));
+    drop(handle);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("/s"),
+        "expected a progress line, got: {stderr}"
+    );
+    assert_eq!(fs::read(&output_path).unwrap(), data);
+}
+
+#[test]
 fn download_runs_through_the_cli() {
     let data: Vec<u8> = (0..64 * 1024).map(|index| (index % 251) as u8).collect();
     let (url, _server) = spawn_file_server(data.clone());
@@ -690,6 +719,48 @@ fn spawn_file_server(data: Vec<u8>) -> (String, thread::JoinHandle<()>) {
             let _ = stream.write_all(headers.as_bytes());
             let _ = stream.write_all(&data);
             let _ = stream.flush();
+        }
+    });
+    (format!("http://{address}/file.bin"), handle)
+}
+
+/// Serves the body in chunks with a delay between writes so a non-terminal
+/// renderer has time to print an intermediate progress line.
+fn spawn_streaming_file_server(
+    data: Vec<u8>,
+    chunks: usize,
+    delay: Duration,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            let data = data.clone();
+            let chunk_size = data.len().div_ceil(chunks.max(1));
+            thread::spawn(move || {
+                let mut request = [0_u8; 16 * 1024];
+                let _ = stream.read(&mut request);
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\n\
+                     Content-Length: {}\r\n\
+                     Content-Type: application/octet-stream\r\n\
+                     Content-Disposition: attachment; filename=\"file.bin\"\r\n\
+                     Connection: close\r\n\
+                     \r\n",
+                    data.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                for chunk in data.chunks(chunk_size) {
+                    if stream.write_all(chunk).is_err() {
+                        break;
+                    }
+                    let _ = stream.flush();
+                    thread::sleep(delay);
+                }
+            });
         }
     });
     (format!("http://{address}/file.bin"), handle)
