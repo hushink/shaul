@@ -2,7 +2,7 @@
 
 发布由 `.github/workflows/release-plz.yml` 驱动，配置在 `release-plz.toml`。
 
-当前状态：1.2.0 已发布；七个 crate 均已在 crates.io 可见。
+当前状态：1.2.1 已发布；七个 crate 均已在 crates.io 可见。
 `shaul-ftp` 的首次发布已完成，trusted publishing 已接管。Xet 作为
 `shaul-hub/xet` 与 `shaul/xet` 的可选 feature 发布，没有新增顶层 crate，
 因此不需要新的 bootstrap token。
@@ -122,7 +122,7 @@ release-plz 对 `shaul-cli` 关闭了 `git_release_enable`，但保留 tag 创�
 
 `shaul-cli-v1.0.0` Release 早于该流程，因此没有二进制附件；从
 `shaul-cli-v1.0.1` 起，Release 会附带预编译包、校验和及安装脚本。
-`shaul-cli-v1.2.0` 已包含 Linux x86_64/aarch64、macOS x86_64/aarch64、
+`shaul-cli-v1.2.1` 已包含 Linux x86_64/aarch64、macOS x86_64/aarch64、
 Windows x86_64 的压缩包、SHA-256、shell 与 PowerShell 安装器。
 
 ### GitHub Actions 设置
