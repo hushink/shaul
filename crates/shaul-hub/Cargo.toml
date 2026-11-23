@@ -33,7 +33,7 @@ url.workspace = true
 xet-client = { version = "=1.6.0", optional = true }
 xet-core-structures = { version = "=1.6.0", optional = true }
 xet-data = { version = "=1.6.0", optional = true }
-xet-runtime = { version = "=1.6.0", optional = true }
+xet-runtime = { version = "=1.8.1", optional = true }
 
 [features]
 default = []
