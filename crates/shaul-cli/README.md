@@ -2,6 +2,8 @@
 
 [![crates.io](https://img.shields.io/crates/v/shaul-cli.svg)](https://crates.io/crates/shaul-cli)
 
+**English** | [简体中文](README.zh-CN.md)
+
 Command-line interface for [shaul](https://github.com/hushink/shaul), a
 unified download engine for HTTP, Hugging Face, ModelScope, BitTorrent, FTP
 and optional Xet.
@@ -59,7 +61,8 @@ $ shaul completions bash
 ```
 
 Common flags: `--dir`, `--output`, `--checksum`, `--verify/--no-verify`,
-`--extract/--no-extract`, `--extract-dir`, `--delete-archive`, `--header`,
+`--extract/--no-extract`, `--extract-dir`, `--delete-archive`,
+`--no-delete-archive`, `--header`,
 `--header-file`, `--bearer-token`, `--basic`, `--revision`, `--include`,
 `--exclude`, `--cache/--no-cache`, `--content-cache/--no-content-cache`,
 `--file-jobs`, `--mirror`, `--priority`, `--global-connections`,
@@ -81,6 +84,13 @@ a single `shaul run` worker owns a state directory at a time.
 On Unix, task sidecars are written with mode 0600. Provider tokens read from
 the environment or official credential files are never persisted. `--json`
 output redacts sensitive headers and strips query strings from task views.
+
+Configuration files reject unknown keys, so a typo fails loudly instead of
+being ignored. `shaul config set` edits the TOML document in place and keeps
+existing comments and formatting. `shaul doctor` also checks the official
+Hugging Face and ModelScope credential files. Verification failures are renamed
+to `<name>.shaul.failed`, and `clean --orphans` ignores unsafe paths recorded in
+a sidecar.
 
 ## Documentation
 

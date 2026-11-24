@@ -6,6 +6,8 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.92-blue)](https://github.com/hushink/shaul/blob/main/Cargo.toml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/hushink/shaul/blob/main/LICENSE)
 
+**English** | [简体中文](README.zh-CN.md)
+
 A resumable, pluggable download engine for Rust — one API for HTTP(S),
 Hugging Face, ModelScope, BitTorrent, FTP and optional Xet.
 
@@ -168,8 +170,9 @@ runtime.
 | Custom protocols | `ResourceKind::Custom { protocol }` plus a custom parser/backend |
 
 Hugging Face and ModelScope links accept `--revision`, `--include` and
-`--exclude`. Repository HTTPS URLs also accept `/tree/<rev>`,
-`/blob/<rev>/<path>` and `/resolve/<rev>/<path>` path styles.
+`--exclude`; `--revision` overrides a revision embedded in the URL. Repository
+HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
+`/resolve/<rev>/<path>` path styles.
 
 ## Features
 
@@ -215,7 +218,8 @@ Hugging Face and ModelScope links accept `--revision`, `--include` and
 Enable `download.content_cache` (or `--content-cache`) to reuse files whose
 checksum and size are known. A cache hit is verified again before use; entries
 are written only after verification succeeds. The cache can be pruned by age
-or total size with `shaul clean --cache`.
+or total size with `shaul clean --cache`; destructive maintenance refuses a
+directory whose top level does not look like a content cache.
 
 ## Configuration
 
@@ -227,7 +231,9 @@ CLI flags > config file > environment variables > defaults
 
 `shaul config path` prints the resolved config path. `--config PATH` or
 `SHAUL_CONFIG` overrides it. `shaul config init|show|get|set|edit` manage the
-file.
+file. Unknown keys are rejected, and the file is written atomically; on Unix
+it is created with mode 0600. `config set` edits the file in place and
+preserves comments and key order.
 
 ```toml
 [download]
@@ -246,13 +252,13 @@ disk_space_check = true
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
-extract_dir = ""
+# extract_dir = "/path/to/extract"
 delete_archive = false
 
 [network]
 timeout_secs = 60
 connect_timeout_secs = 15
-retries = 5
+retries = 5            # HTTP transfers
 user_agent = "shaul/1.2.1"
 allow_cross_origin_auth = false
 # proxy = "http://127.0.0.1:8080"
@@ -280,6 +286,9 @@ persistence = true
 # Authorization = "Bearer ${env:MY_TOKEN}"
 ```
 
+Set `network.proxy = ""` (or pass `--proxy ""`) to disable environment
+proxies and connect directly.
+
 Common environment variables include `SHAUL_CONFIG`, `SHAUL_DIR`,
 `SHAUL_STATE_DIR`, `SHAUL_CONNECTIONS`, `SHAUL_RATE_LIMIT`,
 `SHAUL_PER_HOST_RATE_LIMIT`, `SHAUL_FILE_JOBS`, `SHAUL_CONTENT_CACHE`,
@@ -303,11 +312,15 @@ redacts sensitive headers and removes query strings from HTTP task views.
   verification. BitTorrent piece verification is internal and counts as
   verification.
 - Extraction is off by default. The archive is verified first, extracted into
-  a temporary directory and renamed into place.
-- `--output` is for single-file direct links. Use `--dir` for Hub repositories
-  and BitTorrent.
+  a temporary directory and renamed into place. `--rename` suffixes an
+  existing extraction target; `--no-delete-archive` keeps the archive even when
+  the config deletes archives.
+- `--output` is for single-file direct HTTP/FTP links. Use `--dir` for Hub
+  repositories and BitTorrent; those backends reject `--output`.
 - BitTorrent is leech-only: uploads are served while downloading, then the
-  torrent is paused after completion.
+  torrent is paused after completion. Existing destination files are refused
+  unless `--force` is passed; librqbit's persisted state normally handles
+  resume.
 
 ## Library documentation
 

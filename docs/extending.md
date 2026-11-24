@@ -215,6 +215,9 @@ Rules:
   is authoritative; an extraction error is not retried with the next extractor.
 - Write only under `ExtractorRequest::extract_root`. The registry canonicalizes
   the returned `ExtractReport::target` and rejects paths outside that root.
+- Honor `ExtractorRequest::rename_on_conflict` by suffixing the target
+  (`name-1`, `name-2`, ...) when it already exists instead of replacing it or
+  failing; the built-in extractor does this for `--rename`.
 - Reject absolute paths, `..`, symlinks and special entries in your format;
   `sanitize_relative_path` and `safe_join` are available for this.
 - Extract into a temporary directory and rename into place; do not leave a

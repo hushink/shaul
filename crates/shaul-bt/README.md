@@ -3,6 +3,8 @@
 [![crates.io](https://img.shields.io/crates/v/shaul-bt.svg)](https://crates.io/crates/shaul-bt)
 [![docs.rs](https://docs.rs/shaul-bt/badge.svg)](https://docs.rs/shaul-bt)
 
+**English** | [简体中文](README.zh-CN.md)
+
 BitTorrent support for [shaul](https://github.com/hushink/shaul), built on
 [`librqbit`](https://crates.io/crates/librqbit).
 
@@ -19,6 +21,9 @@ BitTorrent support for [shaul](https://github.com/hushink/shaul), built on
 - Progress delivered through shaul's typed event stream
 - Leech-only behavior: uploads are served while downloading, then the torrent
   is paused after completion; shaul does not keep seeding
+- Existing destination files are never replaced unless overwrite/`--force` is set
+- Lazy session construction: creating the backend has no filesystem side effects
+- `--output` is rejected; BitTorrent always writes under a destination directory
 
 ## Usage
 

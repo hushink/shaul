@@ -3,6 +3,8 @@
 [![crates.io](https://img.shields.io/crates/v/shaul-hub.svg)](https://crates.io/crates/shaul-hub)
 [![docs.rs](https://docs.rs/shaul-hub/badge.svg)](https://docs.rs/shaul-hub)
 
+**English** | [简体中文](README.zh-CN.md)
+
 [Hugging Face](https://huggingface.co) and
 [ModelScope](https://modelscope.cn) support for
 [shaul](https://github.com/hushink/shaul), a multi-protocol download engine.
@@ -33,6 +35,8 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>`,
 - Include/exclude globs for selecting files
 - Optional Hugging Face Xet downloads through the `xet` feature, with HTTP
   fallback when token or CAS operations fail
+- Xet is skipped when checksum verification is required but no checksum is known
+- Rejection of unsafe repository paths and file names before joining or caching
 - Provider credentials resolved at run time and never written to task sidecars
 
 ## Credentials
@@ -54,6 +58,9 @@ shaul-hub = "1.2"
 # Optional Hugging Face Xet support:
 # shaul-hub = { version = "1.2", features = ["xet"] }
 ```
+
+Hub downloads always write into a directory (`--dir`); a single-file
+`--output` path is rejected because snapshots may contain many files.
 
 ## Documentation
 

@@ -3,6 +3,8 @@
 [![crates.io](https://img.shields.io/crates/v/shaul-ftp.svg)](https://crates.io/crates/shaul-ftp)
 [![docs.rs](https://docs.rs/shaul-ftp/badge.svg)](https://docs.rs/shaul-ftp)
 
+**English** | [简体中文](README.zh-CN.md)
+
 FTP backend for [shaul](https://crates.io/crates/shaul).
 
 This crate adds an optional `ftp://` parser and a single-stream, resumable FTP

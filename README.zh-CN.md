@@ -6,6 +6,8 @@
 [![MSRV](https://img.shields.io/badge/MSRV-1.92-blue)](https://github.com/hushink/shaul/blob/main/Cargo.toml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/hushink/shaul/blob/main/LICENSE)
 
+[English](README.md) | **简体中文**
+
 可续传、可插拔的 Rust 下载引擎 —— 用一套 API 处理 HTTP(S)、Hugging Face、
 ModelScope、BitTorrent、FTP 与可选 Xet。
 
@@ -163,8 +165,8 @@ async fn main() -> shaul::Result<()> {
 | 自定义协议 | `ResourceKind::Custom { protocol }` + 自定义 parser/backend |
 
 Hugging Face / ModelScope 链接支持 `--revision`、`--include` 与
-`--exclude`。仓库 HTTPS URL 也接受 `/tree/<rev>`、`/blob/<rev>/<path>`
-和 `/resolve/<rev>/<path>` 形式。
+`--exclude`；`--revision` 会覆盖 URL 中携带的 revision。仓库 HTTPS URL 也接受
+`/tree/<rev>`、`/blob/<rev>/<path>` 和 `/resolve/<rev>/<path>` 形式。
 
 ## 核心能力
 
@@ -205,7 +207,8 @@ Hugging Face / ModelScope 链接支持 `--revision`、`--include` 与
 
 启用 `download.content_cache`（或 `--content-cache`）后，已知 checksum +
 size 的文件可以从内容寻址缓存复用。命中会再次校验；只有校验成功后才会写入
-缓存。可用 `shaul clean --cache` 按时间或总大小淘汰缓存。
+缓存。可用 `shaul clean --cache` 按时间或总大小淘汰缓存；破坏性清理会拒绝
+顶层布局不像内容缓存的目录。
 
 ## 配置
 
@@ -216,7 +219,9 @@ CLI 参数 > 配置文件 > 环境变量 > 默认值
 ```
 
 `shaul config path` 打印实际路径；`--config PATH` 或 `SHAUL_CONFIG` 可覆盖；
-`shaul config init|show|get|set|edit` 管理配置。
+`shaul config init|show|get|set|edit` 管理配置。未知键会被拒绝；配置文件以
+原子方式写入，在 Unix 上权限为 0600。`config set` 会原地修改文件，保留注释和
+键顺序。
 
 ```toml
 [download]
@@ -235,13 +240,13 @@ disk_space_check = true
 resume = true
 verify = "auto"        # auto | require | disabled
 extract = false
-extract_dir = ""
+# extract_dir = "/path/to/extract"
 delete_archive = false
 
 [network]
 timeout_secs = 60
 connect_timeout_secs = 15
-retries = 5
+retries = 5            # HTTP 传输
 user_agent = "shaul/1.2.1"
 allow_cross_origin_auth = false
 # proxy = "http://127.0.0.1:8080"
@@ -269,6 +274,8 @@ persistence = true
 # Authorization = "Bearer ${env:MY_TOKEN}"
 ```
 
+将 `network.proxy` 设为空字符串（或传 `--proxy ""`）可禁用环境代理、直接连接。
+
 常用环境变量包括 `SHAUL_CONFIG`、`SHAUL_DIR`、`SHAUL_STATE_DIR`、
 `SHAUL_CONNECTIONS`、`SHAUL_RATE_LIMIT`、`SHAUL_PER_HOST_RATE_LIMIT`、
 `SHAUL_FILE_JOBS`、`SHAUL_CONTENT_CACHE`、`SHAUL_CONTENT_CACHE_DIR`、
@@ -286,8 +293,13 @@ provider token 在运行时解析，不会写入任务 sidecar。Unix 上 sideca
 - `--verify` 要求存在校验值；`--no-verify` 关闭可选校验。BitTorrent piece
   校验由协议内部完成，并视为已校验。
 - 解压默认关闭。先校验压缩包，再解压到临时目录，最后原子 rename。
-- `--output` 用于单文件直链；Hub 仓库和 BitTorrent 请用 `--dir`。
-- BitTorrent 只做 leech：下载期间响应上传，完成后暂停，不常驻做种。
+  `--rename` 会为已存在的解压目标加后缀；`--no-delete-archive` 可覆盖配置中的
+  删除行为。
+- `--output` 用于单文件 HTTP/FTP 直链；Hub 仓库和 BitTorrent 请用 `--dir`，
+  这两个后端会拒绝 `--output`。
+- BitTorrent 只做 leech：下载期间响应上传，完成后暂停，不常驻做种。目标位置
+  已有文件时默认拒绝覆盖，需显式 `--force`；正常情况下续传由 librqbit 的
+  持久化状态负责。
 
 ## 库文档
 

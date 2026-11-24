@@ -146,6 +146,9 @@ network. Files are inserted only after the verify finalizer succeeds, so
 `--no-verify` downloads are never cached. `ContentCache::stats`,
 `ContentCache::prune` and `ContentCache::clear` are available for maintenance
 tooling; the CLI exposes them through `shaul stats` and `shaul clean --cache`.
+`ContentCache::clear`, `prune` and `prune_temp` refuse a root whose top level
+does not look like a content cache, so a misconfigured path cannot wipe an
+unrelated directory.
 
 ## One task at a time
 
