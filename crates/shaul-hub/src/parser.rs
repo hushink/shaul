@@ -5,7 +5,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use percent_encoding::percent_decode_str;
 use shaul_core::{
     Error, HubProvider, HubRepoType, Link, LinkParser, ParseOptions, Resource, ResourceFile,
-    ResourceKind, Result, sanitize_file_name,
+    ResourceKind, Result, sanitize_file_name, validate_relative_path,
 };
 use url::Url;
 
@@ -290,7 +290,9 @@ fn parse_hf_link(
         return Ok(None);
     }
     let mut revision = option_revision.unwrap_or("main").to_string();
-    if let Some(value) = query_value(&url, &["revision", "rev"]) {
+    if option_revision.is_none()
+        && let Some(value) = query_value(&url, &["revision", "rev"])
+    {
         revision = value;
     }
     let mut file = None;
@@ -298,17 +300,27 @@ fn parse_hf_link(
     match suffix {
         [] => {}
         [kind, rev] if kind.as_str() == "tree" => {
-            revision = rev.clone();
+            if option_revision.is_none() {
+                revision = rev.clone();
+            }
         }
         [kind, rev, rest @ ..] if kind.as_str() == "tree" && !rest.is_empty() => {
-            revision = rev.clone();
+            if option_revision.is_none() {
+                revision = rev.clone();
+            }
             implicit_include = Some(format!("{}/**", rest.join("/")));
         }
         [kind, rev, rest @ ..]
             if matches!(kind.as_str(), "blob" | "resolve" | "raw") && !rest.is_empty() =>
         {
-            revision = rev.clone();
-            file = Some(rest.join("/"));
+            let candidate = rest.join("/");
+            if validate_relative_path(&candidate).is_err() {
+                return Ok(None);
+            }
+            if option_revision.is_none() {
+                revision = rev.clone();
+            }
+            file = Some(candidate);
         }
         _ => return Ok(None),
     }
@@ -372,8 +384,9 @@ fn parse_ms_link(
     if parts.len() > 3 || (parts.len() == 3 && !matches!(parts[2].as_str(), "summary" | "files")) {
         return Ok(None);
     }
-    let revision = query_value(&url, &["Revision", "revision"])
-        .or_else(|| option_revision.map(str::to_string))
+    let revision = option_revision
+        .map(str::to_string)
+        .or_else(|| query_value(&url, &["Revision", "revision"]))
         .unwrap_or_else(|| "master".to_string());
     Ok(Some(HubSpec {
         repo,
@@ -518,6 +531,28 @@ mod tests {
     }
 
     #[test]
+    fn command_line_revision_wins_over_url_revision() {
+        let hf_endpoint = endpoint("https://huggingface.co");
+        let link = Link::new("https://huggingface.co/org/repo/tree/dev?revision=query").unwrap();
+        let spec = parse_hf_link(&link, Some("cli"), &hf_endpoint)
+            .unwrap()
+            .unwrap();
+        assert_eq!(spec.revision, "cli");
+
+        let spec = parse_hf_link(&link, None, &hf_endpoint).unwrap().unwrap();
+        assert_eq!(spec.revision, "dev");
+
+        let ms_endpoint = endpoint("https://modelscope.cn");
+        let link = Link::new("https://modelscope.cn/models/org/repo?revision=query").unwrap();
+        let spec = parse_ms_link(&link, Some("cli"), &ms_endpoint)
+            .unwrap()
+            .unwrap();
+        assert_eq!(spec.revision, "cli");
+        let spec = parse_ms_link(&link, None, &ms_endpoint).unwrap().unwrap();
+        assert_eq!(spec.revision, "query");
+    }
+
+    #[test]
     fn parses_hf_scheme_and_datasets() {
         let endpoint = endpoint("https://huggingface.co");
         let spec = parse_hf_link(
@@ -530,6 +565,20 @@ mod tests {
         assert_eq!(spec.repo, "org/data");
         assert_eq!(spec.repo_type, HubRepoType::Dataset);
         assert_eq!(spec.revision, "v1");
+    }
+
+    #[test]
+    fn rejects_unsafe_file_paths() {
+        let endpoint = endpoint("https://huggingface.co");
+        let link =
+            Link::new("https://huggingface.co/org/repo/resolve/main/%5C..%5C..%5Cetc%5Cpasswd")
+                .unwrap();
+        assert!(parse_hf_link(&link, None, &endpoint).unwrap().is_none());
+
+        let link =
+            Link::new("https://huggingface.co/org/repo/resolve/main/model%20v1.bin").unwrap();
+        let spec = parse_hf_link(&link, None, &endpoint).unwrap().unwrap();
+        assert_eq!(spec.file.as_deref(), Some("model v1.bin"));
     }
 
     #[test]

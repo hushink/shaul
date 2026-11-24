@@ -3,6 +3,8 @@
 [![crates.io](https://img.shields.io/crates/v/shaul-http.svg)](https://crates.io/crates/shaul-http)
 [![docs.rs](https://docs.rs/shaul-http/badge.svg)](https://docs.rs/shaul-http)
 
+**English** | [简体中文](README.zh-CN.md)
+
 Direct-link HTTP backend for [shaul](https://github.com/hushink/shaul), a
 multi-protocol download engine.
 
@@ -21,6 +23,9 @@ multi-protocol download engine.
 - SHA-256/SHA-512/SHA-1/MD5 checksums, `Digest` and `Content-MD5`
 - Opt-in content-addressed cache hits when checksum and size are known
 - `Content-Disposition` filename support
+- Cancellation that pauses with a checkpoint instead of losing partial data
+- Response-header timeouts and fsync-before-checkpoint durability
+- Proxy modes that distinguish ambient settings from an explicit direct connection
 
 ## Usage
 

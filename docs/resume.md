@@ -43,6 +43,13 @@ of appending to stale data.
 - Mirror fallback does not reuse the primary URL's partial bytes; the mirror
   transfer starts from its own checkpoint after the compatibility check.
 
+## BitTorrent
+
+- Resume relies on librqbit's persisted state under `<state_dir>/bt`.
+- Existing destination files are refused unless `--force`/`--overwrite` is
+  passed. Without persisted state (for example after clearing the state
+  directory), a restart that finds files on disk requires `--force`.
+
 ## FTP
 
 - `SIZE` and `MDTM` are collected when the server provides them.
@@ -85,7 +92,14 @@ The full request type and extension guide are in [extending.md](extending.md).
 - Backend without resume → engine clears the manifest and disables resume.
 - User passes `--no-resume` → the engine passes no manifest to the backend.
 - Failed verification → outputs are reset once and retried from scratch.
-- Final files are renamed into place only after finalizers succeed.
+- A terminal checksum mismatch quarantines the output as `<name>.shaul.failed`.
+- Checkpoints sync the partial file before the sidecar records the completed
+  ranges.
+- Tasks are claimed atomically and protected by a per-task OS lock; a second
+  process cannot run an active task.
+- The OS releases a runner's lock when its process exits, so a crashed
+  worker's task is recovered immediately by `run`.
+- Extraction is staged in a temporary directory and renamed into place.
 
 ### Residual risks
 

@@ -53,7 +53,10 @@ entries or more than 100 GiB of expanded content. Supported formats: zip, tar,
 tar.gz, tar.zst, gzip and zstd.
 
 Use `--extract-dir` for a custom destination and `--delete-archive` to remove
-the archive after extraction. Extraction is off by default.
+the archive after extraction; `--no-delete-archive` keeps it even when the
+config sets `delete_archive = true`. With `--rename`, an existing extraction
+target is suffixed (`name-1`, `name-2`, ...) instead of failing. Extraction is
+off by default.
 
 ## How do Hub caches work?
 
@@ -82,14 +85,17 @@ downloads are not cached. `shaul stats` reports entries/bytes and
 ## What do `doctor`, `stats` and `clean` do?
 
 - `doctor` checks config readability, state/download/cache directory
-  writability, proxy syntax and whether provider tokens are present. It exits
-  non-zero when a check fails.
+  writability, proxy syntax and whether provider credentials are available
+  from the environment or official credential files. It exits non-zero when a
+  check fails.
 - `stats` summarizes task states, known/downloaded bytes, queue depth and the
   content cache.
 - `clean --finished` removes completed/cancelled/failed sidecars;
   `--completed`, `--cancelled` and `--failed` select individual states;
-  `--orphans` removes `.shaul.part` files left by completed/cancelled tasks;
-  `--cache` removes content-cache entries. With `--cache`, add
+  `--orphans` removes destination-relative `.shaul.part` files left by
+  completed/cancelled tasks (unsafe paths in a sidecar are ignored);
+  `--cache` removes content-cache entries (it refuses a directory whose top
+  level does not look like a content cache). With `--cache`, add
   `--cache-older-than 30d` and/or `--cache-max-size 50GiB` to prune instead of
   clearing everything. Add `--dry-run` to preview and `--json` for
   machine-readable output. Destination files are never deleted by `clean`.
@@ -134,14 +140,19 @@ FTPS, FTP proxies and recursive directory downloads are not enabled yet.
 
 No. shaul is leech-only: it responds to uploads while downloading, then pauses
 the torrent after completion. Piece state and fastresume data are owned by
-librqbit under `<state_dir>/bt`.
+librqbit under `<state_dir>/bt`. Existing destination files are never replaced
+unless `--force`/`--overwrite` is passed; resume normally works through
+librqbit's persisted state.
 
 ## How do `add`, `run`, `pause` and `resume` interact?
 
 `shaul add` persists a task and exits. `shaul run` is a long-running worker
 that processes pending tasks; it holds a state-directory lock so only one
 worker runs per state directory. `pause`/`resume`/`cancel` edit the sidecar,
-and a running worker notices within about 500 ms.
+and a running worker notices within about 500 ms. Tasks are claimed atomically
+and protected by a per-task OS lock, so a second `shaul download`/`shaul run`
+cannot execute the same task concurrently. If a runner process dies, the OS
+releases its lock and the next `run` recovers the task immediately.
 
 ## How does queue priority work?
 
@@ -186,6 +197,8 @@ and telemetry examples.
 Yes in the 1.1 line:
 
 - `network.proxy` / `--proxy` accepts `http://`, `https://` and `socks5://`.
+  Set it to an empty string to bypass environment proxies and connect
+  directly.
 - `network.no_proxy` / `--no-proxy` is a comma-separated bypass list.
 - `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` are read by
   `Config::load`; explicit config and CLI values win.
@@ -219,8 +232,9 @@ task views, and provider tokens are never included.
 - An HTML file where a model file was expected usually means a Hub URL was
   parsed as a direct link, or the repository is gated/private. Check
   `shaul info <link>` and the provider token.
-- A `checksum mismatch` means the bytes differ from the expected digest; the
-  file is not finalized.
+- A `checksum mismatch` means the bytes differ from the expected digest. After
+  the automatic retry the output is renamed to `<name>.shaul.failed` so a
+  corrupt file cannot be mistaken for a successful download.
 - `insufficient disk space` means the preflight found less free space than the
   known remaining size. Free space, disable `download.disk_space_check`, or
   download to another filesystem.

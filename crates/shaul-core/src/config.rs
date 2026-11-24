@@ -82,21 +82,36 @@ pub struct DownloadConfig {
 #[serde(default)]
 #[non_exhaustive]
 pub struct NetworkConfig {
-    /// Total request timeout in seconds.
+    /// Timeout in seconds for receiving response headers and for each idle
+    /// body read. This is not a total transfer deadline.
     pub timeout_secs: u64,
     /// Connection timeout in seconds.
     pub connect_timeout_secs: u64,
-    /// Number of retry attempts for failed transfers.
+    /// Number of retry attempts for failed HTTP transfers. Hub metadata
+    /// requests are not retried; FTP and BitTorrent manage their own
+    /// connection-level retries.
     pub retries: u32,
     /// `User-Agent` header sent with every request.
     pub user_agent: String,
     /// Allow authentication headers to follow cross-origin redirects.
     pub allow_cross_origin_auth: bool,
-    /// Explicit HTTP/HTTPS/SOCKS proxy URL. When unset, the HTTP client keeps
-    /// reqwest's ambient behavior.
+    /// Explicit HTTP/HTTPS/SOCKS proxy URL. An empty string disables ambient
+    /// proxy environment variables; `None` keeps reqwest's ambient behavior.
     pub proxy: Option<String>,
     /// Comma-separated hosts that bypass the configured proxy.
     pub no_proxy: Option<String>,
+}
+
+/// How HTTP clients should resolve proxy settings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProxySetting {
+    /// Use reqwest's ambient/system proxy environment.
+    Ambient,
+    /// Explicitly bypass every proxy, including environment variables.
+    Disabled,
+    /// Use the configured proxy URL.
+    Url(String),
 }
 
 /// Hugging Face and ModelScope cache and endpoint settings.
@@ -315,6 +330,17 @@ impl Config {
         Ok(project_dirs()?.cache_dir().join("content"))
     }
 
+    /// Resolve the proxy mode from `network.proxy`. An empty configured value
+    /// means "direct connection"; an unset value keeps reqwest's ambient
+    /// environment behavior.
+    pub fn proxy_setting(&self) -> ProxySetting {
+        match self.network.proxy.as_deref() {
+            None => ProxySetting::Ambient,
+            Some(value) if value.trim().is_empty() => ProxySetting::Disabled,
+            Some(value) => ProxySetting::Url(value.to_string()),
+        }
+    }
+
     /// Configured Hugging Face endpoint or the public default.
     pub fn hf_endpoint(&self) -> String {
         self.hub
@@ -372,14 +398,58 @@ impl Config {
     }
 
     /// Serialize the config as TOML, creating parent directories as needed.
+    ///
+    /// The file is written through a sibling temporary file and renamed into
+    /// place. On Unix it is created with mode 0600 because it can contain
+    /// literal header values and proxy credentials.
     pub fn save(&self, path: &Path) -> Result<()> {
+        let text = toml::to_string_pretty(self)?;
+        Self::save_text(path, &text)
+    }
+
+    /// Atomically write TOML text to `path`, creating parent directories as
+    /// needed. On Unix the file is created with mode 0600.
+    pub fn save_text(path: &Path, text: &str) -> Result<()> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
         {
             std::fs::create_dir_all(parent)?;
         }
-        let text = toml::to_string_pretty(self)?;
-        std::fs::write(path, text)?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| Error::Config(format!("invalid config path: {}", path.display())))?;
+        let mut temp_name = std::ffi::OsString::from(".");
+        temp_name.push(file_name);
+        temp_name.push(format!(".tmp-{}", uuid::Uuid::new_v4()));
+        let temp = path.with_file_name(temp_name);
+
+        let write = || -> Result<()> {
+            let mut options = std::fs::OpenOptions::new();
+            options.create_new(true).write(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&temp)?;
+            use std::io::Write;
+            file.write_all(text.as_bytes())?;
+            file.sync_all()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600))?;
+            }
+            Ok(())
+        };
+        if let Err(error) = write() {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error);
+        }
+        if let Err(error) = std::fs::rename(&temp, path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.into());
+        }
         Ok(())
     }
 
@@ -710,13 +780,7 @@ impl Config {
             "network.allow_cross_origin_auth" => {
                 self.network.allow_cross_origin_auth = parse_value(value)?
             }
-            "network.proxy" => {
-                self.network.proxy = if value.trim().is_empty() {
-                    None
-                } else {
-                    Some(value.to_string())
-                }
-            }
+            "network.proxy" => self.network.proxy = Some(value.to_string()),
             "network.no_proxy" => {
                 self.network.no_proxy = if value.trim().is_empty() {
                     None
@@ -822,6 +886,14 @@ fn parse_value<T: FromStr>(value: &str) -> Result<T> {
         .map_err(|_| Error::Config(format!("invalid value: {value}")))
 }
 
+fn non_empty_path(value: PathBuf) -> Option<PathBuf> {
+    (!value.as_os_str().is_empty()).then_some(value)
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    (!value.trim().is_empty()).then_some(value)
+}
+
 /// Parse a verify mode name or one of its boolean-like aliases.
 pub fn parse_verify_mode(value: &str) -> Result<VerifyMode> {
     match value.trim().to_ascii_lowercase().as_str() {
@@ -877,6 +949,7 @@ pub fn parse_bytes(value: &str) -> Result<u64> {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PartialConfig {
     #[serde(default)]
     download: Option<PartialDownload>,
@@ -893,6 +966,7 @@ struct PartialConfig {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PartialDownload {
     #[serde(default)]
     dir: Option<PathBuf>,
@@ -931,6 +1005,7 @@ struct PartialDownload {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PartialNetwork {
     #[serde(default)]
     timeout_secs: Option<u64>,
@@ -949,6 +1024,7 @@ struct PartialNetwork {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PartialHub {
     #[serde(default)]
     use_cache: Option<bool>,
@@ -963,6 +1039,7 @@ struct PartialHub {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PartialBt {
     #[serde(default)]
     dht: Option<bool>,
@@ -1009,8 +1086,7 @@ impl PartialConfig {
                 config.download.content_cache = value;
             }
             if let Some(value) = download.content_cache_dir {
-                config.download.content_cache_dir =
-                    (!value.as_os_str().is_empty()).then_some(value);
+                config.download.content_cache_dir = non_empty_path(value);
             }
             if let Some(value) = download.disk_space_check {
                 config.download.disk_space_check = value;
@@ -1028,7 +1104,7 @@ impl PartialConfig {
                 config.download.extract = value;
             }
             if let Some(value) = download.extract_dir {
-                config.download.extract_dir = Some(value);
+                config.download.extract_dir = non_empty_path(value);
             }
             if let Some(value) = download.delete_archive {
                 config.download.delete_archive = value;
@@ -1051,7 +1127,7 @@ impl PartialConfig {
                 config.network.allow_cross_origin_auth = value;
             }
             if let Some(value) = network.proxy {
-                config.network.proxy = (!value.trim().is_empty()).then_some(value);
+                config.network.proxy = Some(value);
             }
             if let Some(value) = network.no_proxy {
                 config.network.no_proxy = (!value.trim().is_empty()).then_some(value);
@@ -1062,16 +1138,16 @@ impl PartialConfig {
                 config.hub.use_cache = value;
             }
             if let Some(value) = hub.hf_cache {
-                config.hub.hf_cache = Some(value);
+                config.hub.hf_cache = non_empty_path(value);
             }
             if let Some(value) = hub.modelscope_cache {
-                config.hub.modelscope_cache = Some(value);
+                config.hub.modelscope_cache = non_empty_path(value);
             }
             if let Some(value) = hub.hf_endpoint {
-                config.hub.hf_endpoint = Some(value);
+                config.hub.hf_endpoint = non_empty_string(value);
             }
             if let Some(value) = hub.modelscope_endpoint {
-                config.hub.modelscope_endpoint = Some(value);
+                config.hub.modelscope_endpoint = non_empty_string(value);
             }
         }
         if let Some(bt) = self.bt {
@@ -1091,11 +1167,15 @@ impl PartialConfig {
                 config.bt.peer_limit = Some(value);
             }
             if let Some(value) = bt.initial_peers {
-                config.bt.initial_peers = value;
+                config.bt.initial_peers = value
+                    .into_iter()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect();
             }
         }
         if let Some(value) = self.state_dir {
-            config.state_dir = Some(value);
+            config.state_dir = non_empty_path(value);
         }
         if let Some(headers) = self.headers {
             for (name, value) in headers {
@@ -1175,6 +1255,126 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unknown_config_keys() {
+        for text in [
+            "[download]\nconnection = 8\n",
+            "[dowload]\nconnections = 8\n",
+            "headers = { Authorization = \"x\" }\nextra = 1\n",
+            "[bt]\npeer_limits = 5\n",
+        ] {
+            assert!(
+                toml::from_str::<PartialConfig>(text).is_err(),
+                "unknown key was accepted: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_optional_values_are_unset() {
+        let partial: PartialConfig = toml::from_str(
+            r#"
+state_dir = ""
+[download]
+extract_dir = ""
+content_cache_dir = ""
+[hub]
+hf_cache = ""
+modelscope_cache = ""
+hf_endpoint = ""
+modelscope_endpoint = ""
+[bt]
+initial_peers = ["", " 1.2.3.4:6881 "]
+"#,
+        )
+        .unwrap();
+        let mut config = Config::default();
+        partial.apply(&mut config).unwrap();
+        assert!(config.state_dir.is_none());
+        assert!(config.download.extract_dir.is_none());
+        assert!(config.download.content_cache_dir.is_none());
+        assert!(config.hub.hf_cache.is_none());
+        assert!(config.hub.modelscope_cache.is_none());
+        assert!(config.hub.hf_endpoint.is_none());
+        assert!(config.hub.modelscope_endpoint.is_none());
+        assert_eq!(config.bt.initial_peers, vec!["1.2.3.4:6881".to_string()]);
+    }
+
+    #[test]
+    fn task_auth_overrides_config_authorization_header() {
+        let mut config = Config::default();
+        config
+            .headers
+            .insert("Authorization".to_string(), "Bearer config".to_string());
+        let options = TaskOptions {
+            request: RequestOptions {
+                auth: Some(crate::header::Auth::bearer("cli")),
+                ..RequestOptions::default()
+            },
+            ..TaskOptions::default()
+        };
+        let resolved = config.resolve(Path::new("."), &options).unwrap();
+        assert_eq!(
+            resolved.request.auth,
+            Some(crate::header::Auth::bearer("cli"))
+        );
+        assert!(
+            resolved
+                .request
+                .headers
+                .iter()
+                .all(|header| !header.name.eq_ignore_ascii_case("authorization"))
+        );
+    }
+
+    #[test]
+    fn proxy_setting_distinguishes_ambient_and_disabled() {
+        let mut config = Config::default();
+        assert_eq!(config.proxy_setting(), ProxySetting::Ambient);
+
+        config.network.proxy = Some("http://127.0.0.1:8080".to_string());
+        assert_eq!(
+            config.proxy_setting(),
+            ProxySetting::Url("http://127.0.0.1:8080".to_string())
+        );
+
+        let partial: PartialConfig = toml::from_str("[network]\nproxy = \"\"\n").unwrap();
+        config.network.proxy = Some("http://env:8080".to_string());
+        partial.apply(&mut config).unwrap();
+        assert_eq!(config.network.proxy, Some(String::new()));
+        assert_eq!(config.proxy_setting(), ProxySetting::Disabled);
+
+        config.set_value("network.proxy", "").unwrap();
+        assert_eq!(config.proxy_setting(), ProxySetting::Disabled);
+    }
+
+    #[test]
+    fn save_replaces_the_file_and_leaves_no_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = Config::default();
+        config.download.connections = 3;
+        config.save(&path).unwrap();
+        config.download.connections = 7;
+        config.save(&path).unwrap();
+
+        let loaded = Config::load_file_only(&path).unwrap();
+        assert_eq!(loaded.download.connections, 7);
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover temp files: {leftovers:?}");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+    }
+
+    #[test]
     fn resolves_proxy_and_rate_limits() {
         let mut config = Config::default();
         config.download.rate_limit = Some(1024);
@@ -1204,7 +1404,8 @@ mod tests {
         .unwrap();
         partial.apply(&mut config).unwrap();
         assert_eq!(config.download.rate_limit, None);
-        assert_eq!(config.network.proxy, None);
+        assert_eq!(config.network.proxy, Some(String::new()));
+        assert_eq!(config.proxy_setting(), ProxySetting::Disabled);
         assert_eq!(config.network.no_proxy, None);
     }
 }

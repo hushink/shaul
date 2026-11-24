@@ -10,6 +10,24 @@ const WINDOWS_RESERVED: &[&str] = &[
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
+/// Unicode format characters that can hide or spoof a file extension
+/// (bidirectional overrides, zero-width characters and friends).
+fn is_unsafe_format(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0000}'..='\u{E007F}'
+    )
+}
+
 /// Make a single filename safe on every supported platform.
 pub fn sanitize_file_name(name: &str) -> String {
     let decoded = percent_decode_str(name).decode_utf8_lossy();
@@ -25,6 +43,7 @@ pub fn sanitize_file_name(name: &str) -> String {
             || character == '>'
             || character == '|'
             || character.is_control()
+            || is_unsafe_format(character)
         {
             output.push('_');
         } else {
@@ -126,6 +145,45 @@ pub fn archive_stem(path: &Path) -> String {
     sanitize_file_name(&name)
 }
 
+/// Validate a relative output path without rewriting its components.
+///
+/// Use this for paths that come from remote metadata (Hub tree entries, for
+/// example) where percent-decoding or rewriting would change the file name.
+/// Absolute paths, Windows drive/UNC prefixes, `..` traversal, backslashes and
+/// NUL bytes are rejected so the path can be joined under the task
+/// destination on every supported platform.
+pub fn validate_relative_path(path: &str) -> Result<()> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains('\0')
+        || path.contains('\\')
+        || path.contains(':')
+        || path.chars().any(is_unsafe_format)
+    {
+        return Err(Error::InvalidLink(format!("unsafe relative path: {path}")));
+    }
+    let mut has_component = false;
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(value) => {
+                let value = value.to_string_lossy();
+                if value.is_empty() || value == "." || value == ".." {
+                    return Err(Error::InvalidLink(format!("unsafe relative path: {path}")));
+                }
+                has_component = true;
+            }
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(Error::InvalidLink(format!("unsafe relative path: {path}")));
+            }
+        }
+    }
+    if !has_component {
+        return Err(Error::InvalidLink(format!("unsafe relative path: {path}")));
+    }
+    Ok(())
+}
+
 /// Join a destination directory and a validated relative path.
 pub fn safe_join(root: &Path, relative: &str) -> Result<PathBuf> {
     let relative = sanitize_relative_path(relative)?;
@@ -142,6 +200,16 @@ mod tests {
     }
 
     #[test]
+    fn replaces_unicode_format_characters() {
+        let sanitized = sanitize_file_name("evil\u{202E}txt.exe\u{200B}");
+        assert!(!sanitized.contains('\u{202E}'));
+        assert!(!sanitized.contains('\u{200B}'));
+        assert!(sanitized.contains('_'));
+        assert!(validate_relative_path("evil\u{202E}.bin").is_err());
+        assert!(validate_relative_path("模型.bin").is_ok());
+    }
+
+    #[test]
     fn rejects_traversal() {
         assert!(sanitize_relative_path("../../etc/passwd").is_err());
         assert!(sanitize_relative_path("/etc/passwd").is_err());
@@ -149,6 +217,22 @@ mod tests {
             sanitize_relative_path("model/weights.bin").unwrap(),
             "model/weights.bin"
         );
+    }
+
+    #[test]
+    fn validates_relative_paths_without_rewriting() {
+        assert!(validate_relative_path("model/weights.bin").is_ok());
+        assert!(validate_relative_path("a%20b.bin").is_ok());
+        assert!(validate_relative_path("./config.json").is_ok());
+        assert!(validate_relative_path("").is_err());
+        assert!(validate_relative_path(".").is_err());
+        assert!(validate_relative_path("../escape.bin").is_err());
+        assert!(validate_relative_path("a/../../escape.bin").is_err());
+        assert!(validate_relative_path("/etc/passwd").is_err());
+        assert!(validate_relative_path("C:/Windows/System32/x").is_err());
+        assert!(validate_relative_path("..\\..\\escape.bin").is_err());
+        assert!(validate_relative_path("\\\\server\\share\\x").is_err());
+        assert!(validate_relative_path("a\0b").is_err());
     }
 
     #[test]

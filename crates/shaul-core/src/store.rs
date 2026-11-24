@@ -13,6 +13,10 @@ use crate::util::now_ms;
 /// locked. Returning an error aborts the update without saving.
 pub type TaskUpdate = Box<dyn for<'a> FnOnce(&'a mut Task) -> Result<()> + Send + 'static>;
 
+/// Guard returned by [`TaskStore::try_acquire_run_lock`]. Dropping it releases
+/// the cross-process lock.
+pub type RunLockGuard = Box<dyn Send + Sync>;
+
 /// Persistence interface for tasks.
 ///
 /// Implementations must make [`TaskStore::update`] atomic with respect to
@@ -31,6 +35,32 @@ pub trait TaskStore: Send + Sync {
     /// Applies `update` to the stored task under a lock and returns the saved
     /// result.
     async fn update(&self, id: TaskId, update: TaskUpdate) -> Result<Task>;
+
+    /// Inserts `task` unless an active task with the same deduplication key
+    /// already exists. Returns `(task, created)`; when `created` is false the
+    /// returned task is the existing active task. Implementations should make
+    /// the check-and-insert atomic with respect to concurrent writers.
+    async fn insert_unique(&self, task: Task) -> Result<(Task, bool)> {
+        for existing in self.list().await? {
+            if existing.state.is_active() && existing.key() == task.key() {
+                return Ok((existing, false));
+            }
+        }
+        self.save(&task).await?;
+        Ok((task, true))
+    }
+
+    /// Attempts to acquire the exclusive cross-process run lock for `id`.
+    ///
+    /// Returns `Ok(None)` when another live process holds the lock. The
+    /// returned guard must stay alive for the duration of the run; dropping
+    /// it, or process exit, releases the lock. The default implementation
+    /// performs no locking, so stores that need cross-process protection
+    /// should override it.
+    async fn try_acquire_run_lock(&self, _id: TaskId) -> Result<Option<RunLockGuard>> {
+        let guard: RunLockGuard = Box::new(());
+        Ok(Some(guard))
+    }
 }
 
 /// One JSON sidecar per task under a state directory. Writes are atomic
@@ -90,10 +120,13 @@ impl SidecarStore {
                 let _ = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600));
             }
         }
-        if path.exists() {
-            std::fs::remove_file(&path)?;
+        // `rename` replaces an existing file atomically on Unix and on Windows
+        // (MoveFileEx with MOVEFILE_REPLACE_EXISTING). Deleting the destination
+        // first would open a window where a crash loses the sidecar.
+        if let Err(error) = std::fs::rename(&temp, &path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error.into());
         }
-        std::fs::rename(&temp, &path)?;
         Ok(())
     }
 
@@ -151,6 +184,48 @@ impl SidecarStore {
             }
         })
     }
+
+    fn insert_unique_sync(&self, task: Task) -> Result<(Task, bool)> {
+        self.with_lock(|| {
+            for existing in self.list_sync()? {
+                if existing.state.is_active() && existing.key() == task.key() {
+                    return Ok((existing, false));
+                }
+            }
+            self.save_sync(&task)?;
+            Ok((task, true))
+        })
+    }
+
+    fn try_acquire_run_lock_sync(&self, id: TaskId) -> Result<Option<RunLockGuard>> {
+        let dir = self.root.join("locks");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(format!("{id}.lock"));
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)?;
+        match file.try_lock_exclusive() {
+            Ok(()) => {
+                let guard: RunLockGuard = Box::new(RunLock { _file: file });
+                Ok(Some(guard))
+            }
+            Err(error) if lock_is_contended(&error) => Ok(None),
+            Err(error) => Err(Error::Io(error)),
+        }
+    }
+}
+
+fn lock_is_contended(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::WouldBlock
+        || (error.raw_os_error().is_some()
+            && error.raw_os_error() == fs2::lock_contended_error().raw_os_error())
+}
+
+struct RunLock {
+    _file: File,
 }
 
 #[async_trait]
@@ -190,6 +265,20 @@ impl TaskStore for SidecarStore {
             .await
             .map_err(|error| Error::Other(format!("store task failed: {error}")))?
     }
+
+    async fn insert_unique(&self, task: Task) -> Result<(Task, bool)> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.insert_unique_sync(task))
+            .await
+            .map_err(|error| Error::Other(format!("store task failed: {error}")))?
+    }
+
+    async fn try_acquire_run_lock(&self, id: TaskId) -> Result<Option<RunLockGuard>> {
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.try_acquire_run_lock_sync(id))
+            .await
+            .map_err(|error| Error::Other(format!("store task failed: {error}")))?
+    }
 }
 
 #[allow(dead_code)]
@@ -226,6 +315,58 @@ mod tests {
             .unwrap();
         assert_eq!(updated.state, TaskState::Paused);
         assert_eq!(store.list().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn overwriting_a_sidecar_leaves_no_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SidecarStore::new(dir.path()).unwrap();
+        let mut task = Task::new(
+            Link::new("https://example.com/file").unwrap(),
+            dir.path().to_path_buf(),
+            TaskOptions::default(),
+        );
+        store.save(&task).await.unwrap();
+        task.state = TaskState::Paused;
+        store.save(&task).await.unwrap();
+
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "leftover temp files: {leftovers:?}");
+        assert_eq!(store.load(task.id).await.unwrap().state, TaskState::Paused);
+    }
+
+    #[tokio::test]
+    async fn unique_insert_returns_an_active_duplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SidecarStore::new(dir.path()).unwrap();
+        let first = Task::new(
+            Link::new("https://example.com/file").unwrap(),
+            dir.path().to_path_buf(),
+            TaskOptions::default(),
+        );
+        store.save(&first).await.unwrap();
+
+        let second = Task::new(
+            Link::new("https://example.com/file").unwrap(),
+            dir.path().to_path_buf(),
+            TaskOptions::default(),
+        );
+        let (returned, created) = store.insert_unique(second.clone()).await.unwrap();
+        assert!(!created);
+        assert_eq!(returned.id, first.id);
+        assert_eq!(store.list().await.unwrap().len(), 1);
+
+        let mut completed = first;
+        completed.state = TaskState::Completed;
+        store.save(&completed).await.unwrap();
+        let (returned, created) = store.insert_unique(second.clone()).await.unwrap();
+        assert!(created);
+        assert_eq!(returned.id, second.id);
+        assert_eq!(store.list().await.unwrap().len(), 2);
     }
 
     #[tokio::test]

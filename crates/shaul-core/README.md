@@ -3,6 +3,8 @@
 [![crates.io](https://img.shields.io/crates/v/shaul-core.svg)](https://crates.io/crates/shaul-core)
 [![docs.rs](https://docs.rs/shaul-core/badge.svg)](https://docs.rs/shaul-core)
 
+**English** | [简体中文](README.zh-CN.md)
+
 Core domain types and download engine for
 [shaul](https://github.com/hushink/shaul), a multi-protocol download engine for
 HTTP, BitTorrent, Hugging Face, ModelScope and FTP.
@@ -20,10 +22,13 @@ and runs verification and archive-extraction finalizers.
 
 - `Link`, `Resource`, `Router` and `ParserRegistry`
 - `LinkParser` and `DownloadBackend` extension traits
-- Task sidecars (`SidecarStore`), resume manifests and validators
+- Task sidecars (`SidecarStore`), atomic writes and cross-process run locks
+- Resume manifests and validators with stale-task recovery
 - Segmented-range arithmetic and SHA-256/SHA-512/SHA-1/MD5 checksums
 - Safe relative-path handling and archive detection/extraction
-- Verified content-addressed cache (`ContentCache`)
+- Failed-verification quarantine (`<name>.shaul.failed`)
+- Strict configuration parsing that rejects unknown keys and empty paths
+- Verified content-addressed cache (`ContentCache`) with layout guards
 - Async and blocking engine facades
 - Structured `DownloadEvent` stream and low-cardinality telemetry hooks
 

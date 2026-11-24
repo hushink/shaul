@@ -110,11 +110,32 @@ async fn downloads_a_local_torrent_from_a_local_peer() {
     let store: Arc<dyn TaskStore> = Arc::new(SidecarStore::new(state_dir).unwrap());
     let engine = DownloadEngine::new(Arc::new(router), store, config.clone());
 
+    let output_task = engine
+        .add(
+            Link::new(torrent_path.to_string_lossy()).unwrap(),
+            download_dir.clone(),
+            TaskOptions {
+                output: Some(download_dir.join("single.bin")),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let error = engine.run_task(output_task.id).await.unwrap_err();
+    assert!(
+        error.to_string().contains("not supported"),
+        "unexpected error: {error}"
+    );
+
+    let options = TaskOptions {
+        overwrite: true,
+        ..TaskOptions::default()
+    };
     let task = engine
         .add(
             Link::new(torrent_path.to_string_lossy()).unwrap(),
             download_dir.clone(),
-            TaskOptions::default(),
+            options,
         )
         .await
         .unwrap();
@@ -126,6 +147,105 @@ async fn downloads_a_local_torrent_from_a_local_peer() {
     assert_eq!(task.files.len(), 1);
     let output = download_dir.join(&task.files[0].path);
     assert_eq!(tokio::fs::read(&output).await.unwrap(), data);
+}
+
+#[tokio::test]
+async fn refuses_to_overwrite_existing_files_without_force() {
+    let base = tempfile::tempdir().unwrap();
+    let seed_dir = base.path().join("seed");
+    tokio::fs::create_dir_all(&seed_dir).await.unwrap();
+    let data = payload(512 * 1024);
+    let payload_path = seed_dir.join("payload.bin");
+    tokio::fs::write(&payload_path, &data).await.unwrap();
+
+    let created = create_torrent(
+        &payload_path,
+        CreateTorrentOptions {
+            name: Some("payload.bin"),
+            trackers: Vec::new(),
+            piece_length: Some(16 * 1024),
+        },
+        &BlockingSpawner::new(1),
+    )
+    .await
+    .unwrap();
+    let torrent_bytes = created.as_bytes().unwrap();
+    let torrent_path = base.path().join("payload.torrent");
+    tokio::fs::write(&torrent_path, &torrent_bytes)
+        .await
+        .unwrap();
+
+    let seeder = Session::new_with_opts(
+        seed_dir.clone(),
+        SessionOptions {
+            dht: None,
+            disable_trackers: true,
+            listen: Some(ListenerOptions {
+                listen_addr: "127.0.0.1:0".parse().unwrap(),
+                ..ListenerOptions::default()
+            }),
+            persistence: None,
+            fastresume: false,
+            ..SessionOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    let seeder_handle = seeder
+        .add_torrent(
+            AddTorrent::from_bytes(torrent_bytes.to_vec()),
+            Some(AddTorrentOptions {
+                overwrite: true,
+                output_folder: Some(seed_dir.to_string_lossy().to_string()),
+                disable_trackers: true,
+                ..AddTorrentOptions::default()
+            }),
+        )
+        .await
+        .unwrap()
+        .into_handle()
+        .unwrap();
+    wait_until_finished(&seeder_handle, "seeder").await;
+    let seeder_addr = seeder.listen_addr().expect("seeder listen address");
+
+    let download_dir = base.path().join("downloads");
+    tokio::fs::create_dir_all(&download_dir).await.unwrap();
+    let conflict = download_dir.join("payload.bin");
+    tokio::fs::write(&conflict, b"keep me").await.unwrap();
+
+    let state_dir = base.path().join("state");
+    let mut config = Config::default();
+    config.download.dir = download_dir.clone();
+    config.state_dir = Some(state_dir.clone());
+    config.bt.dht = false;
+    config.bt.trackers = false;
+    config.bt.listen = false;
+    config.bt.persistence = false;
+    config.bt.initial_peers = vec![seeder_addr.to_string()];
+
+    let parsers = ParserRegistry::new().with(parser_arc(TorrentParser));
+    let backends: Vec<Arc<dyn DownloadBackend>> =
+        vec![backend_arc(BtBackend::new(&config).unwrap())];
+    let router = Router::new(parsers, backends);
+    let store: Arc<dyn TaskStore> = Arc::new(SidecarStore::new(state_dir).unwrap());
+    let engine = DownloadEngine::new(Arc::new(router), store, config.clone());
+
+    let task = engine
+        .add(
+            Link::new(torrent_path.to_string_lossy()).unwrap(),
+            download_dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(60), engine.run_task(task.id))
+        .await
+        .expect("client download timed out");
+    assert!(
+        result.is_err(),
+        "a BitTorrent task must not overwrite existing files without --force"
+    );
+    assert_eq!(tokio::fs::read(&conflict).await.unwrap(), b"keep me");
 }
 
 #[tokio::test]

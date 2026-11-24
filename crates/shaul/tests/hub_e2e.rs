@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -583,6 +584,26 @@ async fn hf_single_file_link_uses_hub_backend() {
     let config = test_config(dir.path(), Provider::HuggingFace, &server.endpoint());
     let (engine, _) = shaul::default_engine(config.clone()).unwrap();
 
+    let mut output_options = options("test-token");
+    output_options.output = Some(config.download.dir.join("single.bin"));
+    let output_task = engine
+        .add(
+            Link::new(format!(
+                "{}/org/repo/resolve/main/weights/model.bin",
+                server.endpoint()
+            ))
+            .unwrap(),
+            config.download.dir.clone(),
+            output_options,
+        )
+        .await
+        .unwrap();
+    let error = engine.run_task(output_task.id).await.unwrap_err();
+    assert!(
+        error.to_string().contains("not supported"),
+        "unexpected error: {error}"
+    );
+
     let task = engine
         .add(
             Link::new(format!(
@@ -606,6 +627,40 @@ async fn hf_single_file_link_uses_hub_backend() {
 }
 
 #[tokio::test]
+async fn hub_metadata_requests_time_out() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        loop {
+            let Ok((socket, _)) = listener.accept().await else {
+                break;
+            };
+            held.push(socket);
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path(), Provider::HuggingFace, &format!("http://{addr}"));
+    config.network.timeout_secs = 1;
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let started = std::time::Instant::now();
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        engine.add(
+            Link::new(format!("http://{addr}/org/repo")).unwrap(),
+            config.download.dir.clone(),
+            options("test-token"),
+        ),
+    )
+    .await
+    .expect("Hub metadata request did not respect the network timeout");
+    let error = result.expect_err("metadata request should time out");
+    assert!(error.to_string().contains("timed out"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
 async fn hub_auth_failure_is_reported() {
     let files = mock_files();
     let server = spawn_hf(files, "test-token", "commit123").await;
@@ -626,4 +681,59 @@ async fn hub_auth_failure_is_reported() {
         message.contains("401") || message.contains("RepoNotFound"),
         "unexpected error: {message}"
     );
+}
+
+#[tokio::test]
+async fn hf_repo_rejects_traversal_paths() {
+    let files = vec![MockFile {
+        path: "../escape.bin".to_string(),
+        data: b"escape".to_vec(),
+        lfs: false,
+    }];
+    let server = spawn_hf(files, "test-token", "commit123").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path(), Provider::HuggingFace, &server.endpoint());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let error = engine
+        .add(
+            Link::new(format!("{}/org/repo", server.endpoint())).unwrap(),
+            config.download.dir.clone(),
+            options("test-token"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("unsafe Hub file path"),
+        "unexpected error: {error}"
+    );
+    assert!(!dir.path().join("escape.bin").exists());
+    assert!(!config.download.dir.join("escape.bin").exists());
+}
+
+#[tokio::test]
+async fn modelscope_repo_rejects_unsafe_paths() {
+    let files = vec![MockFile {
+        path: "C:/Windows/System32/evil.dll".to_string(),
+        data: b"evil".to_vec(),
+        lfs: false,
+    }];
+    let server = spawn_ms(files, "ms-token").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path(), Provider::ModelScope, &server.endpoint());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let error = engine
+        .add(
+            Link::new(format!("{}/models/org/repo", server.endpoint())).unwrap(),
+            config.download.dir.clone(),
+            options("ms-token"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("unsafe Hub file path"),
+        "unexpected error: {error}"
+    );
+    assert!(!config.download.dir.join("evil.dll").exists());
 }

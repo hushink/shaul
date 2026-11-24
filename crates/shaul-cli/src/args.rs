@@ -31,7 +31,7 @@ pub struct Cli {
     #[arg(long, short = 'v', global = true, action = ArgAction::Count)]
     pub verbose: u8,
 
-    /// HTTP/HTTPS/SOCKS proxy URL
+    /// HTTP/HTTPS/SOCKS proxy URL (empty disables environment proxies)
     #[arg(long, global = true, value_name = "URL")]
     pub proxy: Option<String>,
 
@@ -124,7 +124,7 @@ pub struct DownloadArgs {
     #[arg(long, short = 'd', value_name = "DIR")]
     pub dir: Option<PathBuf>,
 
-    /// Output file or directory (single-link only)
+    /// Output file or directory (direct HTTP/FTP links only)
     #[arg(long, short = 'o', value_name = "PATH")]
     pub output: Option<PathBuf>,
 
@@ -185,8 +185,12 @@ pub struct DownloadArgs {
     pub extract_dir: Option<PathBuf>,
 
     /// Delete the archive after successful extraction
-    #[arg(long)]
+    #[arg(long, conflicts_with = "no_delete_archive")]
     pub delete_archive: bool,
+
+    /// Keep the archive after extraction
+    #[arg(long)]
+    pub no_delete_archive: bool,
 
     /// Populate the provider cache for Hub tasks
     #[arg(long, conflicts_with = "no_cache")]
@@ -435,7 +439,11 @@ impl DownloadArgs {
             checksum,
             extract,
             extract_dir: self.extract_dir.clone(),
-            delete_archive: self.delete_archive.then_some(true),
+            delete_archive: if self.no_delete_archive {
+                Some(false)
+            } else {
+                self.delete_archive.then_some(true)
+            },
             cache,
             content_cache,
             request: self.request.to_settings()?,

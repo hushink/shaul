@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use shaul_core::{
     Auth, Checksum, ChecksumAlgorithm, Config, Error, Header, HubProvider, HubRepoType,
-    RequestOptions, Result, expand_env, sanitize_file_name,
+    ProxySetting, RequestOptions, Result, expand_env, sanitize_file_name, validate_relative_path,
 };
 use url::Url;
 
@@ -37,6 +37,7 @@ pub struct HubClient {
     ms_cache: PathBuf,
     global_headers: Vec<Header>,
     user_agent: String,
+    timeout: Duration,
 }
 
 impl HubClient {
@@ -50,6 +51,8 @@ impl HubClient {
             .user_agent(config.network.user_agent.clone());
         if let Some(proxy) = proxy_from_config(config)? {
             builder = builder.proxy(proxy);
+        } else if matches!(config.proxy_setting(), ProxySetting::Disabled) {
+            builder = builder.no_proxy();
         }
         let client = builder
             .build()
@@ -62,6 +65,7 @@ impl HubClient {
             ms_cache: config.modelscope_cache_dir()?,
             global_headers: config.header_defaults()?,
             user_agent: config.network.user_agent.clone(),
+            timeout: Duration::from_secs(config.network.timeout_secs.max(1)),
         })
     }
 
@@ -260,10 +264,10 @@ impl HubClient {
             if entry.kind.as_deref() != Some("file") {
                 continue;
             }
-            let path = entry.path.trim_start_matches('/').to_string();
-            if path.is_empty() {
-                continue;
-            }
+            let path = match validated_hub_path(&entry.path)? {
+                Some(path) => path,
+                None => continue,
+            };
             let mut metadata = BTreeMap::new();
             if let Some(oid) = &entry.oid {
                 metadata.insert("hub.oid".to_string(), oid.clone());
@@ -336,9 +340,12 @@ impl HubClient {
         let files = response.data.map(|data| data.files).unwrap_or_default();
         let mut entries = Vec::new();
         for file in files {
-            if file.kind.as_deref() == Some("tree") || file.path.is_empty() {
+            if file.kind.as_deref() == Some("tree") {
                 continue;
             }
+            let Some(path) = validated_hub_path(&file.path)? else {
+                continue;
+            };
             let checksum = file
                 .sha256
                 .as_deref()
@@ -349,7 +356,7 @@ impl HubClient {
                 metadata.insert("hub.sha256".to_string(), sha256.clone());
             }
             entries.push(HubEntry {
-                path: file.path.trim_start_matches('/').to_string(),
+                path,
                 size: file.size,
                 checksum,
                 metadata,
@@ -368,16 +375,22 @@ impl HubClient {
                 .and_then(|value| value.to_str().ok())
                 .map(|value| format!(" ({value})"))
                 .unwrap_or_default();
-            let body = response.text().await.unwrap_or_default();
+            let body = tokio::time::timeout(self.timeout, response.text())
+                .await
+                .ok()
+                .and_then(|result| result.ok())
+                .unwrap_or_default();
             let snippet: String = body.chars().take(300).collect();
             return Err(Error::Backend(format!(
                 "Hub API HTTP {status}{error_code}: {snippet}"
             )));
         }
-        let text = response
-            .text()
+        let text = tokio::time::timeout(self.timeout, response.text())
             .await
-            .map_err(|error| Error::Backend(format!("Hub API response: {error}")))?;
+            .map_err(|_| Error::Backend("Hub API response timed out".to_string()))?
+            .map_err(|error| {
+                Error::Backend(format!("Hub API response: {}", error.without_url()))
+            })?;
         serde_json::from_str(&text)
             .map_err(|error| Error::Backend(format!("Hub API returned invalid JSON: {error}")))
     }
@@ -412,10 +425,12 @@ impl HubClient {
         builder = builder
             .header(ACCEPT, "application/json")
             .header(USER_AGENT, &self.user_agent);
-        builder
-            .send()
+        tokio::time::timeout(self.timeout, builder.send())
             .await
-            .map_err(|error| Error::Backend(format!("Hub API request failed: {error}")))
+            .map_err(|_| Error::Backend("Hub API request timed out".to_string()))?
+            .map_err(|error| {
+                Error::Backend(format!("Hub API request failed: {}", error.without_url()))
+            })
     }
 }
 
@@ -444,6 +459,18 @@ fn push_path(segments: &mut url::PathSegmentsMut<'_>, path: &str) {
             segments.push(part);
         }
     }
+}
+
+/// Trim and validate a repository-relative path returned by provider metadata.
+/// Returns `None` for paths that are empty after trimming.
+fn validated_hub_path(raw: &str) -> Result<Option<String>> {
+    let path = raw.trim_start_matches('/').to_string();
+    if path.is_empty() {
+        return Ok(None);
+    }
+    validate_relative_path(&path)
+        .map_err(|_| Error::Backend(format!("unsafe Hub file path: {raw:?}")))?;
+    Ok(Some(path))
 }
 
 #[derive(Deserialize)]
@@ -495,6 +522,19 @@ struct MsFile {
     sha256: Option<String>,
     #[serde(rename = "Type", default)]
     kind: Option<String>,
+}
+
+/// Whether a Hugging Face token is available from the environment or an
+/// official credential file. Used by `shaul doctor`.
+pub fn hf_token_available() -> bool {
+    hf_token().is_some()
+}
+
+/// Whether ModelScope credentials (a token or a session cookie) are available
+/// from the environment or the official credential files.
+pub fn modelscope_credentials_available() -> bool {
+    let credentials = modelscope_credentials();
+    credentials.token.is_some() || credentials.cookie.is_some()
 }
 
 fn hf_token() -> Option<String> {
@@ -643,10 +683,10 @@ fn parse_cookie_line(line: &str) -> Option<String> {
 }
 
 fn proxy_from_config(config: &Config) -> Result<Option<reqwest::Proxy>> {
-    let Some(url) = config.network.proxy.as_deref() else {
+    let ProxySetting::Url(url) = config.proxy_setting() else {
         return Ok(None);
     };
-    let mut proxy = reqwest::Proxy::all(url)
+    let mut proxy = reqwest::Proxy::all(&url)
         .map_err(|error| Error::Config(format!("invalid proxy URL: {error}")))?;
     if let Some(value) = config.network.no_proxy.as_deref()
         && let Some(no_proxy) = reqwest::NoProxy::from_string(value)
@@ -677,6 +717,35 @@ mod tests {
         let entry: HfEntry =
             serde_json::from_str(r#"{"type":"file","path":"a","size":1,"xetHash":"abc"}"#).unwrap();
         assert_eq!(entry.xet_hash.as_deref(), Some("abc"));
+    }
+
+    #[test]
+    fn proxy_configuration_supports_disabling_ambient_proxies() {
+        let mut config = Config::default();
+        assert!(proxy_from_config(&config).unwrap().is_none());
+
+        config.network.proxy = Some(String::new());
+        assert_eq!(config.proxy_setting(), ProxySetting::Disabled);
+        assert!(proxy_from_config(&config).unwrap().is_none());
+
+        config.network.proxy = Some("http://127.0.0.1:8080".to_string());
+        assert!(proxy_from_config(&config).unwrap().is_some());
+    }
+
+    #[test]
+    fn validates_hub_paths() {
+        assert_eq!(
+            validated_hub_path("weights/model.bin").unwrap().as_deref(),
+            Some("weights/model.bin")
+        );
+        assert_eq!(
+            validated_hub_path("/weights/model.bin").unwrap().as_deref(),
+            Some("weights/model.bin")
+        );
+        assert!(validated_hub_path("").unwrap().is_none());
+        assert!(validated_hub_path("../escape.bin").is_err());
+        assert!(validated_hub_path("..\\..\\escape.bin").is_err());
+        assert!(validated_hub_path("C:/Windows/System32/evil.dll").is_err());
     }
 
     #[test]

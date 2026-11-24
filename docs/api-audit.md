@@ -229,9 +229,10 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    1.x 不会更换这些选择；如果必须升级到不兼容的大版本，按 major 处理。
 5. **sidecar 与 CLI 兼容**：CLI 的 `--json` 事件是 NDJSON，稳定字段包括
    `event`、`task_id`、`state`、`file`、`bytes` 等；新增字段是 minor。
-   `config.toml` 通过 `PartialConfig` 合并，未知键被忽略以保证前向兼容；
-   1.x 不会改为拒绝未知键。新增配置键是 minor，改变已有键的含义是 major。
-   sidecar JSON 同样忽略未知字段，新增字段必须带 `#[serde(default)]`。
+   `config.toml` 通过 `PartialConfig` 合并；为避免拼写错误被静默忽略，未知
+   键现在会被拒绝并在 CHANGELOG 中标注。新增配置键是 minor，改变已有键的
+   含义是 major；旧版本读取新键会报错，发布时需要提醒用户。
+   sidecar JSON 仍然忽略未知字段，新增字段必须带 `#[serde(default)]`。
 6. **平台差异**：Hub cache 优先 hardlink，失败时回退 copy；Windows 的
    `rename` 语义与 Unix 不同。跨平台 CI 必须覆盖 Linux/Windows/macOS。
 7. **BT 行为**：leech-only，完成后暂停，不做种。改变这一行为属于 major。

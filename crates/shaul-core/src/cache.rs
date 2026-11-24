@@ -238,6 +238,35 @@ impl ContentCache {
     }
 }
 
+const CACHE_ALGORITHM_DIRS: &[&str] = &["sha256", "sha512", "sha1", "md5"];
+
+/// Refuse destructive maintenance on a directory that does not look like a
+/// content cache. The root must be empty or contain only algorithm
+/// directories and temporary files written by [`ContentCache::insert`].
+fn ensure_cache_layout(root: &Path) -> Result<()> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(Error::Io(error)),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let known_dir = file_type.is_dir() && CACHE_ALGORITHM_DIRS.contains(&name.as_ref());
+        let temp_file = file_type.is_file() && name.starts_with(".tmp-");
+        if !known_dir && !temp_file {
+            return Err(Error::Config(format!(
+                "refusing to clean {}: unexpected entry {:?}; set download.content_cache_dir to a dedicated cache directory",
+                root.display(),
+                name
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_checksum(checksum: &Checksum) -> Result<()> {
     if checksum.hex.len() != checksum.algorithm.hex_len() || hex::decode(&checksum.hex).is_err() {
         return Err(Error::Config(format!(
@@ -286,6 +315,7 @@ fn walk(path: &Path, stats: &mut CacheStats) -> Result<()> {
 }
 
 fn clear_blocking(root: &Path) -> Result<u64> {
+    ensure_cache_layout(root)?;
     let stats = stats_blocking(root)?;
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
@@ -311,6 +341,7 @@ fn prune_blocking(
     max_bytes: Option<u64>,
     apply: bool,
 ) -> Result<CachePruneReport> {
+    ensure_cache_layout(root)?;
     let mut entries = Vec::new();
     collect_entries(root, &mut entries)?;
     let now = SystemTime::now();
@@ -411,6 +442,7 @@ fn collect_entries(root: &Path, entries: &mut Vec<CacheEntryMeta>) -> Result<()>
 }
 
 fn prune_temp_blocking(root: &Path) -> Result<u64> {
+    ensure_cache_layout(root)?;
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -498,8 +530,10 @@ mod tests {
     async fn prunes_oldest_entries_to_a_size_limit() {
         let dir = tempfile::tempdir().unwrap();
         let cache = ContentCache::new(dir.path()).unwrap();
-        let old_path = dir.path().join("old");
-        let new_path = dir.path().join("new");
+        let entry_dir = dir.path().join("sha256").join("aa");
+        std::fs::create_dir_all(&entry_dir).unwrap();
+        let old_path = entry_dir.join("old");
+        let new_path = entry_dir.join("new");
         std::fs::write(&old_path, b"0123456789").unwrap();
         std::fs::write(&new_path, b"12345").unwrap();
         let old_time = SystemTime::now() - Duration::from_secs(3600);
@@ -520,6 +554,24 @@ mod tests {
         assert_eq!(report.bytes_remaining, 5);
         assert!(!old_path.exists());
         assert!(new_path.exists());
+    }
+
+    #[tokio::test]
+    async fn refuses_destructive_maintenance_outside_a_cache_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = ContentCache::new(dir.path()).unwrap();
+        let keep = dir.path().join("notes.txt");
+        tokio::fs::write(&keep, b"keep").await.unwrap();
+
+        assert!(cache.clear().await.is_err());
+        assert!(cache.prune(None, None).await.is_err());
+        assert!(cache.prune_preview(None, None).await.is_err());
+        assert!(cache.prune_temp().await.is_err());
+        assert_eq!(tokio::fs::read(&keep).await.unwrap(), b"keep");
+
+        let empty = tempfile::tempdir().unwrap();
+        let empty_cache = ContentCache::new(empty.path()).unwrap();
+        assert_eq!(empty_cache.clear().await.unwrap(), 0);
     }
 
     #[tokio::test]

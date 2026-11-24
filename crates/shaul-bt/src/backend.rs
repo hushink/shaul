@@ -34,27 +34,18 @@ struct BtOptions {
     listen: bool,
     persistence: bool,
     peer_limit: Option<usize>,
-    initial_peers: Vec<SocketAddr>,
+    initial_peers: Vec<String>,
     client_name: String,
 }
 
 impl BtBackend {
     /// Create a backend using the BitTorrent settings from `config`.
+    ///
+    /// Construction does not create directories or validate BT-only settings,
+    /// so commands such as `shaul list` have no BT-related side effects.
     pub fn new(config: &Config) -> Result<Self> {
         let state_dir = config.state_dir()?.join("bt");
-        std::fs::create_dir_all(&state_dir)?;
         let output_root = absolute_path(&config.download.dir);
-        std::fs::create_dir_all(&output_root)?;
-        let initial_peers = config
-            .bt
-            .initial_peers
-            .iter()
-            .map(|value| {
-                value.parse::<SocketAddr>().map_err(|error| {
-                    Error::Config(format!("invalid BT initial peer {value}: {error}"))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             session: Arc::new(OnceCell::new()),
             output_root,
@@ -65,7 +56,7 @@ impl BtBackend {
                 listen: config.bt.listen,
                 persistence: config.bt.persistence,
                 peer_limit: config.bt.peer_limit,
-                initial_peers,
+                initial_peers: config.bt.initial_peers.clone(),
                 client_name: format!("shaul/{}", env!("CARGO_PKG_VERSION")),
             },
         })
@@ -75,6 +66,8 @@ impl BtBackend {
         let session =
             self.session
                 .get_or_try_init(|| async {
+                    tokio::fs::create_dir_all(&self.state_dir).await?;
+                    tokio::fs::create_dir_all(&self.output_root).await?;
                     let options = SessionOptions {
                         dht: self.options.dht.then(DhtSessionConfig::default),
                         disable_trackers: !self.options.trackers,
@@ -100,6 +93,11 @@ impl BtBackend {
     }
 
     async fn download_inner(&self, request: DownloadRequest) -> Result<DownloadOutcome> {
+        if request.options.output.is_some() {
+            return Err(Error::Config(
+                "--output is not supported for BitTorrent; use --dir".to_string(),
+            ));
+        }
         let source = match &request.resource.kind {
             ResourceKind::BitTorrent { source, .. } => *source,
             _ => {
@@ -137,11 +135,24 @@ impl BtBackend {
         let session = self.session().await?;
         let destination = absolute_path(&request.destination);
         tokio::fs::create_dir_all(&destination).await?;
+        let initial_peers = self
+            .options
+            .initial_peers
+            .iter()
+            .map(|value| {
+                value.parse::<SocketAddr>().map_err(|error| {
+                    Error::Config(format!("invalid BT initial peer {value}: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // Never replace existing destination files unless the caller asked for
+        // it. Resuming relies on librqbit's persisted state; with persistence
+        // disabled a restart that finds existing files fails unless --force is
+        // passed, which is safer than silently overwriting them.
         let add_options = AddTorrentOptions {
-            overwrite: true,
+            overwrite: request.options.overwrite,
             output_folder: Some(destination.to_string_lossy().to_string()),
-            initial_peers: (!self.options.initial_peers.is_empty())
-                .then(|| self.options.initial_peers.clone()),
+            initial_peers: (!initial_peers.is_empty()).then_some(initial_peers),
             disable_trackers: !self.options.trackers,
             peer_limit: self.options.peer_limit,
             ..AddTorrentOptions::default()
@@ -364,5 +375,24 @@ fn absolute_path(path: &Path) -> PathBuf {
         std::env::current_dir()
             .map(|cwd| cwd.join(path))
             .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn construction_does_not_create_directories() {
+        let base = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        config.download.dir = base.path().join("downloads");
+        config.state_dir = Some(base.path().join("state"));
+        config.bt.initial_peers = vec!["not-an-address".to_string()];
+
+        let backend = BtBackend::new(&config).unwrap();
+        drop(backend);
+        assert!(!config.download.dir.exists());
+        assert!(!config.state_dir.as_ref().unwrap().join("bt").exists());
     }
 }

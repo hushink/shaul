@@ -15,9 +15,9 @@ use reqwest::{Client, Response, StatusCode};
 use shaul_core::{
     BackendCapabilities, Checksum, ChecksumAlgorithm, Config, ContentCache, DownloadBackend,
     DownloadOutcome, DownloadRequest, Error, EventKind, EventSink, FileOutcome, FileResume, Header,
-    Resource, ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskId, TaskResume, Telemetry,
-    Validator, VerifyMode, completed_bytes, merge_ranges, metrics, missing_ranges, part_path,
-    sanitize_file_name, split_range,
+    ProxySetting, Resource, ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskId,
+    TaskResume, Telemetry, Validator, VerifyMode, completed_bytes, merge_ranges, metrics,
+    missing_ranges, part_path, sanitize_file_name, split_range,
 };
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Mutex;
@@ -85,6 +85,8 @@ impl HttpBackend {
             .user_agent(config.network.user_agent.clone());
         if let Some(proxy) = proxy_from_config(config)? {
             builder = builder.proxy(proxy);
+        } else if matches!(config.proxy_setting(), ProxySetting::Disabled) {
+            builder = builder.no_proxy();
         }
         let client = builder
             .build()
@@ -161,7 +163,10 @@ impl HttpBackend {
         let mut urls = vec![file.url.clone()];
         for mirror in &request.options.mirrors {
             if !matches!(mirror.scheme(), "http" | "https") {
-                warning(request, format!("ignoring non-HTTP mirror URL: {mirror}"));
+                warning(
+                    request,
+                    format!("ignoring non-HTTP mirror URL: {}", redacted_url(mirror)),
+                );
                 continue;
             }
             if !urls.contains(mirror) {
@@ -176,7 +181,10 @@ impl HttpBackend {
                 Ok(probe) => probe,
                 Err(error) if error.is_cancelled() => return Err(error),
                 Err(error) => {
-                    warning(request, format!("download URL {url} failed: {error}"));
+                    warning(
+                        request,
+                        format!("download URL {} failed: {error}", redacted_url(url)),
+                    );
                     last_error = Some(error);
                     continue;
                 }
@@ -184,6 +192,7 @@ impl HttpBackend {
             let validator = probe.validator();
             if let Some(reference) = &reference {
                 if !mirror_compatible(reference, &validator, checksum.is_some()) {
+                    let url = redacted_url(url);
                     warning(
                         request,
                         format!("mirror {url} is incompatible with the primary response"),
@@ -197,7 +206,10 @@ impl HttpBackend {
                 reference = Some(validator.clone());
             }
             if index > 0 {
-                warning(request, format!("falling back to mirror {url}"));
+                warning(
+                    request,
+                    format!("falling back to mirror {}", redacted_url(url)),
+                );
             }
             match self
                 .download_file_with_probe(request, &candidate, task_resume, probe)
@@ -206,7 +218,10 @@ impl HttpBackend {
                 Ok(outcome) => return Ok(outcome),
                 Err(error) if error.is_cancelled() => return Err(error),
                 Err(error) => {
-                    warning(request, format!("download URL {url} failed: {error}"));
+                    warning(
+                        request,
+                        format!("download URL {} failed: {error}", redacted_url(url)),
+                    );
                     last_error = Some(error);
                 }
             }
@@ -315,44 +330,51 @@ impl HttpBackend {
             let part = manifest_path(&request.destination, &stored.part_path);
             if tokio::fs::try_exists(&final_path).await? {
                 let size = tokio::fs::metadata(&final_path).await?.len();
-                let relative = relative_path(&request.destination, &final_path);
-                request.events.emit(EventKind::FileStarted {
-                    task_id: request.task_id,
-                    file: relative.clone(),
-                    total_bytes: Some(size),
-                });
-                request.events.emit(EventKind::Progress {
-                    task_id: request.task_id,
-                    file: relative.clone(),
-                    downloaded_bytes: size,
-                    total_bytes: Some(size),
-                });
-                return Ok(FileOutcome::new(
-                    final_path,
-                    relative,
-                    size,
-                    stored.checksum.or(request.options.checksum.clone()),
-                    false,
-                ));
+                // A destination whose size no longer matches the completed
+                // manifest is not trusted; fall through to the normal conflict
+                // policy and resume logic.
+                if stored.total_size.is_none_or(|total| total == size) {
+                    let relative = relative_path(&request.destination, &final_path);
+                    request.events.emit(EventKind::FileStarted {
+                        task_id: request.task_id,
+                        file: relative.clone(),
+                        total_bytes: Some(size),
+                    });
+                    request.events.emit(EventKind::Progress {
+                        task_id: request.task_id,
+                        file: relative.clone(),
+                        downloaded_bytes: size,
+                        total_bytes: Some(size),
+                    });
+                    return Ok(FileOutcome::new(
+                        final_path,
+                        relative,
+                        size,
+                        stored.checksum.or(request.options.checksum.clone()),
+                        false,
+                    ));
+                }
             }
             if tokio::fs::try_exists(&part).await? {
-                ensure_parent(&final_path).await?;
-                remove_if_exists(&final_path).await?;
-                tokio::fs::rename(&part, &final_path).await?;
-                let size = tokio::fs::metadata(&final_path).await?.len();
-                let relative = relative_path(&request.destination, &final_path);
-                request.events.emit(EventKind::FileStarted {
-                    task_id: request.task_id,
-                    file: relative.clone(),
-                    total_bytes: Some(size),
-                });
-                return Ok(FileOutcome::new(
-                    final_path,
-                    relative,
-                    size,
-                    stored.checksum.or(request.options.checksum.clone()),
-                    false,
-                ));
+                let size = tokio::fs::metadata(&part).await?.len();
+                if stored.total_size.is_none_or(|total| total == size) {
+                    ensure_parent(&final_path).await?;
+                    remove_if_exists(&final_path).await?;
+                    tokio::fs::rename(&part, &final_path).await?;
+                    let relative = relative_path(&request.destination, &final_path);
+                    request.events.emit(EventKind::FileStarted {
+                        task_id: request.task_id,
+                        file: relative.clone(),
+                        total_bytes: Some(size),
+                    });
+                    return Ok(FileOutcome::new(
+                        final_path,
+                        relative,
+                        size,
+                        stored.checksum.or(request.options.checksum.clone()),
+                        false,
+                    ));
+                }
             }
         }
 
@@ -563,9 +585,21 @@ impl HttpBackend {
             Err(error) => return Err(error),
         };
 
+        // Cancellation after the last byte still pauses the task; the saved
+        // checkpoint lets the next run finish without re-downloading.
+        if request.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
         if let Some(total) = final_resume.total_size
             && total > 0
         {
+            if final_resume.completed_bytes() < total {
+                return Err(Error::Backend(format!(
+                    "transfer ended at {} of {total} bytes",
+                    final_resume.completed_bytes()
+                )));
+            }
             final_resume.completed = vec![shaul_core::ByteRange::new(0, total)?];
         }
         final_resume.normalize();
@@ -740,9 +774,19 @@ impl HttpBackend {
             );
             let response = tokio::select! {
                 _ = cancel.cancelled() => return Err(Error::Cancelled),
-                response = self.client.get(current.clone()).headers(headers.clone()).send() => {
-                    response.map_err(|error| Error::Backend(format!("request failed: {error}")))?
-                }
+                result = tokio::time::timeout(
+                    options.timeout,
+                    self.client.get(current.clone()).headers(headers.clone()).send(),
+                ) => match result {
+                    Ok(response) => response.map_err(|error| {
+                        Error::Backend(format!("request failed: {}", error.without_url()))
+                    })?,
+                    Err(_) => {
+                        return Err(Error::Backend(
+                            "request timed out waiting for response headers".to_string(),
+                        ));
+                    }
+                },
             };
             capture_headers(&response, &mut captured);
             let status = response.status();
@@ -885,6 +929,12 @@ impl HttpBackend {
             return Err(error);
         }
 
+        // Workers stop on cancellation without recording an error, so this
+        // must be checked before treating the transfer as complete.
+        if request.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
         if range_broken.load(Ordering::SeqCst) {
             request.events.emit(EventKind::Warning {
                 task_id: Some(request.task_id),
@@ -924,6 +974,12 @@ impl HttpBackend {
             .get(key)
             .cloned()
             .ok_or_else(|| Error::Backend("missing resume state after transfer".to_string()))?;
+        if final_resume.completed_bytes() < total {
+            return Err(Error::Backend(format!(
+                "segmented transfer ended at {} of {total} bytes",
+                final_resume.completed_bytes()
+            )));
+        }
         final_resume.completed = vec![shaul_core::ByteRange::new(0, total)?];
         final_resume.normalize();
         let mut snapshot = final_state;
@@ -983,6 +1039,10 @@ impl HttpBackend {
             {
                 Ok(()) => {
                     let _guard = checkpoint_lock.lock().await;
+                    // Make the bytes durable before the sidecar claims them.
+                    part.sync_all()
+                        .await
+                        .map_err(|error| FetchError::Fatal(Error::Io(error)))?;
                     let snapshot = {
                         let mut state = resume_state.lock().await;
                         if let Some(entry) = state.files.get_mut(key) {
@@ -1233,7 +1293,15 @@ impl HttpBackend {
         let mut attempt = 0u32;
         loop {
             if request.cancel.is_cancelled() {
-                checkpoint_single(request, &mut task_resume, key, &mut file_resume, offset).await?;
+                checkpoint_single(
+                    request,
+                    &mut task_resume,
+                    key,
+                    &mut file_resume,
+                    offset,
+                    &mut part,
+                )
+                .await?;
                 return Err(Error::Cancelled);
             }
             let range = if offset > 0 && range_supported {
@@ -1263,13 +1331,27 @@ impl HttpBackend {
                 .await;
             let (response, captured, _, _permit) = match sent {
                 Err(Error::Cancelled) => {
-                    checkpoint_single(request, &mut task_resume, key, &mut file_resume, offset)
-                        .await?;
+                    checkpoint_single(
+                        request,
+                        &mut task_resume,
+                        key,
+                        &mut file_resume,
+                        offset,
+                        &mut part,
+                    )
+                    .await?;
                     return Err(Error::Cancelled);
                 }
                 Err(error) => {
-                    checkpoint_single(request, &mut task_resume, key, &mut file_resume, offset)
-                        .await?;
+                    checkpoint_single(
+                        request,
+                        &mut task_resume,
+                        key,
+                        &mut file_resume,
+                        offset,
+                        &mut part,
+                    )
+                    .await?;
                     if attempt >= request.options.retries {
                         return Err(error);
                     }
@@ -1291,7 +1373,15 @@ impl HttpBackend {
                 || status == StatusCode::TOO_MANY_REQUESTS
             {
                 drop(response);
-                checkpoint_single(request, &mut task_resume, key, &mut file_resume, offset).await?;
+                checkpoint_single(
+                    request,
+                    &mut task_resume,
+                    key,
+                    &mut file_resume,
+                    offset,
+                    &mut part,
+                )
+                .await?;
                 if attempt >= request.options.retries {
                     return Err(http_error(status, &captured));
                 }
@@ -1334,8 +1424,15 @@ impl HttpBackend {
             loop {
                 let next = tokio::select! {
                     _ = request.cancel.cancelled() => {
-                        checkpoint_single(request, &mut task_resume, key, &mut file_resume, offset).await?;
-                        part.sync_all().await?;
+                        checkpoint_single(
+                            request,
+                            &mut task_resume,
+                            key,
+                            &mut file_resume,
+                            offset,
+                            &mut part,
+                        )
+                        .await?;
                         return Err(Error::Cancelled);
                     }
                     next = tokio::time::timeout(request.options.timeout, stream.next()) => next,
@@ -1361,6 +1458,7 @@ impl HttpBackend {
                                 key,
                                 &mut file_resume,
                                 offset,
+                                &mut part,
                             )
                             .await?;
                             since_checkpoint = 0;
@@ -1401,7 +1499,15 @@ impl HttpBackend {
             }
 
             part.flush().await?;
-            checkpoint_single(request, &mut task_resume, key, &mut file_resume, offset).await?;
+            checkpoint_single(
+                request,
+                &mut task_resume,
+                key,
+                &mut file_resume,
+                offset,
+                &mut part,
+            )
+            .await?;
             let message = retry_message.unwrap_or_else(|| "download failed".to_string());
             if attempt >= request.options.retries {
                 return Err(Error::Backend(message));
@@ -1496,11 +1602,16 @@ impl HttpBackend {
         let mut outcomes: Vec<Option<FileOutcome>> =
             (0..request.resource.files.len()).map(|_| None).collect();
         let mut first_error = None;
+        let mut cancelled = false;
         while let Some(joined) = tasks.join_next().await {
             match joined {
                 Ok(Ok((index, outcome))) => outcomes[index] = Some(outcome),
                 Ok(Err(error)) => {
-                    first_error.get_or_insert(error);
+                    if error.is_cancelled() {
+                        cancelled = true;
+                    } else {
+                        first_error.get_or_insert(error);
+                    }
                     cancel.cancel();
                 }
                 Err(error) => {
@@ -1512,6 +1623,9 @@ impl HttpBackend {
         }
         if let Some(error) = first_error {
             return Err(error);
+        }
+        if cancelled || request.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
         }
         let outcomes = outcomes
             .into_iter()
@@ -1697,6 +1811,12 @@ fn capture_headers(response: &Response, captured: &mut BTreeMap<String, String>)
 
 fn redacted_url(url: &Url) -> String {
     let mut url = url.clone();
+    if !url.username().is_empty() {
+        let _ = url.set_username("redacted");
+    }
+    if url.password().is_some() {
+        let _ = url.set_password(Some("redacted"));
+    }
     url.set_query(None);
     url.set_fragment(None);
     url.to_string()
@@ -1756,10 +1876,10 @@ async fn sleep_or_cancel(duration: Duration, cancel: &CancellationToken) -> Resu
 }
 
 fn proxy_from_config(config: &Config) -> Result<Option<reqwest::Proxy>> {
-    let Some(url) = config.network.proxy.as_deref() else {
+    let ProxySetting::Url(url) = config.proxy_setting() else {
         return Ok(None);
     };
-    let mut proxy = reqwest::Proxy::all(url)
+    let mut proxy = reqwest::Proxy::all(&url)
         .map_err(|error| Error::Config(format!("invalid proxy URL: {error}")))?;
     if let Some(value) = config.network.no_proxy.as_deref()
         && let Some(no_proxy) = reqwest::NoProxy::from_string(value)
@@ -1964,7 +2084,11 @@ async fn checkpoint_single(
     key: &str,
     file_resume: &mut FileResume,
     offset: u64,
+    part: &mut tokio::fs::File,
 ) -> Result<()> {
+    // Make the bytes durable before the sidecar claims them; otherwise a
+    // power loss can leave a manifest that over-claims the partial file.
+    part.sync_all().await?;
     file_resume.completed = if offset > 0 {
         vec![shaul_core::ByteRange::new(0, offset)?]
     } else {
@@ -2053,6 +2177,23 @@ impl Drop for TrackedPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn proxy_configuration_distinguishes_disabled_and_ambient() {
+        let mut config = Config::default();
+        assert!(proxy_from_config(&config).unwrap().is_none());
+
+        config.network.proxy = Some(String::new());
+        assert_eq!(config.proxy_setting(), ProxySetting::Disabled);
+        assert!(proxy_from_config(&config).unwrap().is_none());
+
+        config.network.proxy = Some("http://127.0.0.1:8080".to_string());
+        assert!(matches!(
+            config.proxy_setting(),
+            ProxySetting::Url(ref url) if url == "http://127.0.0.1:8080"
+        ));
+        assert!(proxy_from_config(&config).unwrap().is_some());
+    }
 
     fn validator(size: Option<u64>, etag: Option<&str>) -> Validator {
         Validator {

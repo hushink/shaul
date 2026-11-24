@@ -251,8 +251,14 @@ async fn run_extraction(
     let archive_path = context.file.path.clone();
     let extract_root_for_task = extract_root.clone();
     let overwrite = context.options.overwrite;
+    let rename_on_conflict = context.options.rename_on_conflict;
     let report = tokio::task::spawn_blocking(move || {
-        registry.extract(&archive_path, &extract_root_for_task, overwrite)
+        registry.extract_with_options(
+            &archive_path,
+            &extract_root_for_task,
+            overwrite,
+            rename_on_conflict,
+        )
     })
     .await
     .map_err(|error| Error::Extraction(format!("extract task failed: {error}")))??;

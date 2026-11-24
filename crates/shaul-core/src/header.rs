@@ -28,15 +28,10 @@ impl Header {
         Ok(Self { name, value })
     }
 
-    /// Whether the header is one of the credential-bearing names
-    /// (`authorization`, `cookie`, `proxy-authorization`, `x-api-key`),
-    /// compared case-insensitively.
+    /// Whether the header is one of the credential-bearing names, compared
+    /// case-insensitively. See [`is_sensitive_header_name`].
     pub fn is_sensitive(&self) -> bool {
-        let name = self.name.to_ascii_lowercase();
-        matches!(
-            name.as_str(),
-            "authorization" | "cookie" | "proxy-authorization" | "x-api-key"
-        )
+        is_sensitive_header_name(&self.name)
     }
 
     /// Clone the header, replacing the value with `<redacted>` when
@@ -51,6 +46,29 @@ impl Header {
             self.clone()
         }
     }
+}
+
+/// Whether a header name conventionally carries credentials. Used for
+/// sidecar/JSON redaction, `config get/show/set` and cross-origin redirect
+/// stripping.
+pub fn is_sensitive_header_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "authorization"
+            | "cookie"
+            | "proxy-authorization"
+            | "x-api-key"
+            | "api-key"
+            | "apikey"
+            | "x-auth-token"
+            | "x-access-token"
+            | "x-api-token"
+            | "x-session-token"
+            | "private-token"
+            | "x-gitlab-token"
+            | "x-amz-security-token"
+            | "x-goog-api-key"
+    )
 }
 
 /// Expand `${env:NAME}` placeholders so secrets can be referenced by name in
@@ -148,8 +166,9 @@ impl RequestOptions {
     }
 
     /// Merge global defaults with task overrides. Task headers win on name
-    /// collisions (case-insensitive). Auth becomes an `Authorization` header
-    /// unless the user already supplied one explicitly.
+    /// collisions (case-insensitive). Task-level auth wins over a default
+    /// `Authorization` header, while an explicit task `Authorization` header
+    /// wins over task-level auth.
     pub fn merged(&self, defaults: &[Header]) -> Self {
         let mut headers = defaults.to_vec();
         for header in &self.headers {
@@ -157,12 +176,19 @@ impl RequestOptions {
             headers.push(header.clone());
         }
 
-        let mut auth = self.auth.clone();
-        let has_authorization = headers
+        let task_supplied_authorization = self
+            .headers
             .iter()
             .any(|header| header.name.eq_ignore_ascii_case("authorization"));
-        if has_authorization {
+        let mut auth = self.auth.clone();
+        if task_supplied_authorization {
             auth = None;
+        }
+        if auth.is_some() {
+            // A task-level credential replaces a config default Authorization
+            // header; otherwise the default would silently suppress the CLI
+            // value and break the documented precedence.
+            headers.retain(|header| !header.name.eq_ignore_ascii_case("authorization"));
         }
 
         Self {
@@ -199,5 +225,56 @@ mod tests {
     fn accepts_placeholder_header_values() {
         let header = Header::new("Authorization", "Bearer ${env:PATH}").unwrap();
         assert!(header.is_sensitive());
+    }
+
+    #[test]
+    fn recognizes_common_credential_headers() {
+        for name in [
+            "Authorization",
+            "Cookie",
+            "Proxy-Authorization",
+            "X-Api-Key",
+            "Private-Token",
+            "X-Auth-Token",
+            "X-Gitlab-Token",
+        ] {
+            assert!(is_sensitive_header_name(name), "{name}");
+        }
+        assert!(!is_sensitive_header_name("Content-Type"));
+        assert!(!is_sensitive_header_name("User-Agent"));
+    }
+
+    #[test]
+    fn task_auth_overrides_a_default_authorization_header() {
+        let defaults = vec![Header::new("Authorization", "Bearer config").unwrap()];
+        let request = RequestOptions {
+            auth: Some(Auth::bearer("cli")),
+            ..RequestOptions::default()
+        };
+        let merged = request.merged(&defaults);
+        assert!(merged.headers.is_empty());
+        assert_eq!(merged.auth, Some(Auth::bearer("cli")));
+    }
+
+    #[test]
+    fn explicit_task_authorization_wins_over_task_auth() {
+        let request = RequestOptions {
+            headers: vec![Header::new("Authorization", "Bearer header").unwrap()],
+            auth: Some(Auth::bearer("cli")),
+            ..RequestOptions::default()
+        };
+        let merged = request.merged(&[]);
+        assert_eq!(merged.auth, None);
+        assert_eq!(merged.headers.len(), 1);
+        assert_eq!(merged.headers[0].value, "Bearer header");
+    }
+
+    #[test]
+    fn default_authorization_is_inherited_without_task_credentials() {
+        let defaults = vec![Header::new("Authorization", "Bearer config").unwrap()];
+        let merged = RequestOptions::default().merged(&defaults);
+        assert_eq!(merged.auth, None);
+        assert_eq!(merged.headers.len(), 1);
+        assert_eq!(merged.headers[0].value, "Bearer config");
     }
 }

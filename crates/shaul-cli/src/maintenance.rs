@@ -1,9 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::Serialize;
-use shaul::{Config, ContentCache, Error, Result, SidecarStore, TaskState, TaskStore, part_path};
+use shaul::{
+    Config, ContentCache, Error, ProxySetting, Result, SidecarStore, TaskState, TaskStore,
+    hf_token_available, modelscope_credentials_available, part_path, validate_relative_path,
+};
 
 use crate::args::CleanArgs;
 
@@ -75,19 +78,46 @@ pub async fn command_doctor(config: &Config, config_path: &Path, json: bool) -> 
         ),
     });
 
-    checks.push(match &config.network.proxy {
-        None => Check::new("proxy", CheckStatus::Ok, "not configured"),
-        Some(proxy) => match validate_proxy(proxy) {
-            Ok(()) => Check::new("proxy", CheckStatus::Ok, redact_proxy(proxy)),
+    checks.push(match config.proxy_setting() {
+        ProxySetting::Ambient => Check::new(
+            "proxy",
+            CheckStatus::Ok,
+            "not configured (environment proxy settings apply)",
+        ),
+        ProxySetting::Disabled => Check::new("proxy", CheckStatus::Ok, "disabled"),
+        ProxySetting::Url(proxy) => match validate_proxy(&proxy) {
+            Ok(()) => Check::new("proxy", CheckStatus::Ok, redact_proxy(&proxy)),
             Err(error) => Check::new("proxy", CheckStatus::Error, error.to_string()),
         },
+        _ => Check::new("proxy", CheckStatus::Warn, "unknown proxy setting"),
     });
 
-    checks.push(token_check(
-        "hf_token",
-        &["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"],
-    ));
-    checks.push(token_check("modelscope_token", &["MODELSCOPE_API_TOKEN"]));
+    checks.push(if hf_token_available() {
+        Check::new(
+            "hf_token",
+            CheckStatus::Ok,
+            "token available (environment or credential file)",
+        )
+    } else {
+        Check::new(
+            "hf_token",
+            CheckStatus::Warn,
+            "HF_TOKEN / HUGGING_FACE_HUB_TOKEN are not set and no credential file was found",
+        )
+    });
+    checks.push(if modelscope_credentials_available() {
+        Check::new(
+            "modelscope_token",
+            CheckStatus::Ok,
+            "credentials available (environment or credential file)",
+        )
+    } else {
+        Check::new(
+            "modelscope_token",
+            CheckStatus::Warn,
+            "MODELSCOPE_API_TOKEN is not set and no credential file was found",
+        )
+    });
 
     let errors = checks
         .iter()
@@ -139,7 +169,9 @@ pub async fn command_stats(config: &Config, json: bool) -> Result<()> {
         if task.state == TaskState::Failed
             && let Some(error) = &task.error
         {
-            *failures.entry(truncate(error, 120)).or_insert(0usize) += 1;
+            *failures
+                .entry(truncate(&crate::support::redact_message(error), 120))
+                .or_insert(0usize) += 1;
         }
     }
     let cache_dir = config.content_cache_dir()?;
@@ -231,11 +263,15 @@ pub async fn command_clean(config: &Config, args: CleanArgs, json: bool) -> Resu
                 continue;
             }
             for file in &task.files {
-                orphan_parts.insert(part_path(&task.destination.join(&file.path)));
+                if let Some(path) = safe_orphan_part(&task.destination, &file.path) {
+                    orphan_parts.insert(path);
+                }
             }
             if let Some(resume) = &task.resume {
                 for file in resume.files.values() {
-                    orphan_parts.insert(task.destination.join(&file.part_path));
+                    if let Some(path) = safe_resume_part(&task.destination, &file.part_path) {
+                        orphan_parts.insert(path);
+                    }
                 }
             }
         }
@@ -445,20 +481,6 @@ async fn check_directory(name: &str, path: &Path) -> Check {
     }
 }
 
-fn token_check(name: &str, variables: &[&str]) -> Check {
-    match variables
-        .iter()
-        .find(|variable| std::env::var_os(variable).is_some_and(|value| !value.is_empty()))
-    {
-        Some(variable) => Check::new(name, CheckStatus::Ok, format!("{variable} is set")),
-        None => Check::new(
-            name,
-            CheckStatus::Warn,
-            format!("{} is not set", variables.join(" / ")),
-        ),
-    }
-}
-
 fn parse_duration(value: &str) -> Result<Duration> {
     let value = value.trim().to_ascii_lowercase();
     let (number, multiplier) = if let Some(number) = value.strip_suffix('w') {
@@ -497,6 +519,9 @@ fn validate_proxy(proxy: &str) -> Result<()> {
 }
 
 fn redact_proxy(proxy: &str) -> String {
+    if proxy.trim().is_empty() {
+        return proxy.to_string();
+    }
     let Ok(mut url) = url::Url::parse(proxy) else {
         return "<redacted>".to_string();
     };
@@ -519,5 +544,35 @@ fn truncate(value: &str, max: usize) -> String {
         let mut result: String = value.chars().take(max.saturating_sub(3)).collect();
         result.push_str("...");
         result
+    }
+}
+
+fn safe_orphan_part(destination: &Path, relative: &str) -> Option<PathBuf> {
+    validate_relative_path(relative).ok()?;
+    Some(part_path(&destination.join(relative)))
+}
+
+fn safe_resume_part(destination: &Path, relative: &str) -> Option<PathBuf> {
+    validate_relative_path(relative).ok()?;
+    let path = destination.join(relative);
+    let name = path.file_name()?.to_str()?;
+    name.ends_with(".shaul.part").then_some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orphan_paths_must_be_relative_parts() {
+        let destination = Path::new("task");
+        assert!(safe_orphan_part(destination, "file.bin").is_some());
+        assert!(safe_orphan_part(destination, "../escape.bin").is_none());
+        assert!(safe_orphan_part(destination, "C:/Windows/file").is_none());
+
+        assert!(safe_resume_part(destination, "file.bin.shaul.part").is_some());
+        assert!(safe_resume_part(destination, "file.bin").is_none());
+        assert!(safe_resume_part(destination, "../escape.shaul.part").is_none());
+        assert!(safe_resume_part(destination, "C:/tmp/x.shaul.part").is_none());
     }
 }
