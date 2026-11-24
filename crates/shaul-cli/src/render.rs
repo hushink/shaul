@@ -240,11 +240,10 @@ async fn render_progress(
                         let key = format!("{task_id}:{file}");
                         let pb = bars
                             .entry(key)
-                            .or_insert_with(|| multi.add(new_bar(&file, total_bytes)));
+                            .or_insert_with(|| new_bar(&multi, &file, total_bytes));
                         if let Some(total) = total_bytes {
                             pb.set_length(total);
                         }
-                        pb.set_message(file);
                     }
                     EventKind::Progress {
                         task_id,
@@ -255,7 +254,7 @@ async fn render_progress(
                         let key = format!("{task_id}:{file}");
                         let pb = bars
                             .entry(key)
-                            .or_insert_with(|| multi.add(new_bar(&file, total_bytes)));
+                            .or_insert_with(|| new_bar(&multi, &file, total_bytes));
                         if let Some(total) = total_bytes {
                             pb.set_length(total);
                         }
@@ -354,11 +353,14 @@ async fn render_progress(
     }
 }
 
-fn new_bar(file: &str, total: Option<u64>) -> ProgressBar {
-    let pb = match total {
+fn new_bar(multi: &MultiProgress, file: &str, total: Option<u64>) -> ProgressBar {
+    // Add the bar to the MultiProgress before configuring it. A standalone
+    // ProgressBar draws to stderr as soon as it is ticked or given a message,
+    // which would leave a stale 0-byte line next to the managed bar.
+    let pb = multi.add(match total {
         Some(total) => ProgressBar::new(total),
-        None => ProgressBar::new_spinner(),
-    };
+        None => ProgressBar::no_length(),
+    });
     let template = if total.is_some() {
         "{msg} [{bar:40.cyan/blue}] {bytes}/{total_bytes} {binary_bytes_per_sec} {eta}"
     } else {
