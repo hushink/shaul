@@ -12,5 +12,5 @@ pub mod client;
 pub mod parser;
 
 pub use backend::HubBackend;
-pub use client::{HubClient, HubEntry};
+pub use client::{HubClient, HubEntry, hf_token_available, modelscope_credentials_available};
 pub use parser::{HuggingFaceParser, ModelScopeParser};

@@ -26,7 +26,10 @@ pub use shaul_core::*;
 #[cfg(feature = "ftp")]
 pub use shaul_ftp::{FtpBackend, FtpParser};
 pub use shaul_http::{DirectLinkParser, HttpBackend};
-pub use shaul_hub::{HubBackend, HubClient, HuggingFaceParser, ModelScopeParser};
+pub use shaul_hub::{
+    HubBackend, HubClient, HuggingFaceParser, ModelScopeParser, hf_token_available,
+    modelscope_credentials_available,
+};
 
 /// Build the default router. BitTorrent (when the `bt` feature is enabled) is
 /// registered first, then Hub parsers/backends, then FTP (when enabled), then

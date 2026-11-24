@@ -10,6 +10,7 @@ use shaul_core::{
     BackendCapabilities, Config, ContentCache, DownloadBackend, DownloadOutcome, DownloadRequest,
     Error, EventKind, FileOutcome, HubProvider, HubRepoType, Resource, ResourceFile, ResourceKind,
     Result, ResumeCheckpoint, TaskResume, compute_file_checksum, metrics, sanitize_file_name,
+    validate_relative_path,
 };
 #[cfg(feature = "xet")]
 use shaul_core::{CancellationToken, ChecksumAlgorithm, expand_env};
@@ -415,11 +416,24 @@ impl HubBackend {
             .client
             .request_options(provider, &request.options.request)?;
         #[cfg(feature = "xet")]
-        if let Some(outcome) = self
-            .try_xet(request, file, relative, &effective_request)
-            .await?
         {
-            return Ok(outcome);
+            // Xet transfers cannot be resumed and must not start when
+            // `--verify` requires a checksum that is not known yet; the HTTP
+            // path can still discover one from response headers.
+            let checksum_known = request.options.checksum.is_some()
+                || file.checksum.is_some()
+                || task_resume
+                    .files
+                    .get(file.url.as_str())
+                    .and_then(|entry| entry.checksum.as_ref())
+                    .is_some();
+            if (request.options.verify != shaul_core::VerifyMode::Require || checksum_known)
+                && let Some(outcome) = self
+                    .try_xet(request, file, relative, &effective_request)
+                    .await?
+            {
+                return Ok(outcome);
+            }
         }
         let single_file = ResourceFile {
             path: relative.to_string(),
@@ -654,6 +668,8 @@ impl HubBackend {
             .filter(|value| !value.is_empty())
             .or(existing_commit);
         let snapshot_revision = commit.clone().unwrap_or_else(|| revision.to_string());
+        validate_relative_path(&file.path)
+            .map_err(|_| Error::Backend(format!("unsafe Hub file path: {:?}", file.path)))?;
         let snapshot_path = cache_repo
             .join("snapshots")
             .join(sanitize_file_name(&snapshot_revision))
@@ -734,6 +750,11 @@ impl DownloadBackend for HubBackend {
         fields(task_id = %request.task_id, files = request.resource.files.len())
     )]
     async fn download(&self, request: DownloadRequest) -> Result<DownloadOutcome> {
+        if request.options.output.is_some() {
+            return Err(Error::Config(
+                "--output is not supported for Hub downloads; use --dir".to_string(),
+            ));
+        }
         let (provider, repo, repo_type, revision) = match &request.resource.kind {
             ResourceKind::Hub {
                 provider,
@@ -773,7 +794,7 @@ impl HubBackend {
             if request.cancel.is_cancelled() {
                 return Err(Error::Cancelled);
             }
-            let relative = format!("{repo_name}/{}", file.path);
+            let relative = hub_relative_path(&repo_name, file)?;
             let outcome = if request.options.cache {
                 self.download_with_cache(
                     request,
@@ -812,7 +833,7 @@ impl HubBackend {
         let repo_name = sanitize_file_name(repo.rsplit('/').next().unwrap_or("repo"));
         let mut tasks = tokio::task::JoinSet::new();
         for (index, file) in request.resource.files.iter().cloned().enumerate() {
-            let relative = format!("{repo_name}/{}", file.path);
+            let relative = hub_relative_path(&repo_name, &file)?;
             let key = file.url.as_str().to_string();
             let mut local = TaskResume::default();
             if let Some(stored) = shared.lock().await.files.get(&key).cloned() {
@@ -861,11 +882,16 @@ impl HubBackend {
         let mut outcomes: Vec<Option<FileOutcome>> =
             (0..request.resource.files.len()).map(|_| None).collect();
         let mut first_error = None;
+        let mut cancelled = false;
         while let Some(joined) = tasks.join_next().await {
             match joined {
                 Ok(Ok((index, outcome))) => outcomes[index] = Some(outcome),
                 Ok(Err(error)) => {
-                    first_error.get_or_insert(error);
+                    if error.is_cancelled() {
+                        cancelled = true;
+                    } else {
+                        first_error.get_or_insert(error);
+                    }
                     cancel.cancel();
                 }
                 Err(error) => {
@@ -877,6 +903,9 @@ impl HubBackend {
         }
         if let Some(error) = first_error {
             return Err(error);
+        }
+        if cancelled || request.cancel.is_cancelled() {
+            return Err(Error::Cancelled);
         }
         let outcomes = outcomes
             .into_iter()
@@ -900,6 +929,12 @@ impl ResumeCheckpoint for FileCheckpoint {
         }
         self.inner.save(&shared).await
     }
+}
+
+fn hub_relative_path(repo_name: &str, file: &ResourceFile) -> Result<String> {
+    validate_relative_path(&file.path)
+        .map_err(|_| Error::Backend(format!("unsafe Hub file path: {:?}", file.path)))?;
+    Ok(format!("{repo_name}/{}", file.path))
 }
 
 fn warning(request: &DownloadRequest, message: String) {

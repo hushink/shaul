@@ -109,6 +109,124 @@ impl TestServer {
     }
 }
 
+/// Server that answers the probe immediately and streams ranged bodies in two
+/// slow halves, so a test can cancel while segments are in flight.
+#[derive(Clone)]
+struct SlowRangeServer {
+    addr: SocketAddr,
+    transfers: Arc<AtomicUsize>,
+}
+
+impl SlowRangeServer {
+    async fn spawn(data: Vec<u8>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let data = Arc::new(data);
+        let transfers = Arc::new(AtomicUsize::new(0));
+        let server_transfers = transfers.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let data = data.clone();
+                let transfers = server_transfers.clone();
+                tokio::spawn(async move {
+                    handle_slow_range(socket, data, transfers).await;
+                });
+            }
+        });
+        Self { addr, transfers }
+    }
+
+    fn file_url(&self) -> String {
+        format!("http://{}/file", self.addr)
+    }
+
+    fn transfer_requests(&self) -> usize {
+        self.transfers.load(Ordering::SeqCst)
+    }
+}
+
+async fn handle_slow_range(mut socket: TcpStream, data: Arc<Vec<u8>>, transfers: Arc<AtomicUsize>) {
+    let mut buffer = vec![0u8; 32 * 1024];
+    let mut read = 0;
+    loop {
+        let Ok(count) = socket.read(&mut buffer[read..]).await else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        read += count;
+        if buffer[..read]
+            .windows(4)
+            .any(|window| window == b"\r\n\r\n")
+        {
+            break;
+        }
+        if read == buffer.len() {
+            return;
+        }
+    }
+    let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+    let mut lines = request.lines();
+    let request_line = lines.next().unwrap_or_default();
+    if !request_line.starts_with("GET /file") {
+        let _ = socket
+            .write_all(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+            .await;
+        return;
+    }
+    let mut headers = HashMap::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+        }
+    }
+
+    let total = data.len() as u64;
+    let etag = format!("\"{}\"", sha256_hex(&data));
+    let Some((start, end)) = headers
+        .get("range")
+        .and_then(|value| parse_range(value, total))
+    else {
+        let mut response = format!(
+            "HTTP/1.1 200 OK\r\nConnection: close\r\nETag: {etag}\r\n\
+             Accept-Ranges: bytes\r\nContent-Disposition: attachment; filename=\"slow.bin\"\r\n\
+             Content-Length: {total}\r\n\r\n"
+        )
+        .into_bytes();
+        response.extend_from_slice(&data);
+        let _ = socket.write_all(&response).await;
+        return;
+    };
+
+    let body = &data[start as usize..=end as usize];
+    let response = format!(
+        "HTTP/1.1 206 Partial Content\r\nConnection: close\r\nETag: {etag}\r\n\
+         Accept-Ranges: bytes\r\nContent-Disposition: attachment; filename=\"slow.bin\"\r\n\
+         Content-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    if socket.write_all(response.as_bytes()).await.is_err() {
+        return;
+    }
+    if start == end {
+        // Probe request: answer immediately.
+        let _ = socket.write_all(body).await;
+        return;
+    }
+
+    transfers.fetch_add(1, Ordering::SeqCst);
+    let split = body.len() / 2;
+    if socket.write_all(&body[..split]).await.is_err() {
+        return;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let _ = socket.write_all(&body[split..]).await;
+}
+
 struct ActiveGuard {
     active: Arc<AtomicUsize>,
 }
@@ -585,6 +703,166 @@ async fn resumes_from_partial_part_file() {
 }
 
 #[tokio::test]
+async fn does_not_trust_a_completed_manifest_with_a_wrong_size_final() {
+    let data = test_data(512 * 1024);
+    let server = TestServer::spawn(data.clone(), RangeMode::Supported, None, "mock.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, store) = shaul::default_engine(config.clone()).unwrap();
+    let url = server.file_url();
+    let task = engine
+        .add(
+            Link::new(&url).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let output = config.download.dir.join(&server.filename);
+    tokio::fs::write(&output, b"wrong").await.unwrap();
+
+    let total = data.len() as u64;
+    let sha = sha256_hex(&data);
+    let mut resume = TaskResume::default();
+    resume.files.insert(
+        url.clone(),
+        FileResume {
+            url: url.clone(),
+            final_path: server.filename.clone(),
+            part_path: format!("{}.shaul.part", server.filename),
+            validator: Validator {
+                etag: Some(format!("\"{sha}\"")),
+                last_modified: None,
+                size: Some(total),
+            },
+            total_size: Some(total),
+            segment_size: 512 * 1024,
+            completed: vec![ByteRange::new(0, total).unwrap()],
+            checksum: None,
+            metadata: Default::default(),
+            updated_at_ms: 0,
+        },
+    );
+    store
+        .update(
+            task.id,
+            Box::new(move |task| {
+                task.resume = Some(resume);
+                Ok(())
+            }),
+        )
+        .await
+        .unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(30), engine.run_task(task.id))
+        .await
+        .expect("download did not finish");
+    assert!(
+        result.is_err(),
+        "a wrong-sized destination must not satisfy a completed manifest"
+    );
+    assert_eq!(tokio::fs::read(&output).await.unwrap(), b"wrong");
+}
+
+#[tokio::test]
+async fn cancelling_a_segmented_download_pauses_instead_of_completing() {
+    let data = test_data(512 * 1024);
+    let server = SlowRangeServer::spawn(data.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.download.segment_size = 64 * 1024;
+    config.network.retries = 0;
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let options = TaskOptions {
+        connections: Some(4),
+        ..TaskOptions::default()
+    };
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            options,
+        )
+        .await
+        .unwrap();
+    let output = config.download.dir.join("slow.bin");
+
+    let cancel = CancellationToken::new();
+    let canceller = {
+        let server = server.clone();
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while server.transfer_requests() == 0 && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            cancel.cancel();
+        })
+    };
+
+    let task = tokio::time::timeout(
+        Duration::from_secs(10),
+        engine.run_task_with_cancel(task.id, Some(cancel)),
+    )
+    .await
+    .expect("segmented download did not stop after cancellation")
+    .unwrap();
+    canceller.await.unwrap();
+    assert!(
+        server.transfer_requests() > 0,
+        "cancellation should happen while segments are in flight"
+    );
+
+    assert_eq!(task.state, TaskState::Paused);
+    assert!(
+        !tokio::fs::try_exists(&output).await.unwrap(),
+        "a cancelled segmented transfer must not be finalized"
+    );
+    assert!(
+        tokio::fs::try_exists(part_path(&output)).await.unwrap(),
+        "partial data should be kept for the next attempt"
+    );
+
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(tokio::fs::read(&output).await.unwrap(), data);
+}
+
+#[tokio::test]
+async fn probe_respects_the_network_timeout() {
+    let data = test_data(64 * 1024);
+    let server = TestServer::spawn_with_delay(
+        data,
+        RangeMode::Supported,
+        None,
+        "slow.bin",
+        Duration::from_secs(10),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.network.timeout_secs = 1;
+    config.network.retries = 0;
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+
+    let started = Instant::now();
+    let error = tokio::time::timeout(Duration::from_secs(5), engine.run_task(task.id))
+        .await
+        .expect("download did not respect the network timeout")
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[tokio::test]
 async fn falls_back_to_single_stream_when_range_is_ignored() {
     let data = test_data(1024 * 1024);
     let server = TestServer::spawn(data.clone(), RangeMode::Ignored, None, "mock.bin").await;
@@ -740,6 +1018,115 @@ async fn extracts_archives_after_verification() {
             .await
             .unwrap(),
         "hello"
+    );
+}
+
+#[tokio::test]
+async fn deletes_the_archive_when_task_options_enable_deletion() {
+    let archive = tar_gz(b"hello");
+    let server =
+        TestServer::spawn(archive.clone(), RangeMode::Supported, None, "data.tar.gz").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let options = TaskOptions {
+        extract: Some(true),
+        delete_archive: Some(true),
+        checksum: Some(checksum(&archive)),
+        ..TaskOptions::default()
+    };
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            options,
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert!(
+        config.download.dir.join("data/hello.txt").exists(),
+        "the archive should have been extracted"
+    );
+    assert!(
+        !config.download.dir.join("data.tar.gz").exists(),
+        "the archive should have been deleted"
+    );
+}
+
+#[tokio::test]
+async fn task_options_can_keep_the_archive_when_config_deletes_it() {
+    let archive = tar_gz(b"hello");
+    let server =
+        TestServer::spawn(archive.clone(), RangeMode::Supported, None, "data.tar.gz").await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = test_config(dir.path());
+    config.download.delete_archive = true;
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let options = TaskOptions {
+        extract: Some(true),
+        delete_archive: Some(false),
+        checksum: Some(checksum(&archive)),
+        ..TaskOptions::default()
+    };
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            options,
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert!(
+        config.download.dir.join("data.tar.gz").exists(),
+        "the task option should override delete_archive from the config"
+    );
+    assert!(config.download.dir.join("data/hello.txt").exists());
+}
+
+#[tokio::test]
+async fn quarantines_output_after_terminal_verification_failure() {
+    let data = test_data(256 * 1024);
+    let server = TestServer::spawn(data, RangeMode::Supported, None, "mock.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let options = TaskOptions {
+        checksum: Some(checksum(b"not the downloaded data")),
+        ..TaskOptions::default()
+    };
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            options,
+        )
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(30), engine.run_task(task.id))
+        .await
+        .expect("verification retry did not finish");
+    assert!(result.is_err());
+
+    let output = config.download.dir.join(&server.filename);
+    let quarantined = output.with_file_name(format!("{}.shaul.failed", server.filename));
+    assert!(
+        !tokio::fs::try_exists(&output).await.unwrap(),
+        "a terminal checksum failure must not leave the file at its final path"
+    );
+    assert!(tokio::fs::try_exists(&quarantined).await.unwrap());
+    let task = engine.status(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+    assert!(
+        task.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("checksum mismatch"),
+        "unexpected error: {:?}",
+        task.error
     );
 }
 
