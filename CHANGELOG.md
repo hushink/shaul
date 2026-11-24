@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2](https://github.com/hushink/shaul/compare/shaul-v1.2.1...shaul-v1.2.2) - 2026-11-24
+
+### Fixed
+
+- *(http,hub,bt)* harden transfers, provider paths and overwrite behavior
+- *(core)* validate configuration and harden task execution
+- *(cli)* stop rendering a duplicate progress bar
+- *(cli)* redact secrets and make config edits safe
+
+### Other
+
+- add bilingual READMEs and document hardening
+
 ## [1.2.1](https://github.com/hushink/shaul/compare/shaul-v1.2.0...shaul-v1.2.1) - 2026-11-21
 
 ### Fixed
