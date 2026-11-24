@@ -129,7 +129,8 @@ impl DownloadEngine {
         destination: PathBuf,
         options: TaskOptions,
     ) -> Result<Task> {
-        if !options.force {
+        let force = options.force;
+        if !force {
             let key = format!("{}|{}", link.canonical(), destination.display());
             for task in self.store.list().await? {
                 if task.state.is_active() && task.key() == key {
@@ -149,7 +150,15 @@ impl DownloadEngine {
         let mut task = Task::new(link, destination, options);
         task.backend = Some(routed.backend.name().to_string());
         task.set_resource(routed.resource);
-        self.store.save(&task).await?;
+        let (task, created) = if force {
+            self.store.save(&task).await?;
+            (task, true)
+        } else {
+            self.store.insert_unique(task).await?
+        };
+        if !created {
+            return Ok(task);
+        }
         self.events.emit(EventKind::TaskAdded {
             task_id: task.id,
             link: task.link.to_string(),
@@ -169,9 +178,10 @@ impl DownloadEngine {
     /// Runs a task, optionally linked to an external cancellation token.
     ///
     /// A task that is already completed is returned unchanged, while running a
-    /// cancelled task is an error. A pause or cancel requested through the
-    /// store (for example by another process) is observed while the transfer
-    /// runs and stops it.
+    /// cancelled or already-running task is an error. The task is claimed
+    /// atomically in the store, so two processes cannot run it at the same
+    /// time. A pause or cancel requested through the store (for example by
+    /// another process) is observed while the transfer runs and stops it.
     #[tracing::instrument(
         name = "shaul.engine.run_task",
         level = "debug",
@@ -189,8 +199,17 @@ impl DownloadEngine {
             TaskState::Cancelled => {
                 return Err(Error::InvalidState(format!("task {id} was cancelled")));
             }
+            TaskState::Running => {
+                return Err(Error::InvalidState(format!("task {id} is already running")));
+            }
             _ => {}
         }
+
+        // Hold this guard for the whole run. The OS releases the lock if the
+        // process exits, so another worker can recover the task immediately.
+        let Some(_run_lock) = self.store.try_acquire_run_lock(id).await? else {
+            return Err(Error::InvalidState(format!("task {id} is already running")));
+        };
 
         let backend_name = task
             .backend
@@ -216,16 +235,37 @@ impl DownloadEngine {
         let cancel = external_cancel.unwrap_or_default();
 
         self.running.lock().await.insert(id, cancel.clone());
-        self.store
+        let claimed = self
+            .store
             .update(
                 id,
-                Box::new(|task| {
+                Box::new(move |task| {
+                    match task.state {
+                        TaskState::Completed => {
+                            return Err(Error::InvalidState(format!(
+                                "task {id} already completed"
+                            )));
+                        }
+                        TaskState::Cancelled => {
+                            return Err(Error::InvalidState(format!("task {id} was cancelled")));
+                        }
+                        TaskState::Running => {
+                            return Err(Error::InvalidState(format!(
+                                "task {id} is already running"
+                            )));
+                        }
+                        _ => {}
+                    }
                     task.state = TaskState::Running;
                     task.error = None;
                     Ok(())
                 }),
             )
-            .await?;
+            .await;
+        if let Err(error) = claimed {
+            self.running.lock().await.remove(&id);
+            return Err(error);
+        }
         self.events.emit(EventKind::TaskStarted {
             task_id: id,
             link: task.link.to_string(),
@@ -398,6 +438,9 @@ impl DownloadEngine {
                             continue;
                         }
                         Err(error) => {
+                            if matches!(error, Error::Verification { .. }) {
+                                self.quarantine_outputs(request.task_id, &files).await;
+                            }
                             let message = error.to_string();
                             self.fail(request.task_id, error).await?;
                             return Err(Error::Backend(message));
@@ -450,6 +493,40 @@ impl DownloadEngine {
             });
         }
         Ok(())
+    }
+
+    /// Move outputs that failed verification to `<name>.shaul.failed` so a
+    /// corrupt file cannot be mistaken for a successful download.
+    async fn quarantine_outputs(&self, id: TaskId, files: &[FileOutcome]) {
+        for file in files {
+            let path = &file.path;
+            let mut name = path
+                .file_name()
+                .map(|value| value.to_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from("download"));
+            name.push(".shaul.failed");
+            let target = path.with_file_name(name);
+            let _ = tokio::fs::remove_file(&target).await;
+            match tokio::fs::rename(path, &target).await {
+                Ok(()) => self.events.emit(EventKind::Warning {
+                    task_id: Some(id),
+                    message: format!(
+                        "checksum verification failed; quarantined {} as {}",
+                        path.display(),
+                        target.display()
+                    ),
+                }),
+                Err(error) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        %error,
+                        "could not quarantine a failed output"
+                    );
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+            }
+            let _ = tokio::fs::remove_file(part_path(path)).await;
+        }
     }
 
     async fn reset_outputs(&self, id: TaskId, files: &[FileOutcome]) -> Result<()> {
@@ -554,27 +631,40 @@ impl DownloadEngine {
         Ok(results.into_iter().filter_map(Result::ok).collect())
     }
 
-    /// A previous process may have left tasks in `running`. The CLI calls
-    /// this only while holding the single-worker lock.
+    /// A previous process may have left tasks in `Running`. A task is
+    /// requeued only when no live process holds its cross-process run lock.
+    /// The OS releases that lock when its process exits, so a crashed
+    /// worker's task is recovered immediately. The CLI calls this while
+    /// holding the single-worker lock and periodically thereafter.
     pub async fn requeue_stale(&self) -> Result<Vec<TaskId>> {
         let mut requeued = Vec::new();
         for task in self.store.list().await? {
-            if task.state == TaskState::Running {
-                self.store
-                    .update(
-                        task.id,
-                        Box::new(|task| {
-                            task.state = TaskState::Pending;
-                            Ok(())
-                        }),
-                    )
-                    .await?;
-                requeued.push(task.id);
-                self.events.emit(EventKind::Warning {
-                    task_id: Some(task.id),
-                    message: "requeued a task left running by a previous process".to_string(),
-                });
+            if task.state != TaskState::Running {
+                continue;
             }
+            let Some(_lock) = self.store.try_acquire_run_lock(task.id).await? else {
+                continue;
+            };
+            let updated = self
+                .store
+                .update(
+                    task.id,
+                    Box::new(|task| {
+                        if task.state == TaskState::Running {
+                            task.state = TaskState::Pending;
+                        }
+                        Ok(())
+                    }),
+                )
+                .await?;
+            if updated.state != TaskState::Pending {
+                continue;
+            }
+            requeued.push(task.id);
+            self.events.emit(EventKind::Warning {
+                task_id: Some(task.id),
+                message: "requeued a task left running by a previous process".to_string(),
+            });
         }
         Ok(requeued)
     }
@@ -741,6 +831,15 @@ fn _assert_resource(_: &Resource) {}
 mod tests {
     use super::*;
     use crate::link::Link;
+    use crate::parser::ParserRegistry;
+    use crate::store::SidecarStore;
+
+    fn engine_with_store(dir: &std::path::Path) -> (DownloadEngine, Arc<SidecarStore>) {
+        let store = Arc::new(SidecarStore::new(dir).unwrap());
+        let router = Router::new(ParserRegistry::new(), Vec::new());
+        let engine = DownloadEngine::new(Arc::new(router), store.clone(), Config::default());
+        (engine, store)
+    }
 
     fn task(link: &str, priority: Option<i32>, created_at_ms: u64) -> Task {
         let mut task = Task::new(
@@ -772,5 +871,81 @@ mod tests {
             high_old.clone(),
         ]);
         assert_eq!(ordered, vec![high_old.id, high_new.id, normal.id, low.id]);
+    }
+
+    #[tokio::test]
+    async fn refuses_to_run_a_task_that_is_already_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, store) = engine_with_store(dir.path());
+        let mut task = Task::new(
+            Link::new("https://example.com/file").unwrap(),
+            PathBuf::from("."),
+            TaskOptions::default(),
+        );
+        task.state = TaskState::Running;
+        store.save(&task).await.unwrap();
+
+        let error = engine.run_task(task.id).await.unwrap_err();
+        assert!(
+            error.to_string().contains("already running"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refuses_to_run_a_task_locked_by_another_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, store) = engine_with_store(dir.path());
+        let task = Task::new(
+            Link::new("https://example.com/file").unwrap(),
+            PathBuf::from("."),
+            TaskOptions::default(),
+        );
+        store.save(&task).await.unwrap();
+        let _lock = store.try_acquire_run_lock(task.id).await.unwrap().unwrap();
+
+        let error = engine.run_task(task.id).await.unwrap_err();
+        assert!(
+            error.to_string().contains("already running"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn requeues_running_tasks_only_without_an_active_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let (engine, store) = engine_with_store(dir.path());
+
+        let mut active = Task::new(
+            Link::new("https://example.com/active").unwrap(),
+            PathBuf::from("."),
+            TaskOptions::default(),
+        );
+        active.state = TaskState::Running;
+        store.save(&active).await.unwrap();
+        let _lock = store
+            .try_acquire_run_lock(active.id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let mut abandoned = Task::new(
+            Link::new("https://example.com/abandoned").unwrap(),
+            PathBuf::from("."),
+            TaskOptions::default(),
+        );
+        abandoned.state = TaskState::Running;
+        store.save(&abandoned).await.unwrap();
+
+        let requeued = engine.requeue_stale().await.unwrap();
+        assert_eq!(requeued, vec![abandoned.id]);
+        assert_eq!(
+            engine.status(active.id).await.unwrap().state,
+            TaskState::Running
+        );
+        assert_eq!(
+            engine.status(abandoned.id).await.unwrap().state,
+            TaskState::Pending
+        );
     }
 }

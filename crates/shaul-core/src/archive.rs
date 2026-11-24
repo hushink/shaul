@@ -61,6 +61,10 @@ pub struct ExtractorRequest<'a> {
     pub extract_root: &'a Path,
     /// Whether an existing extraction target may be replaced.
     pub overwrite: bool,
+    /// Whether an existing extraction target should be renamed
+    /// (`name-1`, `name-2`, ...) instead of failing. Custom extractors should
+    /// honor this flag.
+    pub rename_on_conflict: bool,
 }
 
 impl<'a> ExtractorRequest<'a> {
@@ -70,7 +74,14 @@ impl<'a> ExtractorRequest<'a> {
             path,
             extract_root,
             overwrite,
+            rename_on_conflict: false,
         }
+    }
+
+    /// Enables conflict renaming for this request.
+    pub fn with_rename_on_conflict(mut self) -> Self {
+        self.rename_on_conflict = true;
+        self
     }
 }
 
@@ -113,7 +124,13 @@ impl ArchiveExtractor for BuiltinExtractor {
         let kind = detect_archive(request.path)?.ok_or_else(|| {
             Error::Extraction(format!("unsupported archive: {}", request.path.display()))
         })?;
-        extract_archive(request.path, kind, request.extract_root, request.overwrite)
+        extract_archive_with_options(
+            request.path,
+            kind,
+            request.extract_root,
+            request.overwrite,
+            request.rename_on_conflict,
+        )
     }
 }
 
@@ -167,10 +184,27 @@ impl ExtractorRegistry {
         extract_root: &Path,
         overwrite: bool,
     ) -> Result<Option<ExtractReport>> {
+        self.extract_with_options(path, extract_root, overwrite, false)
+    }
+
+    /// Like [`ExtractorRegistry::extract`], but extracts into a renamed target
+    /// (`name-1`, `name-2`, ...) when `rename_on_conflict` is set and the
+    /// target already exists. Custom extractors receive the flag through
+    /// [`ExtractorRequest::rename_on_conflict`].
+    pub fn extract_with_options(
+        &self,
+        path: &Path,
+        extract_root: &Path,
+        overwrite: bool,
+        rename_on_conflict: bool,
+    ) -> Result<Option<ExtractReport>> {
         for extractor in &self.extractors {
             if extractor.supports(path)? {
                 std::fs::create_dir_all(extract_root)?;
-                let request = ExtractorRequest::new(path, extract_root, overwrite);
+                let mut request = ExtractorRequest::new(path, extract_root, overwrite);
+                if rename_on_conflict {
+                    request = request.with_rename_on_conflict();
+                }
                 let report = extractor.extract(&request)?;
                 validate_extract_target(extract_root, &report.target)?;
                 return Ok(Some(report));
@@ -269,12 +303,36 @@ pub fn extract_archive(
     extract_root: &Path,
     overwrite: bool,
 ) -> Result<ExtractReport> {
+    extract_archive_with_options(path, kind, extract_root, overwrite, false)
+}
+
+fn extract_archive_with_options(
+    path: &Path,
+    kind: ArchiveKind,
+    extract_root: &Path,
+    overwrite: bool,
+    rename_on_conflict: bool,
+) -> Result<ExtractReport> {
     std::fs::create_dir_all(extract_root)?;
     let stem = archive_stem(path);
     if kind.is_single_file() {
-        extract_single_file(path, kind, extract_root, &stem, overwrite)
+        extract_single_file(
+            path,
+            kind,
+            extract_root,
+            &stem,
+            overwrite,
+            rename_on_conflict,
+        )
     } else {
-        extract_directory(path, kind, extract_root, &stem, overwrite)
+        extract_directory(
+            path,
+            kind,
+            extract_root,
+            &stem,
+            overwrite,
+            rename_on_conflict,
+        )
     }
 }
 
@@ -284,9 +342,9 @@ fn extract_single_file(
     extract_root: &Path,
     stem: &str,
     overwrite: bool,
+    rename_on_conflict: bool,
 ) -> Result<ExtractReport> {
-    let target = extract_root.join(stem);
-    prepare_target(&target, overwrite)?;
+    let target = prepare_target(&extract_root.join(stem), overwrite, rename_on_conflict)?;
 
     let temp_dir = extract_root.join(format!(".shaul-extract-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&temp_dir)?;
@@ -330,6 +388,13 @@ fn extract_single_file(
     }
 
     if target.exists() {
+        if !overwrite {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err(Error::Extraction(format!(
+                "extraction target appeared while extracting: {}",
+                target.display()
+            )));
+        }
         remove_existing(&target)?;
     }
     std::fs::rename(&temp_file, &target)?;
@@ -347,9 +412,9 @@ fn extract_directory(
     extract_root: &Path,
     stem: &str,
     overwrite: bool,
+    rename_on_conflict: bool,
 ) -> Result<ExtractReport> {
-    let target = extract_root.join(stem);
-    prepare_target(&target, overwrite)?;
+    let target = prepare_target(&extract_root.join(stem), overwrite, rename_on_conflict)?;
 
     let temp_dir = extract_root.join(format!(".shaul-extract-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&temp_dir)?;
@@ -374,6 +439,13 @@ fn extract_directory(
     };
 
     if target.exists() {
+        if !overwrite {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err(Error::Extraction(format!(
+                "extraction target appeared while extracting: {}",
+                target.display()
+            )));
+        }
         remove_existing(&target)?;
     }
     std::fs::rename(&temp_dir, &target)?;
@@ -384,14 +456,38 @@ fn extract_directory(
     })
 }
 
-fn prepare_target(target: &Path, overwrite: bool) -> Result<()> {
-    if target.exists() && !overwrite {
-        return Err(Error::Extraction(format!(
-            "extraction target already exists: {} (use --force to overwrite)",
-            target.display()
-        )));
+fn prepare_target(target: &Path, overwrite: bool, rename_on_conflict: bool) -> Result<PathBuf> {
+    if !target.exists() {
+        return Ok(target.to_path_buf());
     }
-    Ok(())
+    if overwrite {
+        return Ok(target.to_path_buf());
+    }
+    if rename_on_conflict {
+        return unique_extract_target(target);
+    }
+    Err(Error::Extraction(format!(
+        "extraction target already exists: {} (use --force to overwrite)",
+        target.display()
+    )))
+}
+
+fn unique_extract_target(target: &Path) -> Result<PathBuf> {
+    let name = target
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "extract".to_string());
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+    for index in 1..10_000 {
+        let candidate = parent.join(format!("{name}-{index}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+    Err(Error::Extraction(format!(
+        "could not find a free extraction target for {}",
+        target.display()
+    )))
 }
 
 fn remove_existing(path: &Path) -> Result<()> {
@@ -561,6 +657,19 @@ mod tests {
     use flate2::Compression;
     use flate2::write::GzEncoder;
 
+    fn write_tar_gz(path: &Path, name: &str, contents: &[u8]) {
+        let file = File::create(path).unwrap();
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append_data(&mut header, name, contents).unwrap();
+        let encoder = builder.into_inner().unwrap();
+        encoder.finish().unwrap();
+    }
+
     #[test]
     fn rejects_archives_over_extraction_limits() {
         assert!(ensure_archive_entries(MAX_ARCHIVE_ENTRIES).is_ok());
@@ -613,6 +722,26 @@ mod tests {
         );
         let report = extract_archive(&archive_path, ArchiveKind::Gzip, dir.path(), false).unwrap();
         assert_eq!(std::fs::read_to_string(report.target).unwrap(), "hello");
+    }
+
+    #[test]
+    fn renames_existing_extraction_targets_when_requested() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive_path = dir.path().join("data.tar.gz");
+        write_tar_gz(&archive_path, "hello.txt", b"hello");
+
+        let first = extract_archive(&archive_path, ArchiveKind::TarGz, dir.path(), false).unwrap();
+        assert_eq!(first.target, dir.path().join("data"));
+
+        let second = ExtractorRegistry::default()
+            .extract_with_options(&archive_path, dir.path(), false, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.target, dir.path().join("data-1"));
+        assert_eq!(
+            std::fs::read_to_string(second.target.join("hello.txt")).unwrap(),
+            "hello"
+        );
     }
 
     #[test]

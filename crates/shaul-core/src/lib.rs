@@ -62,7 +62,9 @@ pub use backend::{
 pub use blocking::BlockingEngine;
 pub use cache::{CachePruneReport, CacheStats, ContentCache};
 pub use checksum::{Checksum, ChecksumAlgorithm, compute_file_checksum};
-pub use config::{BtConfig, Config, DownloadConfig, HubConfig, NetworkConfig, ResolvedOptions};
+pub use config::{
+    BtConfig, Config, DownloadConfig, HubConfig, NetworkConfig, ProxySetting, ResolvedOptions,
+};
 pub use disk::ensure_free_space;
 pub use engine::DownloadEngine;
 pub use error::{Error, Result};
@@ -71,16 +73,16 @@ pub use finalizer::{
     ExtractFinalizer, ExtractorFinalizer, FinalizeContext, FinalizeResult, Finalizer,
     FinalizerPipeline, VerifyFinalizer,
 };
-pub use header::{Auth, Header, RequestOptions, expand_env};
+pub use header::{Auth, Header, RequestOptions, expand_env, is_sensitive_header_name};
 pub use link::Link;
 pub use parser::{LinkParser, ParseOptions, ParserRegistry};
-pub use path::{safe_join, sanitize_file_name, sanitize_relative_path};
+pub use path::{safe_join, sanitize_file_name, sanitize_relative_path, validate_relative_path};
 pub use range::{ByteRange, completed_bytes, merge_ranges, missing_ranges, split_range};
 pub use resource::{
     BitTorrentSource, HubProvider, HubRepoType, Resource, ResourceFile, ResourceKind,
 };
 pub use router::{RoutedResource, Router, backend_arc, parser_arc};
-pub use store::{SidecarStore, TaskStore, TaskUpdate};
+pub use store::{RunLockGuard, SidecarStore, TaskStore, TaskUpdate};
 pub use task::{
     FileItem, FileResume, FileState, Task, TaskId, TaskOptions, TaskResume, TaskState, Validator,
     VerifyMode, destination_file, part_path,
