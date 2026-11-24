@@ -7,7 +7,7 @@ use shaul::{DownloadEvent, EventKind};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::{human_bytes, redact_link_text, short_id};
+use crate::support::{human_bytes, redact_link_text, redact_message, short_id};
 
 pub fn spawn(
     json: bool,
@@ -39,6 +39,13 @@ async fn render_json(mut receiver: broadcast::Receiver<DownloadEvent>, stop: Can
                         EventKind::TaskAdded { link, .. }
                         | EventKind::TaskStarted { link, .. } => {
                             *link = redact_link_text(link);
+                        }
+                        EventKind::Warning { message, .. } => {
+                            *message = redact_message(message);
+                        }
+                        EventKind::TaskFailed { error, .. }
+                        | EventKind::Retry { error, .. } => {
+                            *error = redact_message(error);
                         }
                         _ => {}
                     }
@@ -169,7 +176,11 @@ async fn render_plain(
                     }
                 }
                 EventKind::TaskFailed { task_id, error } => {
-                    eprintln!("[{}] failed: {error}", short_id(&task_id));
+                    eprintln!(
+                        "[{}] failed: {}",
+                        short_id(&task_id),
+                        redact_message(&error)
+                    );
                 }
                 EventKind::TaskPaused { task_id } => {
                     if !quiet {
@@ -181,7 +192,9 @@ async fn render_plain(
                         println!("[{}] cancelled", short_id(&task_id));
                     }
                 }
-                EventKind::Warning { message, .. } => eprintln!("warning: {message}"),
+                EventKind::Warning { message, .. } => {
+                    eprintln!("warning: {}", redact_message(&message))
+                }
                 _ => {}
             },
             Err(broadcast::error::RecvError::Lagged(count)) => {
@@ -312,8 +325,9 @@ async fn render_progress(
                     }
                     EventKind::TaskFailed { task_id, error } => {
                         let _ = multi.println(format!(
-                            "[{}] failed: {error}",
-                            short_id(&task_id)
+                            "[{}] failed: {}",
+                            short_id(&task_id),
+                            redact_message(&error)
                         ));
                     }
                     EventKind::TaskPaused { task_id } => {
@@ -322,7 +336,9 @@ async fn render_progress(
                     EventKind::TaskCancelled { task_id } => {
                         let _ = multi.println(format!("[{}] cancelled", short_id(&task_id)));
                     }
-                    EventKind::Warning { message, .. } => eprintln!("warning: {message}"),
+                    EventKind::Warning { message, .. } => {
+                        eprintln!("warning: {}", redact_message(&message))
+                    }
                     _ => {}
                 },
                 Err(broadcast::error::RecvError::Lagged(count)) => {

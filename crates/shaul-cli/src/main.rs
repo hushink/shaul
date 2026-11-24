@@ -4,23 +4,24 @@
 #![warn(missing_docs)]
 
 mod args;
+mod config_edit;
 mod maintenance;
 mod render;
 mod support;
 
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
-use shaul::{Config, DownloadEngine, Error, Link, Result, TaskState};
+use shaul::{Config, DownloadEngine, Error, Link, Result, TaskState, is_sensitive_header_name};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use args::{Cli, Commands, ConfigArgs, ConfigCmd, DownloadArgs, IdArgs, InfoArgs, RunArgs};
 use support::{
-    acquire_run_lock, collect_links, display_link, human_bytes, redacted_task, resolve_task_id,
-    short_id,
+    acquire_run_lock, collect_links, display_link, human_bytes, redact_message, redacted_resource,
+    redacted_task, resolve_task_id, short_id,
 };
 
 #[tokio::main]
@@ -30,7 +31,7 @@ async fn main() -> std::process::ExitCode {
     match run(cli).await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("error: {}", redact_message(&error.to_string()));
             std::process::ExitCode::FAILURE
         }
     }
@@ -145,7 +146,7 @@ async fn command_download(
         let task = match engine.add(link, destination.clone(), options.clone()).await {
             Ok(task) => task,
             Err(error) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {}", redact_message(&error.to_string()));
                 failures += 1;
                 continue;
             }
@@ -174,7 +175,7 @@ async fn command_download(
                 }
             }
             Err(error) => {
-                eprintln!("error: {error}");
+                eprintln!("error: {}", redact_message(&error.to_string()));
                 failures += 1;
             }
         }
@@ -248,10 +249,15 @@ async fn command_run(config: &mut Config, args: RunArgs, json: bool, quiet: bool
     let cancel = CancellationToken::new();
     let ctrl_c = spawn_ctrl_c(cancel.clone());
     let mut idle = false;
+    let mut last_stale_check = Instant::now();
 
     loop {
         if cancel.is_cancelled() {
             break;
+        }
+        if last_stale_check.elapsed() >= Duration::from_secs(30) {
+            engine.requeue_stale().await?;
+            last_stale_check = Instant::now();
         }
         let has_pending = engine
             .list()
@@ -332,7 +338,7 @@ async fn command_status(config: &Config, args: IdArgs, json: bool) -> Result<()>
             .unwrap_or_else(|| "?".to_string())
     );
     if let Some(error) = &task.error {
-        println!("error:       {error}");
+        println!("error:       {}", redact_message(error));
     }
     for file in &task.files {
         println!(
@@ -380,10 +386,11 @@ async fn command_info(config: &Config, args: InfoArgs, json: bool) -> Result<()>
     let engine = build_engine(config)?;
     let link = Link::new(args.link.clone())?;
     let routed = engine.resolve(&link, &args.to_parse_options()?).await?;
+    let resource = redacted_resource(&routed.resource);
 
     if json {
         let value = serde_json::json!({
-            "resource": routed.resource,
+            "resource": &resource,
             "backend": routed.backend.name(),
             "parser": routed.parser,
         });
@@ -391,17 +398,17 @@ async fn command_info(config: &Config, args: InfoArgs, json: bool) -> Result<()>
         return Ok(());
     }
 
-    println!("name:    {}", routed.resource.name);
-    println!("kind:    {:?}", routed.resource.kind);
+    println!("name:    {}", resource.name);
+    println!("kind:    {:?}", resource.kind);
     println!("parser:  {}", routed.parser);
     println!("backend: {}", routed.backend.name());
-    if let Some(revision) = &routed.resource.revision {
+    if let Some(revision) = &resource.revision {
         println!("revision: {revision}");
     }
-    if let Some(checksum) = &routed.resource.checksum {
+    if let Some(checksum) = &resource.checksum {
         println!("checksum: {checksum}");
     }
-    for file in &routed.resource.files {
+    for file in &resource.files {
         println!("  {}", file.path);
         println!("    url: {}", file.url);
         if let Some(size) = file.size {
@@ -427,7 +434,7 @@ fn command_config(config: &Config, path: &Path, args: ConfigArgs, json: bool) ->
         }
         ConfigCmd::Get { key } => {
             if let Some(name) = key.strip_prefix("headers.")
-                && is_sensitive_header(name)
+                && is_sensitive_header_name(name)
             {
                 println!("<redacted>");
                 return Ok(());
@@ -440,10 +447,19 @@ fn command_config(config: &Config, path: &Path, args: ConfigArgs, json: bool) ->
             }
         }
         ConfigCmd::Set { key, value } => {
-            let mut file_config = Config::load_file_only(path)?;
-            file_config.set_value(&key, &value)?;
-            file_config.save(path)?;
-            println!("{key} = {value}");
+            config_edit::set_value(path, &key, &value)?;
+            let shown = if let Some(name) = key.strip_prefix("headers.") {
+                if is_sensitive_header_name(name) {
+                    "<redacted>".to_string()
+                } else {
+                    value.clone()
+                }
+            } else if key == "network.proxy" {
+                redact_proxy(&value)
+            } else {
+                value.clone()
+            };
+            println!("{key} = {shown}");
         }
         ConfigCmd::Init { force } => {
             if path.exists() && !force {
@@ -466,6 +482,9 @@ fn command_config(config: &Config, path: &Path, args: ConfigArgs, json: bool) ->
 }
 
 fn redact_proxy(proxy: &str) -> String {
+    if proxy.trim().is_empty() {
+        return proxy.to_string();
+    }
     let Ok(mut url) = url::Url::parse(proxy) else {
         return "<redacted>".to_string();
     };
@@ -487,18 +506,11 @@ fn redacted_config(config: &Config) -> Config {
         config.network.proxy = Some(redact_proxy(proxy));
     }
     for (name, value) in &mut config.headers {
-        if is_sensitive_header(name) {
+        if is_sensitive_header_name(name) {
             *value = "<redacted>".to_string();
         }
     }
     config
-}
-
-fn is_sensitive_header(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "authorization" | "cookie" | "proxy-authorization" | "x-api-key"
-    )
 }
 
 fn open_editor(path: &Path) -> Result<()> {

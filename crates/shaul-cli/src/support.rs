@@ -154,6 +154,56 @@ pub fn display_link(link: &Link) -> String {
     redact_link_text(link.as_str())
 }
 
+/// Remove credentials, query strings and fragments from a URL in place.
+pub fn redact_url(url: &mut url::Url) {
+    if !url.username().is_empty() {
+        let _ = url.set_username("redacted");
+    }
+    if url.password().is_some() {
+        let _ = url.set_password(Some("redacted"));
+    }
+    url.set_query(None);
+    url.set_fragment(None);
+}
+
+/// Redact every http(s)/ftp URL embedded in free-form text, such as a warning
+/// or an error message.
+pub fn redact_message(message: &str) -> String {
+    const SCHEMES: &[&str] = &["http://", "https://", "ftp://", "socks5://", "socks5h://"];
+    let mut output = String::with_capacity(message.len());
+    let mut rest = message;
+    loop {
+        let lower = rest.to_ascii_lowercase();
+        let Some(start) = SCHEMES.iter().filter_map(|scheme| lower.find(scheme)).min() else {
+            output.push_str(rest);
+            break;
+        };
+        output.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let end = tail
+            .find(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, ')' | ']' | '}' | '>' | '"' | '\'' | ',' | ';')
+            })
+            .unwrap_or(tail.len());
+        let candidate = &tail[..end];
+        match url::Url::parse(candidate) {
+            Ok(mut url) => {
+                redact_url(&mut url);
+                output.push_str(url.as_str());
+            }
+            Err(_) => {
+                // Keep only the part before a query or fragment even when the
+                // URL does not parse (for example, a trailing punctuation
+                // character was not recognized as a delimiter).
+                output.push_str(candidate.split(['?', '#']).next().unwrap_or(candidate));
+            }
+        }
+        rest = &tail[end..];
+    }
+    output
+}
+
 /// Signed URLs commonly carry tokens in the query string. Keep magnet links
 /// intact (their query holds the info hash) and strip HTTP query/fragment.
 pub fn redact_link_text(raw: &str) -> String {
@@ -166,12 +216,7 @@ pub fn redact_link_text(raw: &str) -> String {
     if url.username().is_empty() && url.password().is_none() {
         return raw.split(['?', '#']).next().unwrap_or(raw).to_string();
     }
-    let _ = url.set_username("redacted");
-    if url.password().is_some() {
-        let _ = url.set_password(Some("redacted"));
-    }
-    url.set_query(None);
-    url.set_fragment(None);
+    redact_url(&mut url);
     url.to_string()
 }
 
@@ -181,49 +226,60 @@ pub fn redacted_task(task: &shaul::Task) -> shaul::Task {
         task.link = link;
     }
     redact_request(&mut task.options.request);
+    for mirror in &mut task.options.mirrors {
+        redact_url(mirror);
+    }
+    if let Some(error) = &mut task.error {
+        *error = redact_message(error);
+    }
     for file in &mut task.files {
-        if let Some(url) = &mut file.url
-            && matches!(url.scheme(), "http" | "https")
-        {
-            url.set_query(None);
-            url.set_fragment(None);
+        if let Some(url) = &mut file.url {
+            redact_url(url);
         }
     }
     if let Some(resource) = &mut task.resource {
-        redact_request(&mut resource.request);
-        for value in resource.metadata.values_mut() {
-            if value.contains("://") {
-                *value = redact_link_text(value);
-            }
-        }
-        for file in &mut resource.files {
-            if matches!(file.url.scheme(), "http" | "https") {
-                file.url.set_query(None);
-                file.url.set_fragment(None);
-            }
-            for header in &mut file.headers {
-                if header.is_sensitive() {
-                    header.value = "<redacted>".to_string();
-                }
-            }
-            for value in file.metadata.values_mut() {
-                if value.contains("://") {
-                    *value = redact_link_text(value);
-                }
-            }
-        }
+        redact_resource(resource);
     }
     if let Some(resume) = &mut task.resume {
         for file in resume.files.values_mut() {
             file.url = redact_link_text(&file.url);
             for (key, value) in &mut file.metadata {
                 if key.ends_with("url") || key.contains("cas") {
-                    *value = redact_link_text(value);
+                    *value = redact_message(value);
                 }
             }
         }
     }
     task
+}
+
+/// Clone a resource with request credentials and URL secrets removed.
+pub fn redacted_resource(resource: &shaul::Resource) -> shaul::Resource {
+    let mut resource = resource.clone();
+    redact_resource(&mut resource);
+    resource
+}
+
+fn redact_resource(resource: &mut shaul::Resource) {
+    redact_request(&mut resource.request);
+    for value in resource.metadata.values_mut() {
+        if value.contains("://") {
+            *value = redact_message(value);
+        }
+    }
+    for file in &mut resource.files {
+        redact_url(&mut file.url);
+        for header in &mut file.headers {
+            if header.is_sensitive() {
+                header.value = "<redacted>".to_string();
+            }
+        }
+        for value in file.metadata.values_mut() {
+            if value.contains("://") {
+                *value = redact_message(value);
+            }
+        }
+    }
 }
 
 fn redact_request(request: &mut shaul::RequestOptions) {
@@ -235,6 +291,103 @@ fn redact_request(request: &mut shaul::RequestOptions) {
     for header in &mut request.headers {
         if header.is_sensitive() {
             header.value = "<redacted>".to_string();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn redacts_urls_inside_messages() {
+        let message = "request failed for url (https://example.com/file?token=secret) and ftp://user:pass@example.com/x using socks5://user:socks-secret@127.0.0.1:1080";
+        let redacted = redact_message(message);
+        assert!(!redacted.contains("secret"), "{redacted}");
+        assert!(!redacted.contains("pass"), "{redacted}");
+        assert!(!redacted.contains("socks-secret"), "{redacted}");
+        assert!(redacted.contains("https://example.com/file"), "{redacted}");
+        assert!(redacted.contains("redacted"), "{redacted}");
+        assert_eq!(redact_message("plain text"), "plain text");
+    }
+
+    #[test]
+    fn redacted_resource_hides_credentials_and_url_secrets() {
+        use std::collections::BTreeMap;
+
+        use shaul::{Header, RequestOptions, Resource, ResourceFile, ResourceKind};
+
+        let resource = Resource {
+            kind: ResourceKind::Http,
+            name: "file.bin".to_string(),
+            files: vec![ResourceFile {
+                path: "file.bin".to_string(),
+                url: url::Url::parse(
+                    "https://user:url-secret@example.com/file.bin?token=query-secret",
+                )
+                .unwrap(),
+                size: None,
+                checksum: None,
+                headers: vec![Header::new("Authorization", "Bearer header-secret").unwrap()],
+                metadata: BTreeMap::from([(
+                    "source".to_string(),
+                    "https://example.com/x?token=meta-secret".to_string(),
+                )]),
+                use_response_filename: true,
+            }],
+            request: RequestOptions {
+                headers: vec![Header::new("Authorization", "Bearer request-secret").unwrap()],
+                auth: Some(shaul::Auth::bearer("auth-secret")),
+                allow_cross_origin_auth: false,
+            },
+            checksum: None,
+            revision: None,
+            metadata: BTreeMap::new(),
+        };
+
+        let text = serde_json::to_string(&redacted_resource(&resource)).unwrap();
+        for secret in [
+            "url-secret",
+            "query-secret",
+            "header-secret",
+            "request-secret",
+            "auth-secret",
+            "meta-secret",
+        ] {
+            assert!(!text.contains(secret), "{secret} leaked: {text}");
+        }
+        assert!(text.contains("<redacted>"), "{text}");
+    }
+
+    #[test]
+    fn redacted_task_hides_mirror_and_error_secrets() {
+        use std::path::PathBuf;
+
+        use shaul::{Link, Task, TaskOptions};
+
+        let mut task = Task::new(
+            Link::new("https://example.com/file?token=link-secret").unwrap(),
+            PathBuf::from("."),
+            TaskOptions {
+                mirrors: vec![
+                    url::Url::parse(
+                        "https://user:mirror-secret@mirror.example/x?token=mirror-query",
+                    )
+                    .unwrap(),
+                ],
+                ..TaskOptions::default()
+            },
+        );
+        task.error = Some("failed for url (https://example.com/x?token=error-secret)".to_string());
+
+        let text = serde_json::to_string(&redacted_task(&task)).unwrap();
+        for secret in [
+            "link-secret",
+            "mirror-secret",
+            "mirror-query",
+            "error-secret",
+        ] {
+            assert!(!text.contains(secret), "{secret} leaked: {text}");
         }
     }
 }

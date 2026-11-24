@@ -210,6 +210,112 @@ fn config_show_redacts_proxy_credentials() {
 }
 
 #[test]
+fn config_set_redacts_sensitive_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let config = path.to_str().unwrap();
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "config",
+        "set",
+        "headers.Authorization",
+        "Bearer super-secret",
+    ]));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("super-secret"),
+        "header secret leaked: {stdout}"
+    );
+    assert!(stdout.contains("<redacted>"), "{stdout}");
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("super-secret"),
+        "the value should still be stored in the file"
+    );
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "config",
+        "set",
+        "network.proxy",
+        "http://user:proxy-secret@127.0.0.1:8080",
+    ]));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("proxy-secret"),
+        "proxy password leaked: {stdout}"
+    );
+    assert!(stdout.contains("redacted"), "{stdout}");
+}
+
+#[test]
+fn config_set_preserves_comments() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = config_path(&dir);
+    let state = toml_path(dir.path().join("state"));
+    let downloads = toml_path(dir.path().join("downloads"));
+    fs::write(
+        &path,
+        format!(
+            "# top comment\nstate_dir = \"{state}\"\n\n[download]\n# connection comment\ndir = \"{downloads}\"\nconnections = 4 # trailing\n"
+        ),
+    )
+    .unwrap();
+
+    let output = run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "config",
+        "set",
+        "download.connections",
+        "12",
+    ]));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("download.connections = 12"), "{stdout}");
+
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(text.contains("# top comment"), "{text}");
+    assert!(text.contains("# connection comment"), "{text}");
+    assert!(text.contains("connections = 12 # trailing"), "{text}");
+}
+
+#[test]
+fn unknown_config_keys_fail_without_rewriting_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "connection = 8\n");
+    let config = path.to_str().unwrap();
+
+    let output = shaul()
+        .args([
+            "--config",
+            config,
+            "config",
+            "set",
+            "download.connections",
+            "4",
+        ])
+        .output()
+        .expect("failed to run shaul");
+    assert!(
+        !output.status.success(),
+        "a typo in the config file must not be ignored"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown field") || stderr.contains("connection"),
+        "unexpected error: {stderr}"
+    );
+    let text = fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains("connection = 8"),
+        "the original config must be left untouched"
+    );
+}
+
+#[test]
 fn input_file_supplies_download_links() {
     let (url, _server) = spawn_file_server(b"from input file".to_vec());
     let dir = tempfile::tempdir().unwrap();
@@ -342,6 +448,43 @@ fn info_reports_the_direct_http_route() {
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(text.contains("backend: http"), "output: {text}");
     assert!(text.contains("parser:  direct"), "output: {text}");
+}
+
+#[test]
+fn info_json_redacts_credentials_and_query_strings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let config = path.to_str().unwrap();
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "info",
+        "https://example.com/file.bin?token=super-secret",
+        "--header",
+        "Authorization: Bearer header-secret",
+    ]));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !text.contains("super-secret"),
+        "query secret leaked: {text}"
+    );
+    assert!(
+        !text.contains("header-secret"),
+        "header secret leaked: {text}"
+    );
+    assert!(text.contains("<redacted>"), "missing redaction: {text}");
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "info",
+        "ftp://user:ftp-secret@example.com/file.bin",
+    ]));
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!text.contains("ftp-secret"), "FTP secret leaked: {text}");
 }
 
 #[test]
