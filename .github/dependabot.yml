@@ -11,6 +11,21 @@ updates:
       cargo-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    # The xet crates are exact-pinned to the 1.6 line because 1.7+ pulls
+    # sysinfo 0.39, which requires Rust 1.95 and would raise shaul's MSRV.
+    ignore:
+      - dependency-name: "hf-xet"
+        versions: [">=1.7"]
+      - dependency-name: "xet-client"
+        versions: [">=1.7"]
+      - dependency-name: "xet-core-structures"
+        versions: [">=1.7"]
+      - dependency-name: "xet-data"
+        versions: [">=1.7"]
+      - dependency-name: "xet-runtime"
+        versions: [">=1.7"]
+      - dependency-name: "sysinfo"
+        versions: [">=0.39"]
     commit-message:
       prefix: "chore(deps)"
 
