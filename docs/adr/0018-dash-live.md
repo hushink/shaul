@@ -47,7 +47,9 @@ DASH 时钟模型。
 
 ## Out of scope (phase 1)
 
-- constant-duration 动态 MPD、`availabilityStartTime`/`publishTime` 时钟推算；
+- constant-duration 动态 MPD（后续由
+  [ADR 0019](0019-dash-live-constant-duration.md) 以可用时间窗口加入）、
+  `availabilityStartTime`/`publishTime` 时钟推算；
 - 动态 SegmentList/SegmentBase、多 Period、Period 切换；
 - DRM/CENC、`ContentProtection`、多音轨/字幕；
 - 取消时自动收尾、直播续传、跨运行拼接；

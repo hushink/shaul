@@ -105,10 +105,11 @@ playlist's target duration and stops at the limit or `#EXT-X-ENDLIST`. Live
 captures are not resumable. DASH supports static single-period manifests with
 SegmentTemplate, SegmentList or SegmentBase addressing and segment-level
 resume, plus dynamic single-period manifests when they use SegmentTemplate +
-SegmentTimeline; dynamic captures use the same `--live-duration` /
+SegmentTimeline or a constant-duration SegmentTemplate with
+`availabilityStartTime`; dynamic captures use the same `--live-duration` /
 `--live-segments` limits, poll at `minimumUpdatePeriod`, and stop when the
-manifest becomes static. SAMPLE-AES, DASH dynamic manifests without a
-SegmentTimeline, DRM and multi-period DASH are not supported yet.
+manifest becomes static or the Period ends. SAMPLE-AES, DRM, multi-period DASH
+and low-latency `availabilityTimeOffset` are not supported yet.
 
 `--method`, `--data` and `--data-file` apply to direct HTTP(S) links only.
 `--data` implies `POST` when `--method` is not given. These requests are

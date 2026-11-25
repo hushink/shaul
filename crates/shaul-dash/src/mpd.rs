@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use quick_xml::events::Event;
@@ -15,6 +16,10 @@ pub struct DashManifest {
     media_duration: Option<f64>,
     dynamic: bool,
     minimum_update_period: Option<f64>,
+    availability_start: Option<f64>,
+    publish_time: Option<f64>,
+    suggested_presentation_delay: Option<f64>,
+    time_shift_buffer_depth: Option<f64>,
     periods: Vec<Period>,
 }
 
@@ -69,14 +74,138 @@ pub struct SelectedRepresentation {
     pub live: bool,
     /// `minimumUpdatePeriod` in seconds for dynamic manifests.
     pub minimum_update_period_secs: Option<f64>,
+    /// Constant-duration dynamic template, when the manifest uses one.
+    pub dynamic: Option<DynamicTemplate>,
     /// Optional initialization segment.
     pub initialization: Option<SegmentRef>,
     /// Media segments in presentation order.
     pub segments: Vec<SegmentRef>,
 }
 
+/// A constant-duration `SegmentTemplate` on a dynamic manifest. The backend
+/// uses the manifest timing attributes to compute the currently available
+/// segment window.
+#[derive(Clone, Debug)]
+pub struct DynamicTemplate {
+    pub(crate) base_url: Url,
+    pub(crate) representation_id: String,
+    pub(crate) bandwidth: Option<u64>,
+    pub(crate) media: String,
+    pub(crate) start_number: u64,
+    pub(crate) duration_units: u64,
+    pub(crate) timescale: u64,
+    pub(crate) presentation_time_offset: u64,
+    pub(crate) availability_start: f64,
+    pub(crate) publish_time: Option<f64>,
+    pub(crate) period_start_secs: f64,
+    pub(crate) period_duration_secs: Option<f64>,
+    pub(crate) suggested_delay_secs: f64,
+    pub(crate) time_shift_buffer_secs: Option<f64>,
+}
+
+impl DynamicTemplate {
+    /// Return available segments starting at segment number `from` (or at the
+    /// current live edge when `None`), the next segment number, and whether
+    /// the period has ended.
+    pub(crate) fn segments_from(
+        &self,
+        from: Option<u64>,
+    ) -> Result<(Vec<SegmentRef>, Option<u64>, bool)> {
+        let duration_secs = self.duration_units as f64 / self.timescale as f64;
+        if !duration_secs.is_finite() || duration_secs <= 0.0 {
+            return Err(Error::Backend(
+                "dynamic DASH segment duration must be positive".to_string(),
+            ));
+        }
+        let reference = self.publish_time.unwrap_or_else(now_epoch_secs);
+        let period_elapsed = reference - self.availability_start - self.period_start_secs;
+        let (elapsed, ended_by_period) = match self.period_duration_secs {
+            Some(period_duration) if period_elapsed >= period_duration => (period_duration, true),
+            _ => (period_elapsed, false),
+        };
+        let latest = (elapsed / duration_secs).floor() as i64 - 1;
+        if latest < 0 {
+            return Ok((Vec::new(), from, ended_by_period));
+        }
+        let latest = latest as u64;
+        let lookback_secs = self
+            .time_shift_buffer_secs
+            .filter(|depth| *depth > 0.0)
+            .unwrap_or(30.0);
+        let lookback = (lookback_secs / duration_secs).ceil() as u64;
+        let lookback = lookback.max(1);
+        let earliest = (latest + 1).saturating_sub(lookback);
+        let start = match from {
+            Some(number) => {
+                if number < self.start_number {
+                    return Err(Error::Backend(format!(
+                        "dynamic DASH segment number {number} is before startNumber {}",
+                        self.start_number
+                    )));
+                }
+                let index = number - self.start_number;
+                if index < earliest {
+                    return Err(Error::Backend(
+                        "dynamic DASH segments expired before they could be recorded".to_string(),
+                    ));
+                }
+                index
+            }
+            None => {
+                let playhead = (elapsed - self.suggested_delay_secs).max(0.0);
+                let edge = ((playhead / duration_secs).floor() as i64 - 1).max(0) as u64;
+                edge.max(earliest).min(latest)
+            }
+        };
+        if start > latest {
+            return Ok((Vec::new(), from, ended_by_period));
+        }
+        let end = latest.min(start.saturating_add(MAX_SEGMENTS - 1));
+        let mut segments = Vec::new();
+        for index in start..=end {
+            let number = self
+                .start_number
+                .checked_add(index)
+                .ok_or_else(|| Error::Backend("DASH segment number overflows u64".to_string()))?;
+            let time =
+                self.presentation_time_offset
+                    .checked_add(index.checked_mul(self.duration_units).ok_or_else(|| {
+                        Error::Backend("DASH segment time overflows u64".to_string())
+                    })?)
+                    .ok_or_else(|| Error::Backend("DASH segment time overflows u64".to_string()))?;
+            let expanded = expand_template(
+                &self.media,
+                &self.representation_id,
+                self.bandwidth,
+                number,
+                time,
+            )?;
+            segments.push(SegmentRef {
+                url: join_url(&self.base_url, &expanded)?,
+                range: None,
+                timing: Some(SegmentTiming {
+                    start: time,
+                    duration: self.duration_units,
+                    timescale: self.timescale,
+                }),
+            });
+        }
+        let next = Some(self.start_number + end + 1);
+        let ended = ended_by_period && end >= latest;
+        Ok((segments, next, ended))
+    }
+}
+
+fn now_epoch_secs() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
 #[derive(Clone, Debug)]
 struct Period {
+    start: Option<f64>,
     duration: Option<f64>,
     adaptation_sets: Vec<AdaptationSet>,
 }
@@ -168,6 +297,22 @@ impl DashManifest {
             .attr("minimumUpdatePeriod")
             .map(parse_iso_duration)
             .transpose()?;
+        let availability_start = root
+            .attr("availabilityStartTime")
+            .map(parse_utc_timestamp)
+            .transpose()?;
+        let publish_time = root
+            .attr("publishTime")
+            .map(parse_utc_timestamp)
+            .transpose()?;
+        let suggested_presentation_delay = root
+            .attr("suggestedPresentationDelay")
+            .map(parse_iso_duration)
+            .transpose()?;
+        let time_shift_buffer_depth = root
+            .attr("timeShiftBufferDepth")
+            .map(parse_iso_duration)
+            .transpose()?;
         let base_url = resolve_base(url, &root)?;
         let has_base = root.child("BaseURL").is_some();
 
@@ -184,6 +329,10 @@ impl DashManifest {
                 "DASH xlink:href is not supported".to_string(),
             ));
         }
+        let period_start = period_node
+            .attr("start")
+            .map(parse_iso_duration)
+            .transpose()?;
         let period_duration = period_node
             .attr("duration")
             .map(parse_iso_duration)
@@ -261,7 +410,12 @@ impl DashManifest {
             media_duration,
             dynamic,
             minimum_update_period,
+            availability_start,
+            publish_time,
+            suggested_presentation_delay,
+            time_shift_buffer_depth,
             periods: vec![Period {
+                start: period_start,
                 duration: period_duration,
                 adaptation_sets,
             }],
@@ -303,13 +457,7 @@ impl DashManifest {
                 "no DASH representation matched --include/--exclude".to_string(),
             ));
         };
-        resolve_selected(
-            set,
-            representation,
-            total_duration,
-            self.dynamic,
-            self.minimum_update_period,
-        )
+        resolve_selected(self, set, representation, total_duration)
     }
 
     /// Resolve a previously selected representation by its stable `id`.
@@ -321,13 +469,7 @@ impl DashManifest {
         for set in &period.adaptation_sets {
             for representation in &set.representations {
                 if representation.id == id {
-                    return resolve_selected(
-                        set,
-                        representation,
-                        total_duration,
-                        self.dynamic,
-                        self.minimum_update_period,
-                    );
+                    return resolve_selected(self, set, representation, total_duration);
                 }
             }
         }
@@ -348,14 +490,15 @@ pub fn fingerprint(text: &str) -> String {
 }
 
 fn resolve_selected(
+    manifest: &DashManifest,
     set: &AdaptationSet,
     representation: &Representation,
     total_duration: Option<f64>,
-    dynamic: bool,
-    minimum_update_period: Option<f64>,
 ) -> Result<SelectedRepresentation> {
+    let dynamic = manifest.dynamic;
     let template = merge_template(set.template.as_ref(), representation.template.as_ref());
     let list = merge_segment_list(set.list.as_ref(), representation.list.as_ref());
+    let mut dynamic_template = None;
     if dynamic {
         let Some(template) = template
             .as_ref()
@@ -366,21 +509,96 @@ fn resolve_selected(
             ));
         };
         if !template.has_timeline {
-            return Err(Error::Backend(
-                "dynamic DASH SegmentTemplate requires SegmentTimeline".to_string(),
-            ));
+            let duration_units = template
+                .attributes
+                .get("duration")
+                .map(|value| parse_u64(value, "duration"))
+                .transpose()?
+                .ok_or_else(|| {
+                    Error::Backend(
+                        "dynamic DASH SegmentTemplate requires SegmentTimeline or duration"
+                            .to_string(),
+                    )
+                })?;
+            if duration_units == 0 {
+                return Err(Error::Backend(
+                    "dynamic DASH segment duration must be positive".to_string(),
+                ));
+            }
+            let timescale = template
+                .attributes
+                .get("timescale")
+                .map(|value| parse_u64(value, "timescale"))
+                .transpose()?
+                .unwrap_or(1);
+            if timescale == 0 {
+                return Err(Error::Backend(
+                    "dynamic DASH SegmentTemplate timescale must be greater than zero".to_string(),
+                ));
+            }
+            let availability_start = manifest.availability_start.ok_or_else(|| {
+                Error::Backend(
+                    "dynamic constant-duration DASH requires availabilityStartTime".to_string(),
+                )
+            })?;
+            let media = template
+                .attributes
+                .get("media")
+                .expect("template media was checked")
+                .clone();
+            let period = &manifest.periods[0];
+            let period_start_secs = period.start.unwrap_or(0.0);
+            let period_duration_secs = period.duration.or_else(|| {
+                manifest
+                    .media_duration
+                    .map(|duration| (duration - period_start_secs).max(0.0))
+            });
+            dynamic_template = Some(DynamicTemplate {
+                base_url: representation.base_url.clone(),
+                representation_id: representation.id.clone(),
+                bandwidth: representation.bandwidth,
+                media,
+                start_number: template
+                    .attributes
+                    .get("startNumber")
+                    .map(|value| parse_u64(value, "startNumber"))
+                    .transpose()?
+                    .unwrap_or(1),
+                duration_units,
+                timescale,
+                presentation_time_offset: template
+                    .attributes
+                    .get("presentationTimeOffset")
+                    .map(|value| parse_u64(value, "presentationTimeOffset"))
+                    .transpose()?
+                    .unwrap_or(0),
+                availability_start,
+                publish_time: manifest.publish_time,
+                period_start_secs,
+                period_duration_secs,
+                suggested_delay_secs: manifest.suggested_presentation_delay.unwrap_or(0.0),
+                time_shift_buffer_secs: manifest.time_shift_buffer_depth,
+            });
         }
     }
-    let (initialization, segments) = if let Some(template) = &template
-        && template.attributes.contains_key("media")
+    let (initialization, segments) = if let Some(template) = template
+        .as_ref()
+        .filter(|template| template.attributes.contains_key("media"))
     {
-        resolve_template(
-            &representation.base_url,
-            representation,
-            template,
-            total_duration,
-            dynamic,
-        )?
+        if dynamic_template.is_some() {
+            (
+                resolve_initialization(&representation.base_url, representation, template)?,
+                Vec::new(),
+            )
+        } else {
+            resolve_template(
+                &representation.base_url,
+                representation,
+                template,
+                total_duration,
+                dynamic,
+            )?
+        }
     } else if let Some(list) = &list
         && !list.urls.is_empty()
     {
@@ -415,10 +633,45 @@ fn resolve_selected(
         codecs,
         extension,
         live: dynamic,
-        minimum_update_period_secs: dynamic.then_some(minimum_update_period).flatten(),
+        minimum_update_period_secs: dynamic.then_some(manifest.minimum_update_period).flatten(),
+        dynamic: dynamic_template,
         initialization,
         segments,
     })
+}
+
+fn resolve_initialization(
+    base: &Url,
+    representation: &Representation,
+    template: &Template,
+) -> Result<Option<SegmentRef>> {
+    let Some(value) = template.attributes.get("initialization") else {
+        return Ok(None);
+    };
+    let start_number = template
+        .attributes
+        .get("startNumber")
+        .map(|value| parse_u64(value, "startNumber"))
+        .transpose()?
+        .unwrap_or(1);
+    let time_offset = template
+        .attributes
+        .get("presentationTimeOffset")
+        .map(|value| parse_u64(value, "presentationTimeOffset"))
+        .transpose()?
+        .unwrap_or(0);
+    let expanded = expand_template(
+        value,
+        &representation.id,
+        representation.bandwidth,
+        start_number,
+        time_offset,
+    )?;
+    Ok(Some(SegmentRef {
+        url: join_url(base, &expanded)?,
+        range: None,
+        timing: None,
+    }))
 }
 
 fn resolve_template(
@@ -461,24 +714,7 @@ fn resolve_template(
         .map(|value| parse_u64(value, "duration"))
         .transpose()?;
 
-    let initialization = template
-        .attributes
-        .get("initialization")
-        .map(|value| {
-            let expanded = expand_template(
-                value,
-                &representation.id,
-                representation.bandwidth,
-                start_number,
-                time_offset,
-            )?;
-            Ok::<SegmentRef, Error>(SegmentRef {
-                url: join_url(base, &expanded)?,
-                range: None,
-                timing: None,
-            })
-        })
-        .transpose()?;
+    let initialization = resolve_initialization(base, representation, template)?;
 
     let mut segments = Vec::new();
     if template.has_timeline && template.timeline.is_empty() {
@@ -918,6 +1154,103 @@ fn format_number(value: u64, format: Option<&str>) -> Result<String> {
         )));
     }
     Ok(format!("{value:0width$}"))
+}
+
+fn parse_utc_timestamp(value: &str) -> Result<f64> {
+    let value = value.trim();
+    let (date, time) = value
+        .split_once('T')
+        .ok_or_else(|| Error::Backend(format!("invalid DASH date-time (missing T): {value}")))?;
+    let mut date_parts = date.split('-');
+    let year = date_parts
+        .next()
+        .ok_or_else(|| Error::Backend(format!("invalid DASH date-time: {value}")))?
+        .parse::<i64>()
+        .map_err(|_| Error::Backend(format!("invalid DASH date-time: {value}")))?;
+    let month = date_parts
+        .next()
+        .ok_or_else(|| Error::Backend(format!("invalid DASH date-time: {value}")))?
+        .parse::<u32>()
+        .map_err(|_| Error::Backend(format!("invalid DASH date-time: {value}")))?;
+    let day = date_parts
+        .next()
+        .ok_or_else(|| Error::Backend(format!("invalid DASH date-time: {value}")))?
+        .parse::<u32>()
+        .map_err(|_| Error::Backend(format!("invalid DASH date-time: {value}")))?;
+    if date_parts.next().is_some() {
+        return Err(Error::Backend(format!("invalid DASH date-time: {value}")));
+    }
+
+    let (time, offset_seconds) =
+        if let Some(time) = time.strip_suffix('Z').or_else(|| time.strip_suffix('z')) {
+            (time, 0_i64)
+        } else if let Some(index) = time.rfind(['+', '-']) {
+            let (time, offset) = time.split_at(index);
+            let sign = if offset.starts_with('-') { -1 } else { 1 };
+            let mut offset_parts = offset[1..].split(':');
+            let hours = offset_parts
+                .next()
+                .ok_or_else(|| Error::Backend(format!("invalid DASH timezone: {value}")))?
+                .parse::<i64>()
+                .map_err(|_| Error::Backend(format!("invalid DASH timezone: {value}")))?;
+            let minutes = offset_parts
+                .next()
+                .ok_or_else(|| Error::Backend(format!("invalid DASH timezone: {value}")))?
+                .parse::<i64>()
+                .map_err(|_| Error::Backend(format!("invalid DASH timezone: {value}")))?;
+            if offset_parts.next().is_some() || hours > 23 || minutes > 59 {
+                return Err(Error::Backend(format!("invalid DASH timezone: {value}")));
+            }
+            (time, sign * (hours * 3600 + minutes * 60))
+        } else {
+            (time, 0)
+        };
+
+    let mut time_parts = time.split(':');
+    let hour = time_parts
+        .next()
+        .ok_or_else(|| Error::Backend(format!("invalid DASH time: {value}")))?
+        .parse::<u32>()
+        .map_err(|_| Error::Backend(format!("invalid DASH time: {value}")))?;
+    let minute = time_parts
+        .next()
+        .ok_or_else(|| Error::Backend(format!("invalid DASH time: {value}")))?
+        .parse::<u32>()
+        .map_err(|_| Error::Backend(format!("invalid DASH time: {value}")))?;
+    let seconds = time_parts
+        .next()
+        .ok_or_else(|| Error::Backend(format!("invalid DASH time: {value}")))?
+        .parse::<f64>()
+        .map_err(|_| Error::Backend(format!("invalid DASH time: {value}")))?;
+    if time_parts.next().is_some()
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || !seconds.is_finite()
+        || !(0.0..60.0).contains(&seconds)
+    {
+        return Err(Error::Backend(format!("invalid DASH date-time: {value}")));
+    }
+    let days = days_from_civil(year, month, day);
+    Ok(
+        days as f64 * 86_400.0 + hour as f64 * 3_600.0 + minute as f64 * 60.0 + seconds
+            - offset_seconds as f64,
+    )
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let year_of_era = year - era * 400;
+    let month_prime = if month > 2 {
+        month as i64 - 3
+    } else {
+        month as i64 + 9
+    };
+    let day_of_year = (153 * month_prime + 2) / 5 + day as i64 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
 }
 
 fn parse_iso_duration(value: &str) -> Result<f64> {
@@ -1450,6 +1783,95 @@ mod tests {
         let xlink = r#"<MPD type="static"><Period><AdaptationSet href="remote.xml">
         </AdaptationSet></Period></MPD>"#;
         assert!(DashManifest::parse(&base(), xlink).is_err());
+    }
+
+    #[test]
+    fn parses_utc_timestamps() {
+        assert_eq!(parse_utc_timestamp("1970-01-01T00:00:00Z").unwrap(), 0.0);
+        assert_eq!(
+            parse_utc_timestamp("2026-01-01T00:00:00Z").unwrap(),
+            1_767_225_600.0
+        );
+        assert_eq!(
+            parse_utc_timestamp("2024-01-01T00:00:00.5Z").unwrap(),
+            1_704_067_200.5
+        );
+        assert_eq!(
+            parse_utc_timestamp("2026-01-01T02:00:00+02:00").unwrap(),
+            1_767_225_600.0
+        );
+        assert!(parse_utc_timestamp("not-a-date").is_err());
+        assert!(parse_utc_timestamp("2026-13-01T00:00:00Z").is_err());
+        assert!(parse_utc_timestamp("2026-01-01T24:00:00Z").is_err());
+    }
+
+    #[test]
+    fn computes_constant_duration_dynamic_windows() {
+        let text = r#"<MPD type="dynamic" minimumUpdatePeriod="PT1S"
+            availabilityStartTime="2026-01-01T00:00:00Z"
+            publishTime="2026-01-01T00:00:14Z"
+            suggestedPresentationDelay="PT0S" timeShiftBufferDepth="PT30S">
+          <Period start="PT0S"><AdaptationSet mimeType="video/mp4">
+            <Representation id="v" bandwidth="1">
+              <SegmentTemplate media="s-$Number$.m4s" initialization="init.mp4"
+                  timescale="1000" duration="2000" startNumber="1"/>
+            </Representation>
+          </AdaptationSet></Period></MPD>"#;
+        let manifest = DashManifest::parse(&base(), text).unwrap();
+        let selected = manifest.select(&[], &[]).unwrap();
+        assert!(selected.live);
+        assert!(selected.segments.is_empty());
+        let template = selected.dynamic.unwrap();
+        let (segments, next, ended) = template.segments_from(None).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(
+            segments[0].url.as_str(),
+            "https://example.com/media/s-7.m4s"
+        );
+        assert_eq!(next, Some(8));
+        assert!(!ended);
+
+        let later_text = text.replace("00:00:14Z", "00:00:20Z");
+        let later = DashManifest::parse(&base(), &later_text).unwrap();
+        let later_selected = later.select(&[], &[]).unwrap();
+        let later_template = later_selected.dynamic.unwrap();
+        let (segments, next, ended) = later_template.segments_from(Some(8)).unwrap();
+        assert_eq!(segments.len(), 3);
+        assert_eq!(
+            segments[0].url.as_str(),
+            "https://example.com/media/s-8.m4s"
+        );
+        assert_eq!(
+            segments[2].url.as_str(),
+            "https://example.com/media/s-10.m4s"
+        );
+        assert_eq!(next, Some(11));
+        assert!(!ended);
+
+        let expired_text = later_text.replace("PT30S", "PT2S");
+        let expired = DashManifest::parse(&base(), &expired_text).unwrap();
+        let expired_selected = expired.select(&[], &[]).unwrap();
+        let expired_template = expired_selected.dynamic.unwrap();
+        assert!(expired_template.segments_from(Some(1)).is_err());
+    }
+
+    #[test]
+    fn detects_the_end_of_a_constant_duration_period() {
+        let text = r#"<MPD type="dynamic"
+            availabilityStartTime="2026-01-01T00:00:00Z"
+            publishTime="2026-01-01T00:00:20Z">
+          <Period start="PT0S" duration="PT20S"><AdaptationSet mimeType="video/mp4">
+            <Representation id="v" bandwidth="1">
+              <SegmentTemplate media="s-$Number$.m4s" timescale="1000"
+                  duration="2000" startNumber="1"/>
+            </Representation>
+          </AdaptationSet></Period></MPD>"#;
+        let manifest = DashManifest::parse(&base(), text).unwrap();
+        let selected = manifest.select(&[], &[]).unwrap();
+        let template = selected.dynamic.unwrap();
+        let (segments, _, ended) = template.segments_from(Some(8)).unwrap();
+        assert_eq!(segments.len(), 3);
+        assert!(ended);
     }
 
     #[test]

@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SegmentTemplate + SegmentTimeline: `minimumUpdatePeriod` polling,
   presentation-time deduplication, representation-id pinning and static-MPD
   early stop; dynamic captures share the live limits and cleanup behavior
+- *(dash)* support constant-duration dynamic DASH templates: availability
+  windows from `availabilityStartTime`/`publishTime`, live-edge start,
+  `timeShiftBufferDepth` expiry checks, and static/Period-end finalization
 - *(core)* add `TaskOptions::live_duration_secs` and
   `TaskOptions::live_segments` for bounded live capture
 - *(cli)* batch `pause`/`resume`/`cancel` with multiple ids or `--all`, plus

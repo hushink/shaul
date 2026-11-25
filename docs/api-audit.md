@@ -166,15 +166,19 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    - `shaul` 的 `dash` feature 启用 `shaul-dash`：`DashParser` 解析 HTTP(S)
      `.mpd`，`DashBackend` 下载 SegmentTemplate/SegmentList/SegmentBase
      分片并拼接为一个文件。支持静态和动态（`type="dynamic"`）单 Period、
-     最高码率视频 Representation；动态清单要求 SegmentTemplate +
-     SegmentTimeline，后端按 `minimumUpdatePeriod` 轮询、按 presentation
-     time 去重，并在达到 `TaskOptions` live 限制或 MPD 变为 static 时停止；
+     最高码率视频 Representation；动态清单支持 SegmentTemplate +
+     SegmentTimeline，以及带 `availabilityStartTime` 的 constant-duration
+     SegmentTemplate。后端按 `minimumUpdatePeriod` 轮询、按 presentation
+     time 去重，并在达到 `TaskOptions` live 限制、MPD 变为 static 或 Period
+     结束时停止；constant-duration 录制从 live edge 开始，用
+     `publishTime`（缺失时本机时钟）和 `timeShiftBufferDepth` 计算可用窗口。
      动态录制不支持续传，失败临时目录由 `clean --orphans` 清理。新增
-     `SegmentTiming`、`SegmentRef.timing`、`SelectedRepresentation.live`/
-     `minimum_update_period_secs`、`DashManifest::is_dynamic`/
-     `select_representation` 等公开项，属于新 crate 的 additive API。DRM、
-     没有 SegmentTimeline 的动态清单、多 Period 和交替音轨暂不支持。
-     `quick-xml` 和 `reqwest` 类型不泄漏到 `shaul-core`。
+     `SegmentTiming`、`SegmentRef.timing`、`DynamicTemplate`、
+     `SelectedRepresentation.live`/`minimum_update_period_secs`/`dynamic`、
+     `DashManifest::is_dynamic`/`select_representation` 等公开项，属于新
+     crate 的 additive API。DRM、多 Period、低延迟
+     `availabilityTimeOffset` 和交替音轨暂不支持。`quick-xml` 和 `reqwest`
+     类型不泄漏到 `shaul-core`。
    - `HttpBackend::download_range(request, file, range, destination)` 下载
      精确字节区间，复用 header/认证/代理/超时/重试/限速和连接预算；HLS 的
      `EXT-X-BYTERANGE` 和 DASH 的字节范围使用该方法。它是新增公开方法，

@@ -101,10 +101,11 @@ cancel 默认选择 pending/running/paused，对 resume 默认选择 paused/fail
 `--live-duration` 和/或 `--live-segments` 录制；后端按 playlist 的 target
 duration 轮询，达到上限或出现 `#EXT-X-ENDLIST` 时停止，且直播录制不支持
 续传。DASH 支持静态单 Period 清单、SegmentTemplate/SegmentList/SegmentBase
-寻址和分片级续传，也支持使用 SegmentTemplate + SegmentTimeline 的动态单
-Period 清单；动态录制使用同样的 `--live-duration` / `--live-segments` 限制，
-按 `minimumUpdatePeriod` 轮询，清单变为静态时停止。暂不支持 SAMPLE-AES、
-没有 SegmentTimeline 的动态 DASH、DRM 和多 Period DASH。
+寻址和分片级续传，也支持使用 SegmentTemplate + SegmentTimeline 或带
+`availabilityStartTime` 的 constant-duration SegmentTemplate 的动态单 Period
+清单；动态录制使用同样的 `--live-duration` / `--live-segments` 限制，按
+`minimumUpdatePeriod` 轮询，清单变为静态或 Period 结束时停止。暂不支持
+SAMPLE-AES、DRM、多 Period DASH 和低延迟 `availabilityTimeOffset`。
 
 `--method`、`--data`、`--data-file` 只适用于直接 HTTP(S) 链接。未指定
 `--method` 时，`--data` 隐含 `POST`。这类请求是单请求语义：不分片、不续传、

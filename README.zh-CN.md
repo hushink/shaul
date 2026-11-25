@@ -238,12 +238,14 @@ DASH 链接用 `--include`/`--exclude` 选择变体或 Representation。
   精确 `Range` HTTP 路径。
 - init 与媒体分片通过共享 HTTP 栈并发下载，拼接为一个 `.mp4` 或 `.webm`
   文件。点播续传由 MPD SHA-256、Representation id 和分片数量共同保护。
-- 动态（直播）清单在 `SegmentTemplate` + `SegmentTimeline` 下可用
+- 动态（直播）清单在 `SegmentTemplate` + `SegmentTimeline`，或
+  constant-duration `SegmentTemplate` + `availabilityStartTime` 下可用
   `--live-duration` 或 `--live-segments` 录制。后端按 `minimumUpdatePeriod`
-  轮询、按 presentation time 去重，达到上限或清单变为静态时停止。动态录制
-  不支持续传。
-- 暂不支持 DRM（`ContentProtection`）、没有 SegmentTimeline 的动态清单、
-  多 Period、字幕、交替音轨混流和转封装。
+  轮询、按 presentation time 去重，达到上限、清单变为静态或 Period 结束时
+  停止。constant-duration 录制从 live edge 开始，用 `publishTime`（缺失时用
+  本机时钟）计算可用窗口。动态录制不支持续传。
+- 暂不支持 DRM（`ContentProtection`）、多 Period、`availabilityTimeOffset`
+  与低延迟分块、字幕、交替音轨混流和转封装。
 
 ### 校验与后处理
 

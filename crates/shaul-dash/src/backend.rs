@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -437,22 +437,30 @@ impl DashBackend {
         let initial_mime_type = selected.mime_type.clone();
         let initial_codecs = selected.codecs.clone();
         let mut ordered: Vec<u64> = Vec::new();
-        let mut seen: HashSet<u64> = HashSet::new();
         let mut total_duration = 0.0_f64;
         let mut last_timing: Option<SegmentTiming> = None;
         let mut timeline_timescale: Option<u64> = None;
+        let mut next_number: Option<u64> = None;
 
         loop {
-            let new_segments: Vec<SegmentRef> = selected
-                .segments
-                .iter()
-                .filter(|segment| {
-                    segment
-                        .timing
-                        .is_some_and(|timing| !seen.contains(&timing.start))
-                })
-                .cloned()
-                .collect();
+            let (new_segments, template_ended) = if let Some(template) = &selected.dynamic {
+                let (segments, next, ended) = template.segments_from(next_number)?;
+                next_number = next;
+                (segments, ended)
+            } else {
+                let last_end = last_timing.and_then(|timing| timing.end());
+                let segments = selected
+                    .segments
+                    .iter()
+                    .filter(|segment| {
+                        segment
+                            .timing
+                            .is_some_and(|timing| last_end.is_none_or(|end| timing.start >= end))
+                    })
+                    .cloned()
+                    .collect();
+                (segments, false)
+            };
             for segment in new_segments {
                 let Some(timing) = segment.timing else {
                     return Err(Error::Backend(
@@ -473,15 +481,14 @@ impl DashBackend {
                     let expected = last.end().ok_or_else(|| {
                         Error::Backend("DASH segment timing overflows u64".to_string())
                     })?;
-                    if timing.start < expected {
+                    if timing.start != expected {
+                        let issue = if timing.start > expected {
+                            "skipped segments"
+                        } else {
+                            "overlaps segments"
+                        };
                         return Err(Error::Backend(format!(
-                            "dynamic DASH SegmentTimeline overlaps at {}/{}",
-                            timing.start, timing.timescale
-                        )));
-                    }
-                    if timing.start > expected {
-                        return Err(Error::Backend(format!(
-                            "dynamic DASH SegmentTimeline skipped segments: expected {expected}, \
+                            "dynamic DASH SegmentTimeline {issue}: expected start {expected}, \
                              got {}",
                             timing.start
                         )));
@@ -498,7 +505,6 @@ impl DashBackend {
                     &segment_events,
                 )
                 .await?;
-                seen.insert(timing.start);
                 ordered.push(timing.start);
                 total_duration += timing.seconds();
                 last_timing = Some(timing);
@@ -515,6 +521,7 @@ impl DashBackend {
                 }
             }
             if !selected.live
+                || template_ended
                 || live_limit_reached(&ordered, total_duration, duration_limit, segment_limit)
             {
                 break;

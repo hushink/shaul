@@ -42,9 +42,10 @@ HLS supports TS and single-init-map fMP4 playlists, AES-128 encryption,
 bounded live capture through `live_duration_secs`/`live_segments` in
 `TaskOptions` (not resumable). SAMPLE-AES is not supported yet. DASH supports static and dynamic
 single-period manifests with SegmentTemplate, SegmentList or SegmentBase
-addressing, segment-level VOD resume, and bounded dynamic captures when the
-manifest uses SegmentTemplate + SegmentTimeline. DRM, multiple periods and
-dynamic manifests without a SegmentTimeline are not supported yet.
+addressing, segment-level VOD resume, and bounded dynamic captures with
+SegmentTemplate + SegmentTimeline or a constant-duration template. DRM,
+multiple periods and low-latency `availabilityTimeOffset` are not supported
+yet.
 
 ## Quick start
 

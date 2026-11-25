@@ -52,9 +52,12 @@ backend is protocol-isolated: `shaul-core` does not depend on DASH.
 - `SegmentTemplate` with `$Number$`, `$Time$`, `$RepresentationID$`,
   `$Bandwidth$`, `%0Nd` formatting, constant `duration`, `endNumber` or
   `SegmentTimeline` (non-negative repeat counts)
-- Dynamic manifests require `SegmentTemplate` + `SegmentTimeline`; the backend
+- Dynamic manifests with `SegmentTemplate` + `SegmentTimeline`, or
+  constant-duration `SegmentTemplate` + `availabilityStartTime`. The backend
   polls at `minimumUpdatePeriod`, deduplicates by presentation time, and stops
-  at a duration/segment limit or when the MPD becomes static
+  at a duration/segment limit, when the MPD becomes static, or when the Period
+  ends. Constant-duration captures start at the live edge (adjusted by
+  `suggestedPresentationDelay`)
 - `SegmentList` with optional `Initialization` and `mediaRange` byte ranges
 - `SegmentBase`/BaseURL single-object representations (the whole object is
   downloaded; `sidx` is not parsed)
@@ -66,7 +69,9 @@ backend is protocol-isolated: `shaul-core` does not depend on DASH.
 
 Not supported yet:
 
-- Dynamic manifests without a `SegmentTimeline`, or with multiple Periods
+- Multiple Periods
+- `availabilityTimeOffset`, low-latency chunked delivery and DVR-window start
+  selection
 - DRM (`ContentProtection`, CENC) and `xlink:href`
 - Subtitles, thumbnails, alternate audio muxing and multi-track selection
 - ffmpeg remuxing
@@ -91,7 +96,10 @@ The output extension is `.webm` for WebM representations, otherwise `.mp4`.
 - A video-only representation will produce a video-only output when the
   manifest uses separate audio AdaptationSets.
 - Dynamic captures always start from a fresh temp directory and the current
-  timeline window. Cancelling or failing keeps the recorded segments;
+  window. Constant-duration captures use `publishTime` as the reference clock
+  when present (otherwise the local clock), start at the live edge, and use
+  `timeShiftBufferDepth` (or a 30-second lookback) to detect expired
+  segments. Cancelling or failing keeps the recorded segments;
   `clean --orphans` removes temp files from failed dynamic captures as well as
   completed/cancelled tasks. The output is finalized only when the capture
   stops.
@@ -101,5 +109,6 @@ The output extension is `.webm` for WebM representations, otherwise `.mp4`.
 - [Project README](https://github.com/hushink/shaul#readme)
 - [DASH ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0016-dash-backend.md)
 - [Live ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0018-dash-live.md)
+- [Constant-duration live ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0019-dash-live-constant-duration.md)
 - [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
 - [API reference](https://docs.rs/shaul-dash)

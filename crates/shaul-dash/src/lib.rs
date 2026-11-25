@@ -9,10 +9,10 @@
 //!
 //! Supports static single-period VOD manifests with SegmentTemplate,
 //! SegmentList or SegmentBase/BaseURL addressing and segment-level resume, and
-//! bounded dynamic (live) captures when the manifest uses SegmentTemplate +
-//! SegmentTimeline. Dynamic captures are not resumable. Multiple periods, DRM,
-//! dynamic manifests without a timeline, subtitles, alternate audio and
-//! remuxing are not supported.
+//! bounded dynamic (live) captures with SegmentTemplate + SegmentTimeline or a
+//! constant-duration SegmentTemplate. Dynamic captures are not resumable.
+//! Multiple periods, DRM, low-latency `availabilityTimeOffset`, subtitles,
+//! alternate audio and remuxing are not supported.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -28,7 +28,7 @@ pub mod parser;
 
 pub use backend::DashBackend;
 pub use client::DashClient;
-pub use mpd::{DashManifest, SegmentRef, SelectedRepresentation};
+pub use mpd::{DashManifest, DynamicTemplate, SegmentRef, SegmentTiming, SelectedRepresentation};
 pub use parser::{DASH_PROTOCOL, DashParser};
 
 use std::sync::Arc;

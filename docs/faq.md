@@ -197,19 +197,27 @@ when recording stops.
 
 ## Can I record a live DASH stream?
 
-Yes, as a bounded capture, when the `type="dynamic"` MPD uses
-`SegmentTemplate` + `SegmentTimeline` and has a single Period. Pass
-`--live-duration`, `--live-segments`, or both. The backend polls at
-`minimumUpdatePeriod` (clamped to 1-60 seconds), keeps the initially selected
-representation id, deduplicates by presentation time, requires a continuous
-timeline, and stops at a limit or when the MPD becomes `type="static"`.
-Durations are measured from the timeline, not wall-clock time.
+Yes, as a bounded capture, when the `type="dynamic"` MPD has a single Period
+and uses either `SegmentTemplate` + `SegmentTimeline`, or a constant-duration
+`SegmentTemplate` with `availabilityStartTime`. Pass `--live-duration`,
+`--live-segments`, or both. The backend polls at `minimumUpdatePeriod`
+(clamped to 1-60 seconds), keeps the initially selected representation id,
+deduplicates by presentation time, requires continuous segment timing, and
+stops at a limit, when the MPD becomes `type="static"`, or when the Period
+ends.
+
+Constant-duration captures start at the live edge (adjusted by
+`suggestedPresentationDelay`) rather than the whole DVR window. They use
+`publishTime` as the reference clock when present (otherwise the local clock),
+and use `timeShiftBufferDepth` (or a 30-second lookback) to detect segments
+that expired before download. A clock or availability mismatch fails explicitly
+instead of producing a silent gap.
 
 Dynamic captures are not resumable and always start from a fresh temp directory
-and the current timeline window. `shaul clean --orphans` removes temp files
-from failed dynamic captures as well as completed/cancelled tasks. Dynamic
-manifests with constant-duration templates, multiple Periods, DRM, subtitles or
-alternate audio muxing are not supported yet.
+and the current window. `shaul clean --orphans` removes temp files from failed
+dynamic captures as well as completed/cancelled tasks. Multiple Periods, DRM,
+subtitles, alternate audio muxing and low-latency `availabilityTimeOffset` are
+not supported yet.
 
 ## Does shaul support DASH?
 
@@ -227,11 +235,11 @@ one `.mp4` or `.webm` file.
 
 DASH resumes VOD at segment granularity using a manifest SHA-256, the
 representation id and the segment count. Dynamic (`type="dynamic"`) manifests
-can also be recorded as bounded live captures when they use SegmentTemplate +
-SegmentTimeline; see the live questions below. DRM (`ContentProtection`),
-dynamic manifests without a SegmentTimeline, multiple periods, subtitles,
-alternate audio muxing, `sidx` parsing and ffmpeg remuxing are not supported
-yet. `--mirror` and the final-output content cache do not apply. Completed
+can also be recorded as bounded live captures with SegmentTemplate +
+SegmentTimeline or constant-duration SegmentTemplate + `availabilityStartTime`;
+see the live questions below. DRM (`ContentProtection`), multiple periods,
+subtitles, alternate audio muxing, `sidx` parsing, low-latency
+`availabilityTimeOffset` and ffmpeg remuxing are not supported yet. `--mirror` and the final-output content cache do not apply. Completed
 segments live in `<output>.shaul.dash.parts/`; `shaul clean --orphans` removes
 that directory for completed or cancelled tasks, along with the concatenation
 `.part`.

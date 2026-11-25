@@ -256,13 +256,15 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
   VOD resume is guarded by an MPD SHA-256, the representation id and the
   segment count.
 - Dynamic (live) manifests can be recorded with `--live-duration` or
-  `--live-segments` when they use `SegmentTemplate` + `SegmentTimeline`. The
-  backend polls at `minimumUpdatePeriod`, deduplicates by presentation time,
-  and stops at the limit or when the MPD becomes static. Dynamic captures are
-  not resumable.
-- DRM (`ContentProtection`), dynamic manifests without a SegmentTimeline,
-  multiple Periods, subtitles, alternate audio muxing and remuxing are not
-  supported yet.
+  `--live-segments` when they use `SegmentTemplate` + `SegmentTimeline`, or a
+  constant-duration `SegmentTemplate` with `availabilityStartTime`. The backend
+  polls at `minimumUpdatePeriod`, deduplicates by presentation time, and stops
+  at the limit, when the MPD becomes static, or when the Period ends.
+  Constant-duration captures start at the live edge and use `publishTime` (or
+  the local clock) to compute availability. Dynamic captures are not resumable.
+- DRM (`ContentProtection`), multiple Periods, `availabilityTimeOffset` and
+  low-latency chunked delivery, subtitles, alternate audio muxing and remuxing
+  are not supported yet.
 
 ### Integrity and post-processing
 

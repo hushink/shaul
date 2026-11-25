@@ -45,8 +45,8 @@ opens the sidecar task store:
   and bounded live HLS capture when `TaskOptions::live_duration_secs` or
   `live_segments` is set (not resumable)
 - DASH (only with the `dash` feature; static single-period manifests and
-  bounded dynamic captures with SegmentTemplate + SegmentTimeline, one
-  concatenated output)
+  bounded dynamic captures with SegmentTemplate + SegmentTimeline or a
+  constant-duration template, one concatenated output)
 - direct links as the fallback
 
 ```rust

@@ -48,9 +48,11 @@ $ shaul download https://example.com/live/manifest.mpd --live-segments 300
 - `SegmentTemplate`：`$Number$`、`$Time$`、`$RepresentationID$`、
   `$Bandwidth$`、`%0Nd` 补零、constant `duration`、`endNumber` 或
   `SegmentTimeline`（非负重复次数）
-- 动态清单要求 `SegmentTemplate` + `SegmentTimeline`；后端按
+- 动态清单支持 `SegmentTemplate` + `SegmentTimeline`，也支持 constant
+  duration 的 `SegmentTemplate` + `availabilityStartTime`。后端按
   `minimumUpdatePeriod` 轮询、按 presentation time 去重，并在达到时长/分片
-  上限或清单变为静态时停止
+  上限、清单变为静态或 Period 结束时停止。constant-duration 录制从 live
+  edge（按 `suggestedPresentationDelay` 调整）开始
 - `SegmentList`，包括可选 `Initialization` 与 `mediaRange` 字节范围
 - `SegmentBase`/BaseURL 单对象 Representation（下载整个对象，不解析 `sidx`）
 - BaseURL 沿 MPD → Period → AdaptationSet → Representation 继承
@@ -60,7 +62,8 @@ $ shaul download https://example.com/live/manifest.mpd --live-segments 300
 
 暂不支持：
 
-- 没有 `SegmentTimeline` 的动态清单，以及多 Period
+- 多 Period
+- `availabilityTimeOffset`、低延迟分块和显式从 DVR 窗口起点录制
 - DRM（`ContentProtection`、CENC）与 `xlink:href`
 - 字幕、缩略图、交替音轨混流和多音轨选择
 - ffmpeg 转封装
@@ -81,14 +84,17 @@ $ shaul download https://example.com/live/manifest.mpd --live-segments 300
   `allow_cross_origin_auth`。
 - 当清单使用独立音频 AdaptationSet 时，视频 Representation 会产出无音轨的
   视频文件。
-- 动态录制每次都从新的临时目录和当前 timeline 窗口开始。取消或失败会保留
-  已录分片供检查；`clean --orphans` 也会清理失败动态任务的临时文件。输出只在
-  录制停止后一次性收尾。
+- 动态录制每次都从新的临时目录和当前窗口开始。constant-duration 录制优先用
+  `publishTime` 作为参考时钟（缺失时用本机时钟），从 live edge 开始，并用
+  `timeShiftBufferDepth`（或 30 秒的回看）判断分片是否过期。取消或失败会
+  保留已录分片供检查；`clean --orphans` 也会清理失败动态任务的临时文件。输出
+  只在录制停止后一次性收尾。
 
 ## 文档
 
 - [项目 README](https://github.com/hushink/shaul/blob/main/README.zh-CN.md)
 - [DASH ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0016-dash-backend.md)
 - [直播 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0018-dash-live.md)
+- [常量时长直播 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0019-dash-live-constant-duration.md)
 - [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
 - [API reference](https://docs.rs/shaul-dash)

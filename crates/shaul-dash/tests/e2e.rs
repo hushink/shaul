@@ -422,6 +422,125 @@ async fn handle_live_dash(
     respond(&mut socket, "404 Not Found", b"not found").await;
 }
 
+struct ConstantLiveDashServer {
+    addr: SocketAddr,
+    requests: Arc<Mutex<Vec<String>>>,
+}
+
+impl ConstantLiveDashServer {
+    async fn spawn() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let fetches = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let requests = server_requests.clone();
+                let fetches = fetches.clone();
+                tokio::spawn(async move {
+                    handle_constant_dash(socket, requests, fetches).await;
+                });
+            }
+        });
+        Self { addr, requests }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("http://{}{path}", self.addr)
+    }
+
+    fn take_requests(&self) -> Vec<String> {
+        std::mem::take(&mut *self.requests.lock().unwrap())
+    }
+}
+
+fn constant_dynamic_mpd(publish_offset: u64, static_manifest: bool) -> String {
+    let attributes = if static_manifest {
+        r#"type="static" mediaPresentationDuration="PT20S""#.to_string()
+    } else {
+        format!(
+            r#"type="dynamic" minimumUpdatePeriod="PT1S" availabilityStartTime="2026-01-01T00:00:00Z" publishTime="2026-01-01T00:00:{publish_offset:02}Z" suggestedPresentationDelay="PT0S" timeShiftBufferDepth="PT30S""#
+        )
+    };
+    format!(
+        r#"<MPD {attributes}>
+<Period start="PT0S"><AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+<SegmentTemplate media="cseg-$Number$.m4s" initialization="cinit.mp4"
+    timescale="1000" duration="2000" startNumber="1"/>
+</Representation></AdaptationSet></Period></MPD>"#
+    )
+}
+
+fn constant_payload(number: u64) -> Vec<u8> {
+    format!("C{number}").into_bytes()
+}
+
+async fn handle_constant_dash(
+    mut socket: TcpStream,
+    requests: Arc<Mutex<Vec<String>>>,
+    fetches: Arc<AtomicUsize>,
+) {
+    let mut buffer = vec![0u8; 16 * 1024];
+    let mut read = 0;
+    loop {
+        let Ok(count) = socket.read(&mut buffer[read..]).await else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        read += count;
+        if buffer[..read]
+            .windows(4)
+            .any(|window| window == b"\r\n\r\n")
+        {
+            break;
+        }
+        if read == buffer.len() {
+            return;
+        }
+    }
+    let request = String::from_utf8_lossy(&buffer[..read]);
+    let path = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .to_string();
+    requests.lock().unwrap().push(path.clone());
+
+    if path == "/constant.mpd" {
+        let fetch = fetches.fetch_add(1, Ordering::SeqCst) + 1;
+        let body = match fetch {
+            1 => constant_dynamic_mpd(10, false),
+            2 => constant_dynamic_mpd(14, false),
+            _ => constant_dynamic_mpd(20, true),
+        };
+        respond(&mut socket, "200 OK", body.as_bytes()).await;
+        return;
+    }
+    if path == "/cinit.mp4" {
+        respond(&mut socket, "200 OK", b"INIT").await;
+        return;
+    }
+    if let Some(number) = path
+        .strip_prefix("/cseg-")
+        .and_then(|value| value.strip_suffix(".m4s"))
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        respond(&mut socket, "200 OK", &constant_payload(number)).await;
+        return;
+    }
+    respond(&mut socket, "404 Not Found", b"not found").await;
+}
+
 #[tokio::test]
 async fn downloads_a_segment_template_vod() {
     let server = DashServer::spawn(None).await;
@@ -733,6 +852,111 @@ async fn stops_a_dynamic_capture_when_the_manifest_becomes_static() {
             .filter(|path| path.as_str() == "/live.mpd")
             .count(),
         3
+    );
+}
+
+#[tokio::test]
+async fn records_a_constant_duration_dynamic_manifest() {
+    let server = ConstantLiveDashServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/constant.mpd")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                live_segments: Some(3),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+
+    let mut expected = b"INIT".to_vec();
+    for number in [7_u64, 8, 9] {
+        expected.extend_from_slice(&constant_payload(number));
+    }
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("constant.mp4"))
+            .await
+            .unwrap(),
+        expected
+    );
+    assert!(
+        !tokio::fs::try_exists(config.download.dir.join("constant.mp4.shaul.dash.parts"))
+            .await
+            .unwrap()
+    );
+
+    let requests = server.take_requests();
+    assert!(requests.iter().any(|path| path == "/cseg-7.m4s"));
+    assert!(requests.iter().any(|path| path == "/cseg-8.m4s"));
+    assert!(requests.iter().any(|path| path == "/cseg-9.m4s"));
+    assert!(!requests.iter().any(|path| path == "/cseg-10.m4s"));
+}
+
+#[tokio::test]
+async fn constant_dynamic_capture_until_the_duration_limit() {
+    let server = ConstantLiveDashServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/constant.mpd")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                live_duration_secs: Some(2),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("constant.mp4"))
+            .await
+            .unwrap(),
+        b"INITC7".to_vec()
+    );
+}
+
+#[tokio::test]
+async fn finishes_a_constant_dynamic_capture_when_the_manifest_becomes_static() {
+    let server = ConstantLiveDashServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/constant.mpd")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                live_segments: Some(100),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+
+    let mut expected = b"INIT".to_vec();
+    for number in [7_u64, 8, 9, 10] {
+        expected.extend_from_slice(&constant_payload(number));
+    }
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("constant.mp4"))
+            .await
+            .unwrap(),
+        expected
     );
 }
 
