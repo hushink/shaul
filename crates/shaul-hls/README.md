@@ -67,6 +67,8 @@ The output extension is `.mp4` when the playlist has an init map, otherwise
   SHA-256 as a resume fingerprint.
 - Completed segments live in `<output>.shaul.hls.parts/` and are concatenated
   through `<output>.shaul.part`; the temporary directory is removed on success.
+  `shaul clean --orphans` removes the directory (and the concatenation
+  `.part`) left by completed or cancelled tasks.
 - Cross-origin playlist, key and segment URLs have sensitive headers stripped
   unless `allow_cross_origin_auth` is enabled.
 - AES-128 keys are fetched at run time, kept in memory only and never written

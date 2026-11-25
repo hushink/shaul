@@ -112,6 +112,9 @@ provider token 永不持久化。`--json` 输出会对敏感请求头做脱敏�
 `shaul config set` 原地编辑 TOML 文档，保留已有注释与格式。`shaul doctor`
 还会检查 Hugging Face 与 ModelScope 的官方凭据文件。校验失败的文件会被重命名
 为 `<name>.shaul.failed`，`clean --orphans` 会忽略 sidecar 中记录的不安全路径。
+它还会清理已完成/已取消任务遗留的 `.shaul.part` 文件和 HLS
+`.shaul.hls.parts/` 目录；统计目录大小时不跟随符号链接，并且永远不会删除
+目标文件。
 
 ## 文档
 

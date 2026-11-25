@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   offsets and a full-object fallback
 - *(cli)* batch `pause`/`resume`/`cancel` with multiple ids or `--all`, plus
   `list --status` state filters
+- *(cli)* `clean --orphans` removes HLS segment temp directories for
+  completed/cancelled tasks, reporting their recursive size and skipping
+  symlinked or unsafe paths
 
 ## [1.2.2](https://github.com/hushink/shaul/compare/shaul-v1.2.1...shaul-v1.2.2) - 2026-11-24
 

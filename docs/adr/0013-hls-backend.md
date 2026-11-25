@@ -53,9 +53,9 @@ shaul 的 `Resource` / `FileItem` 模型把 `FileItem` 定义为落盘与校验�
   `FileOutcome`；`--verify` 需要用户提供最终文件的 checksum。最终输出暂不写入
   内容寻址缓存；`--mirror` 对 HLS 任务不生效。
 - `FileResume.part_path` 指向拼接用的 `.part` 文件；分片临时目录记录在
-  `metadata["hls.temp_dir"]`。当前 `clean --orphans` 只清理 `.part` 文件，
-  不会递归删除该目录；成功完成时后端会自己删除，取消/失败时目录保留用于
-  续传。后续为 `clean --orphans` 增加 HLS 临时目录清理。
+  `metadata["hls.temp_dir"]`。成功完成时后端会自己删除该目录；取消/失败时
+  保留用于续传。`clean --orphans` 会为已完成或已取消的任务删除该目录和拼接
+  `.part`。
 
 ## Phase 1 scope
 

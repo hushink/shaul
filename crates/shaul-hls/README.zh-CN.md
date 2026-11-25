@@ -61,7 +61,8 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 
 - 后端在下载时重新抓取 media playlist，并用其 SHA-256 作为续传指纹。
 - 已完成分片存放在 `<output>.shaul.hls.parts/`，通过
-  `<output>.shaul.part` 拼接；成功后删除临时目录。
+  `<output>.shaul.part` 拼接；成功后删除临时目录。已完成或已取消任务遗留的
+  目录及拼接 `.part` 可由 `shaul clean --orphans` 清理。
 - 跨源 playlist/密钥/分片 URL 默认剥离敏感请求头；开启
   `allow_cross_origin_auth` 后保留。
 - AES-128 密钥在运行时获取，只驻留内存，不写入任务 sidecar。加密分片先保存为

@@ -28,10 +28,10 @@ the file safely instead of appending to stale data.
 Services that ignore `Range` are handled with a single-stream fallback;
 `200 + Content-Range` is treated as a partial response. Segment size shrinks
 adaptively for small files so all configured connections can participate,
-+while large files keep the configured `download.segment_size` as an upper
-+bound. If the selected backend
-declares that it cannot resume, the engine discards the saved manifest and
-starts from zero. FTP automatically restarts from zero when the server rejects
+while large files keep the configured `download.segment_size` as an upper
+bound. If the selected backend declares that it cannot resume, the engine
+discards the saved manifest and starts from zero. FTP automatically restarts
+from zero when the server rejects
 `REST`. See [resume and hardening](resume.md).
 
 ## Can I send a POST or another non-GET request?
@@ -108,8 +108,9 @@ downloads are not cached. `shaul stats` reports entries/bytes and
   content cache.
 - `clean --finished` removes completed/cancelled/failed sidecars;
   `--completed`, `--cancelled` and `--failed` select individual states;
-  `--orphans` removes destination-relative `.shaul.part` files left by
-  completed/cancelled tasks (unsafe paths in a sidecar are ignored);
+  `--orphans` removes destination-relative `.shaul.part` files and HLS
+  `.shaul.hls.parts/` directories left by completed/cancelled tasks (unsafe
+  paths in a sidecar are ignored);
   `--cache` removes content-cache entries (it refuses a directory whose top
   level does not look like a content cache). With `--cache`, add
   `--cache-older-than 30d` and/or `--cache-max-size 50GiB` to prune instead of
@@ -171,7 +172,8 @@ is handled by reading the full object and discarding the prefix. SAMPLE-AES,
 live playlists, DASH and alternate audio renditions are not supported yet.
 `--mirror` and the final-output content cache do not apply to HLS tasks.
 Completed segments live in `<output>.shaul.hls.parts/`; `shaul clean --orphans`
-currently removes the concatenation `.part` but not that directory.
+removes that directory for completed or cancelled tasks, along with the
+concatenation `.part`.
 
 ## Does BitTorrent seed after completion?
 

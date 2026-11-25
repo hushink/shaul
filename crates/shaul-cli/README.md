@@ -116,7 +116,9 @@ being ignored. `shaul config set` edits the TOML document in place and keeps
 existing comments and formatting. `shaul doctor` also checks the official
 Hugging Face and ModelScope credential files. Verification failures are renamed
 to `<name>.shaul.failed`, and `clean --orphans` ignores unsafe paths recorded in
-a sidecar.
+a sidecar. It removes leftover `.shaul.part` files and HLS
+`.shaul.hls.parts/` directories for completed or cancelled tasks, does not
+follow symlinks while sizing them, and never deletes destination files.
 
 ## Documentation
 

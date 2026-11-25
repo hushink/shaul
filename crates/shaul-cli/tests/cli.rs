@@ -829,7 +829,7 @@ fn download_runs_through_the_cli() {
 
 #[test]
 fn hls_download_runs_through_the_cli() {
-    let (url, _server) = spawn_hls_server();
+    let (url, _server) = spawn_hls_server(None);
 
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(&dir, "");
@@ -845,6 +845,54 @@ fn hls_download_runs_through_the_cli() {
     ]));
 
     assert_eq!(fs::read(&output_path).unwrap(), b"AAAABBBB".to_vec());
+}
+
+#[test]
+fn clean_removes_hls_temp_directories() {
+    let (url, _server) = spawn_hls_server(Some("/seg-1.ts"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "[network]\nretries = 0\n");
+    let config = path.to_str().unwrap();
+
+    let output = run(shaul().args(["--config", config, "--json", "add", &url]));
+    let id = json_stdout(&output)[0]["id"].as_str().unwrap().to_string();
+
+    let _ = shaul()
+        .args(["--config", config, "run", "--once"])
+        .output()
+        .unwrap();
+
+    let output = run(shaul().args(["--config", config, "--json", "status", &id]));
+    assert_eq!(json_stdout(&output)["state"], "failed");
+
+    run(shaul().args(["--config", config, "cancel", &id]));
+
+    let temp = dir
+        .path()
+        .join("downloads")
+        .join("master.ts.shaul.hls.parts");
+    assert!(
+        temp.is_dir(),
+        "HLS temp directory should exist: {}",
+        temp.display()
+    );
+    fs::write(temp.join("segment-00000.bin"), b"partial").unwrap();
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "clean",
+        "--orphans",
+        "--dry-run",
+    ]));
+    assert_eq!(json_stdout(&output)["orphan_dirs"], 1);
+    assert!(temp.exists());
+
+    let output = run(shaul().args(["--config", config, "--json", "clean", "--orphans"]));
+    assert_eq!(json_stdout(&output)["orphan_dirs"], 1);
+    assert!(!temp.exists());
 }
 
 #[test]
@@ -1215,18 +1263,23 @@ fn spawn_method_server(data: Vec<u8>) -> (String, RecordedRequests) {
     (format!("http://{address}/api/download"), requests)
 }
 
-/// Serves a tiny HLS master/media playlist and two segments.
-fn spawn_hls_server() -> (String, thread::JoinHandle<()>) {
+/// Serves a tiny HLS master/media playlist and two segments. When
+/// `fail_segment` is set, the first request for that path gets a 500.
+fn spawn_hls_server(fail_segment: Option<&str>) -> (String, thread::JoinHandle<()>) {
     const MASTER: &[u8] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nvideo.m3u8\n";
     const MEDIA: &[u8] =
         b"#EXTM3U\n#EXTINF:4.0,\nseg-0.ts\n#EXTINF:4.0,\nseg-1.ts\n#EXT-X-ENDLIST\n";
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = listener.local_addr().unwrap();
+    let fail_segment = fail_segment.map(str::to_string);
+    let failed = Arc::new(AtomicBool::new(false));
     let handle = thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else {
                 break;
             };
+            let fail_segment = fail_segment.clone();
+            let failed = failed.clone();
             thread::spawn(move || {
                 let mut request = [0_u8; 16 * 1024];
                 let _ = stream.read(&mut request);
@@ -1239,6 +1292,12 @@ fn spawn_hls_server() -> (String, thread::JoinHandle<()>) {
                     .split('?')
                     .next()
                     .unwrap_or("/");
+                if fail_segment.as_deref() == Some(path) && !failed.swap(true, Ordering::SeqCst) {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 6\r\nConnection: close\r\n\r\nfailed",
+                    );
+                    return;
+                }
                 let (body, content_type) = match path {
                     "/master.m3u8" => (MASTER, "application/vnd.apple.mpegurl"),
                     "/video.m3u8" => (MEDIA, "application/vnd.apple.mpegurl"),

@@ -155,7 +155,8 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      map 的 fMP4、AES-128 加密（密钥轮换、显式/默认 IV）和
      `EXT-X-BYTERANGE`（含隐式偏移）；SAMPLE-AES、直播和 DASH 暂不支持，
      后续作为增量。AES-128 密钥只驻留内存，不写入 sidecar。`reqwest` 类型
-     不泄漏到 `shaul-core`。
+     不泄漏到 `shaul-core`。CLI `clean --orphans` 会为已完成/已取消任务
+     删除 HLS 分片临时目录，跳过符号链接和不安全路径。
    - `HttpBackend::download_range(request, file, range, destination)` 下载
      精确字节区间，复用 header/认证/代理/超时/重试/限速和连接预算；HLS 的
      `EXT-X-BYTERANGE` 使用该方法。它是新增公开方法，属于 minor 变更。

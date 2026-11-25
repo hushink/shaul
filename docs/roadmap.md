@@ -2,8 +2,7 @@
 
 - 更新日期：2026-11-19
 - 基线：1.2.1（运维闭环、通用内容缓存与可选 Xet 已发布）
-- 下一开发线：1.5 HLS 增量（DASH/临时目录清理）；1.3 仍有本地 Xet CAS
-  fixture。
+- 下一开发线：1.5 HLS 增量（DASH）；1.3 仍有本地 Xet CAS fixture。
 - 目标：在不破坏 1.0 兼容性的前提下，把 shaul 从“能下载”推进到“可长期运行、可嵌入、可扩展”的生产级下载引擎。
 
 ## 原则
@@ -269,8 +268,8 @@ pub struct ExtractorFinalizer { /* registry */ }
       内存，加密分片先保存为 `.enc` 再解密为 `.bin`。
 - [x] `EXT-X-BYTERANGE` 分片和 init map，包括隐式偏移；HTTP 层新增
       `HttpBackend::download_range`，服务器忽略 `Range` 时回退完整对象。
+- [x] `clean --orphans` 清理已完成/已取消任务的 HLS 分片临时目录。
 - [ ] DASH、直播、交替音轨、ffmpeg 转封装。
-- [ ] `clean --orphans` 清理 HLS 分片临时目录。
 - 设计记录见 [ADR 0013](adr/0013-hls-backend.md)、
   [ADR 0014](adr/0014-hls-aes128.md) 和
   [ADR 0015](adr/0015-hls-byterange.md)。

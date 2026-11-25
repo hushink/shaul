@@ -10,6 +10,9 @@ use shaul::{
 
 use crate::args::CleanArgs;
 
+const HLS_TEMP_DIR_KEY: &str = "hls.temp_dir";
+const HLS_TEMP_SUFFIX: &str = ".shaul.hls.parts";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum CheckStatus {
@@ -257,6 +260,7 @@ pub async fn command_clean(config: &Config, args: CleanArgs, json: bool) -> Resu
     }
 
     let mut orphan_parts = BTreeSet::new();
+    let mut orphan_dirs = BTreeSet::new();
     if args.orphans {
         for task in &tasks {
             if !matches!(task.state, TaskState::Completed | TaskState::Cancelled) {
@@ -271,6 +275,11 @@ pub async fn command_clean(config: &Config, args: CleanArgs, json: bool) -> Resu
                 for file in resume.files.values() {
                     if let Some(path) = safe_resume_part(&task.destination, &file.part_path) {
                         orphan_parts.insert(path);
+                    }
+                    if let Some(relative) = file.metadata.get(HLS_TEMP_DIR_KEY)
+                        && let Some(path) = safe_hls_temp_dir(&task.destination, relative)
+                    {
+                        orphan_dirs.insert(path);
                     }
                 }
             }
@@ -308,6 +317,24 @@ pub async fn command_clean(config: &Config, args: CleanArgs, json: bool) -> Resu
         removed_orphan_bytes += metadata.len();
         if !args.dry_run {
             tokio::fs::remove_file(&path).await?;
+        }
+    }
+
+    let mut removed_orphan_dirs = 0usize;
+    let mut removed_orphan_dir_bytes = 0u64;
+    for path in orphan_dirs {
+        // `symlink_metadata` keeps a sidecar-planted symlink from being treated
+        // as a temp directory and traversed.
+        let Ok(metadata) = tokio::fs::symlink_metadata(&path).await else {
+            continue;
+        };
+        if !metadata.is_dir() {
+            continue;
+        }
+        removed_orphan_dirs += 1;
+        removed_orphan_dir_bytes += directory_size(&path).await;
+        if !args.dry_run {
+            tokio::fs::remove_dir_all(&path).await?;
         }
     }
 
@@ -357,6 +384,8 @@ pub async fn command_clean(config: &Config, args: CleanArgs, json: bool) -> Resu
         task_bytes: removed_task_bytes,
         orphan_parts: removed_orphan_parts,
         orphan_bytes: removed_orphan_bytes,
+        orphan_dirs: removed_orphan_dirs,
+        orphan_dir_bytes: removed_orphan_dir_bytes,
         cache_entries: removed_cache_entries,
         cache_bytes: removed_cache_bytes,
         cache_entries_remaining: remaining_cache_entries,
@@ -374,11 +403,13 @@ pub async fn command_clean(config: &Config, args: CleanArgs, json: bool) -> Resu
             "removed"
         };
         println!(
-            "{verb} {} task(s) ({}), {} orphan part(s) ({}), {} cache entr(ies) ({})",
+            "{verb} {} task(s) ({}), {} orphan part(s) ({}), {} orphan dir(s) ({}), {} cache entr(ies) ({})",
             report.tasks,
             crate::support::human_bytes(report.task_bytes),
             report.orphan_parts,
             crate::support::human_bytes(report.orphan_bytes),
+            report.orphan_dirs,
+            crate::support::human_bytes(report.orphan_dir_bytes),
             report.cache_entries,
             crate::support::human_bytes(report.cache_bytes)
         );
@@ -424,6 +455,8 @@ struct CleanReport {
     task_bytes: u64,
     orphan_parts: usize,
     orphan_bytes: u64,
+    orphan_dirs: usize,
+    orphan_dir_bytes: u64,
     cache_entries: u64,
     cache_bytes: u64,
     cache_entries_remaining: u64,
@@ -559,6 +592,38 @@ fn safe_resume_part(destination: &Path, relative: &str) -> Option<PathBuf> {
     name.ends_with(".shaul.part").then_some(path)
 }
 
+fn safe_hls_temp_dir(destination: &Path, relative: &str) -> Option<PathBuf> {
+    validate_relative_path(relative).ok()?;
+    let path = destination.join(relative);
+    let name = path.file_name()?.to_str()?;
+    name.ends_with(HLS_TEMP_SUFFIX).then_some(path)
+}
+
+async fn directory_size(root: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
+            continue;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            // `file_type()` does not follow symlinks, so the walk cannot leave
+            // the temp directory through a link.
+            let Ok(file_type) = entry.file_type().await else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(entry.path());
+            } else if file_type.is_file()
+                && let Ok(metadata) = entry.metadata().await
+            {
+                total = total.saturating_add(metadata.len());
+            }
+        }
+    }
+    total
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -574,5 +639,15 @@ mod tests {
         assert!(safe_resume_part(destination, "file.bin").is_none());
         assert!(safe_resume_part(destination, "../escape.shaul.part").is_none());
         assert!(safe_resume_part(destination, "C:/tmp/x.shaul.part").is_none());
+    }
+
+    #[test]
+    fn hls_temp_dirs_must_be_relative_markers() {
+        let destination = Path::new("task");
+        assert!(safe_hls_temp_dir(destination, "video.ts.shaul.hls.parts").is_some());
+        assert!(safe_hls_temp_dir(destination, "nested/video.ts.shaul.hls.parts").is_some());
+        assert!(safe_hls_temp_dir(destination, "../video.ts.shaul.hls.parts").is_none());
+        assert!(safe_hls_temp_dir(destination, "C:/video.ts.shaul.hls.parts").is_none());
+        assert!(safe_hls_temp_dir(destination, "video.ts").is_none());
     }
 }
