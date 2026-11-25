@@ -35,8 +35,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 | `hls` | 点播 HLS（`.m3u8`），拼接成一个输出文件 |
 | `xet` | Hugging Face Xet 下载，失败时回退 HTTP |
 
-HLS 首期支持 TS 和单 init map 的 fMP4、分片级续传与分片并发下载；暂不支持
-AES-128、`#EXT-X-BYTERANGE`、直播列表和 DASH。
+HLS 支持 TS、单 init map 的 fMP4、AES-128 加密、分片级续传与分片并发下载；
+暂不支持 SAMPLE-AES、`#EXT-X-BYTERANGE`、直播列表和 DASH。
 
 ## 快速开始
 

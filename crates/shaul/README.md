@@ -35,9 +35,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 | `hls` | VOD HLS (`.m3u8`) playlists, concatenated into one file |
 | `xet` | Hugging Face Xet downloads with HTTP fallback |
 
-HLS phase 1 supports TS and single-init-map fMP4 playlists, segment-level
-resume and concurrent segment downloads. AES-128, `#EXT-X-BYTERANGE`, live
-playlists and DASH are not supported yet.
+HLS supports TS and single-init-map fMP4 playlists, AES-128 encryption,
+segment-level resume and concurrent segment downloads. SAMPLE-AES,
+`#EXT-X-BYTERANGE`, live playlists and DASH are not supported yet.
 
 ## Quick start
 

@@ -82,8 +82,9 @@ cancel 默认选择 pending/running/paused，对 resume 默认选择 paused/fail
 `--status` 可覆盖默认过滤。`list --status` 可重复指定状态。
 
 `--include` / `--exclude` 也可用于按 `NAME`、`RESOLUTION`、`BANDWIDTH`、
-`CODECS` 或 URI 选择 HLS 变体。HLS 首期支持点播 TS 与单 init map 的 fMP4；
-暂不支持 AES-128、`#EXT-X-BYTERANGE`、直播列表和 DASH。
+`CODECS` 或 URI 选择 HLS 变体。HLS 支持点播 TS、单 init map 的 fMP4、
+AES-128 加密分片和分片级续传；暂不支持 SAMPLE-AES、`#EXT-X-BYTERANGE`、
+直播列表和 DASH。
 
 `--method`、`--data`、`--data-file` 只适用于直接 HTTP(S) 链接。未指定
 `--method` 时，`--data` 隐含 `POST`。这类请求是单请求语义：不分片、不续传、

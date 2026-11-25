@@ -35,11 +35,13 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 `HlsParser` and `HlsBackend` can also be registered in a custom router. The
 backend is protocol-isolated: `shaul-core` does not depend on HLS.
 
-## Phase 1 scope
+## Supported
 
 - VOD media playlists with `#EXT-X-ENDLIST`
 - Master and media playlists, highest-bandwidth variant by default
 - TS output, and fMP4 playlists with a single `#EXT-X-MAP`
+- AES-128 encryption, including key rotation and explicit or media-sequence
+  IVs
 - Concurrent segment downloads through the shared HTTP backend, so proxy,
   authentication, timeouts, retries, rate limits and connection budgets apply
 - Segment-level resume: completed segment files are reused after a pause or
@@ -47,7 +49,7 @@ backend is protocol-isolated: `shaul-core` does not depend on HLS.
 
 Not supported yet:
 
-- AES-128 or SAMPLE-AES encryption
+- SAMPLE-AES encryption
 - `#EXT-X-BYTERANGE` segments
 - Live playlists
 - DASH (`mpd`)
@@ -65,8 +67,11 @@ The output extension is `.mp4` when the playlist has an init map, otherwise
   SHA-256 as a resume fingerprint.
 - Completed segments live in `<output>.shaul.hls.parts/` and are concatenated
   through `<output>.shaul.part`; the temporary directory is removed on success.
-- Cross-origin playlist and segment URLs have sensitive headers stripped
+- Cross-origin playlist, key and segment URLs have sensitive headers stripped
   unless `allow_cross_origin_auth` is enabled.
+- AES-128 keys are fetched at run time, kept in memory only and never written
+  to the task sidecar. Encrypted segments are staged as `.enc` files and
+  decrypted to the `.bin` files used for resume and concatenation.
 - A video-only variant will produce a video-only output when the master uses
   separate audio renditions.
 
@@ -74,5 +79,6 @@ The output extension is `.mp4` when the playlist has an init map, otherwise
 
 - [Project README](https://github.com/hushink/shaul#readme)
 - [HLS ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0013-hls-backend.md)
+- [AES-128 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0014-hls-aes128.md)
 - [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
 - [API reference](https://docs.rs/shaul-hls)

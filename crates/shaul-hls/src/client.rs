@@ -10,6 +10,7 @@ use url::Url;
 
 const MAX_REDIRECTS: usize = 10;
 const MAX_PLAYLIST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_KEY_BYTES: usize = 1024;
 
 enum FetchError {
     Retryable(Error),
@@ -58,6 +59,35 @@ impl HlsClient {
         request: &RequestOptions,
         cancel: &CancellationToken,
     ) -> Result<(String, Url)> {
+        let (bytes, final_url) = self
+            .fetch_body(url, request, cancel, MAX_PLAYLIST_BYTES)
+            .await?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| Error::Backend("HLS playlist is not valid UTF-8".to_string()))?;
+        Ok((text, final_url))
+    }
+
+    /// Fetch a 16-byte AES-128 key with the task's headers and authentication.
+    pub async fn fetch_key(
+        &self,
+        url: &Url,
+        request: &RequestOptions,
+        cancel: &CancellationToken,
+    ) -> Result<[u8; 16]> {
+        let (bytes, _) = self.fetch_body(url, request, cancel, MAX_KEY_BYTES).await?;
+        let length = bytes.len();
+        bytes
+            .try_into()
+            .map_err(|_| Error::Backend(format!("AES-128 HLS key must be 16 bytes, got {length}")))
+    }
+
+    async fn fetch_body(
+        &self,
+        url: &Url,
+        request: &RequestOptions,
+        cancel: &CancellationToken,
+        max_bytes: usize,
+    ) -> Result<(Vec<u8>, Url)> {
         if !matches!(url.scheme(), "http" | "https") {
             return Err(Error::Backend(format!(
                 "HLS URL must use http or https: {url}"
@@ -65,14 +95,14 @@ impl HlsClient {
         }
         let mut attempt = 0u32;
         loop {
-            match self.fetch_once(url, request, cancel).await {
+            match self.fetch_once(url, request, cancel, max_bytes).await {
                 Ok(result) => return Ok(result),
                 Err(FetchError::Fatal(error)) => return Err(error),
                 Err(FetchError::Retryable(error)) => {
                     if attempt >= self.retries {
                         return Err(error);
                     }
-                    tracing::warn!(attempt, error = %error, "HLS playlist request failed; retrying");
+                    tracing::warn!(attempt, error = %error, "HLS request failed; retrying");
                     let delay = Duration::from_millis(200u64.saturating_mul(1 << attempt.min(5)));
                     tokio::select! {
                         _ = cancel.cancelled() => return Err(Error::Cancelled),
@@ -89,7 +119,8 @@ impl HlsClient {
         url: &Url,
         request: &RequestOptions,
         cancel: &CancellationToken,
-    ) -> std::result::Result<(String, Url), FetchError> {
+        max_bytes: usize,
+    ) -> std::result::Result<(Vec<u8>, Url), FetchError> {
         let mut current = url.clone();
         let mut headers = build_headers(request).map_err(FetchError::Fatal)?;
         for _ in 0..MAX_REDIRECTS {
@@ -155,16 +186,16 @@ impl HlsClient {
                 return Err(FetchError::Fatal(Error::Backend(format!("HTTP {status}"))));
             }
             if let Some(length) = response.content_length()
-                && length > MAX_PLAYLIST_BYTES as u64
+                && length > max_bytes as u64
             {
                 return Err(FetchError::Fatal(Error::Backend(format!(
-                    "HLS playlist is too large: {length} bytes"
+                    "HLS response is too large: {length} bytes"
                 ))));
             }
-            let text = tokio::select! {
+            let bytes = tokio::select! {
                 _ = cancel.cancelled() => return Err(FetchError::Fatal(Error::Cancelled)),
-                result = tokio::time::timeout(self.timeout, response.text()) => match result {
-                    Ok(text) => text.map_err(|error| {
+                result = tokio::time::timeout(self.timeout, response.bytes()) => match result {
+                    Ok(bytes) => bytes.map_err(|error| {
                         FetchError::Retryable(Error::Backend(format!(
                             "could not read HLS response: {}",
                             error.without_url()
@@ -177,13 +208,13 @@ impl HlsClient {
                     }
                 },
             };
-            if text.len() > MAX_PLAYLIST_BYTES {
+            if bytes.len() > max_bytes {
                 return Err(FetchError::Fatal(Error::Backend(format!(
-                    "HLS playlist is too large: {} bytes",
-                    text.len()
+                    "HLS response is too large: {} bytes",
+                    bytes.len()
                 ))));
             }
-            return Ok((text, current));
+            return Ok((bytes.to_vec(), current));
         }
         Err(FetchError::Fatal(Error::Backend(
             "too many HLS redirects".to_string(),

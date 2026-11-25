@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(hls)* add the optional `shaul-hls` crate and `hls` feature: VOD `.m3u8`
   master/media playlists, highest-bandwidth variant selection, concurrent
   segment downloads, TS/fMP4 concatenation and segment-level resume
+- *(hls)* add AES-128 decryption with key rotation, explicit or media-sequence
+  IVs, and encrypted-segment staging
 - *(cli)* batch `pause`/`resume`/`cancel` with multiple ids or `--all`, plus
   `list --status` state filters
 

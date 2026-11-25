@@ -3,9 +3,74 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use aes::Aes128;
+use cbc::cipher::generic_array::GenericArray;
+use cbc::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 use shaul_core::{Config, DownloadEngine, Link, SidecarStore, TaskOptions, TaskState};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+const AES_KEY: [u8; 16] = [0x11; 16];
+const ROT_KEY1: [u8; 16] = [0x22; 16];
+const ROT_KEY2: [u8; 16] = [0x33; 16];
+const AES_IV: [u8; 16] = [
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+];
+const AES_PLAIN_0: &[u8] = b"segment-zero";
+const AES_PLAIN_1: &[u8] = b"segment-one!";
+const ROT_PLAIN_0: &[u8] = b"rotated-zero";
+const ROT_PLAIN_1: &[u8] = b"rotated-one!";
+const INIT_PLAIN: &[u8] = b"INIT-DATA";
+const MAP_PLAIN: &[u8] = b"map-segment";
+
+const AES_PLAYLIST: &str = r#"#EXTM3U
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x000102030405060708090a0b0c0d0e0f
+#EXTINF:4.0,
+enc-0.ts
+#EXTINF:4.0,
+enc-1.ts
+#EXT-X-ENDLIST
+"#;
+
+const ROTATION_PLAYLIST: &str = r#"#EXTM3U
+#EXT-X-MEDIA-SEQUENCE:100
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-KEY:METHOD=AES-128,URI="rot-key1.bin"
+#EXTINF:4.0,
+rot-0.ts
+#EXT-X-KEY:METHOD=AES-128,URI="rot-key2.bin"
+#EXTINF:4.0,
+rot-1.ts
+#EXT-X-ENDLIST
+"#;
+
+const AES_MAP_PLAYLIST: &str = r#"#EXTM3U
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x000102030405060708090a0b0c0d0e0f
+#EXT-X-MAP:URI="enc-init.mp4"
+#EXTINF:4.0,
+map-seg-0.ts
+#EXT-X-ENDLIST
+"#;
+
+const SAMPLE_AES_PLAYLIST: &str = r#"#EXTM3U
+#EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"
+#EXTINF:4.0,
+enc-0.ts
+#EXT-X-ENDLIST
+"#;
+
+fn encrypt(data: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
+    cbc::Encryptor::<Aes128>::new(GenericArray::from_slice(key), GenericArray::from_slice(iv))
+        .encrypt_padded_vec_mut::<Pkcs7>(data)
+}
+
+fn sequence_iv(sequence: u64) -> [u8; 16] {
+    let mut iv = [0u8; 16];
+    iv[8..].copy_from_slice(&sequence.to_be_bytes());
+    iv
+}
 
 const MASTER: &str = "#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=640x360
@@ -127,21 +192,38 @@ async fn handle(
         return;
     }
 
-    match path.as_str() {
-        "/master.m3u8" => respond(&mut socket, "200 OK", MASTER.as_bytes()).await,
-        "/high.m3u8" => respond(&mut socket, "200 OK", HIGH.as_bytes()).await,
-        "/low.m3u8" => respond(&mut socket, "200 OK", LOW.as_bytes()).await,
-        "/fmpeg.m3u8" => respond(&mut socket, "200 OK", FMP4.as_bytes()).await,
-        "/live.m3u8" => respond(&mut socket, "200 OK", LIVE.as_bytes()).await,
-        "/seg-000.ts" => respond(&mut socket, "200 OK", &[1u8; 4096]).await,
-        "/seg-001.ts" => respond(&mut socket, "200 OK", &[2u8; 4096]).await,
-        "/seg-002.ts" => respond(&mut socket, "200 OK", &[3u8; 4096]).await,
-        "/low-000.ts" => respond(&mut socket, "200 OK", &[9u8; 1024]).await,
-        "/init.mp4" => respond(&mut socket, "200 OK", b"INIT").await,
-        "/fseg-000.m4s" => respond(&mut socket, "200 OK", b"A").await,
-        "/fseg-001.m4s" => respond(&mut socket, "200 OK", b"B").await,
-        _ => respond(&mut socket, "404 Not Found", b"not found").await,
-    }
+    let body: Vec<u8> = match path.as_str() {
+        "/master.m3u8" => MASTER.as_bytes().to_vec(),
+        "/high.m3u8" => HIGH.as_bytes().to_vec(),
+        "/low.m3u8" => LOW.as_bytes().to_vec(),
+        "/fmpeg.m3u8" => FMP4.as_bytes().to_vec(),
+        "/live.m3u8" => LIVE.as_bytes().to_vec(),
+        "/seg-000.ts" => vec![1u8; 4096],
+        "/seg-001.ts" => vec![2u8; 4096],
+        "/seg-002.ts" => vec![3u8; 4096],
+        "/low-000.ts" => vec![9u8; 1024],
+        "/init.mp4" => b"INIT".to_vec(),
+        "/fseg-000.m4s" => b"A".to_vec(),
+        "/fseg-001.m4s" => b"B".to_vec(),
+        "/aes.m3u8" => AES_PLAYLIST.as_bytes().to_vec(),
+        "/key.bin" => AES_KEY.to_vec(),
+        "/enc-0.ts" => encrypt(AES_PLAIN_0, &AES_KEY, &AES_IV),
+        "/enc-1.ts" => encrypt(AES_PLAIN_1, &AES_KEY, &AES_IV),
+        "/rot.m3u8" => ROTATION_PLAYLIST.as_bytes().to_vec(),
+        "/rot-key1.bin" => ROT_KEY1.to_vec(),
+        "/rot-key2.bin" => ROT_KEY2.to_vec(),
+        "/rot-0.ts" => encrypt(ROT_PLAIN_0, &ROT_KEY1, &sequence_iv(100)),
+        "/rot-1.ts" => encrypt(ROT_PLAIN_1, &ROT_KEY2, &sequence_iv(101)),
+        "/aes-map.m3u8" => AES_MAP_PLAYLIST.as_bytes().to_vec(),
+        "/enc-init.mp4" => encrypt(INIT_PLAIN, &AES_KEY, &AES_IV),
+        "/map-seg-0.ts" => encrypt(MAP_PLAIN, &AES_KEY, &AES_IV),
+        "/sample-aes.m3u8" => SAMPLE_AES_PLAYLIST.as_bytes().to_vec(),
+        _ => {
+            respond(&mut socket, "404 Not Found", b"not found").await;
+            return;
+        }
+    };
+    respond(&mut socket, "200 OK", &body).await;
 }
 
 async fn respond(socket: &mut TcpStream, status: &str, body: &[u8]) {
@@ -260,6 +342,151 @@ async fn downloads_fmp4_with_an_init_segment() {
     assert_eq!(tokio::fs::read(&output).await.unwrap(), b"INITAB".to_vec());
     let requests = server.take_requests();
     assert!(requests.iter().any(|path| path == "/init.mp4"));
+}
+
+#[tokio::test]
+async fn downloads_an_aes_128_playlist_with_an_explicit_iv() {
+    let server = HlsServer::spawn(None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/aes.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("aes.ts"))
+            .await
+            .unwrap(),
+        [AES_PLAIN_0, AES_PLAIN_1].concat()
+    );
+    let requests = server.take_requests();
+    assert!(requests.iter().any(|path| path == "/key.bin"));
+}
+
+#[tokio::test]
+async fn downloads_key_rotation_with_default_ivs() {
+    let server = HlsServer::spawn(None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/rot.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("rot.ts"))
+            .await
+            .unwrap(),
+        [ROT_PLAIN_0, ROT_PLAIN_1].concat()
+    );
+    let requests = server.take_requests();
+    assert!(requests.iter().any(|path| path == "/rot-key1.bin"));
+    assert!(requests.iter().any(|path| path == "/rot-key2.bin"));
+}
+
+#[tokio::test]
+async fn downloads_an_encrypted_fmp4_init_segment() {
+    let server = HlsServer::spawn(None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/aes-map.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("aes-map.mp4"))
+            .await
+            .unwrap(),
+        [INIT_PLAIN, MAP_PLAIN].concat()
+    );
+    let requests = server.take_requests();
+    assert!(requests.iter().any(|path| path == "/enc-init.mp4"));
+}
+
+#[tokio::test]
+async fn resumes_an_aes_128_playlist() {
+    let server = HlsServer::spawn(Some("/enc-1.ts")).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/aes.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                connections: Some(1),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let result = engine.run_task(task.id).await;
+    assert!(result.is_err());
+    let task = engine.status(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+
+    let temp_dir = config.download.dir.join("aes.ts.shaul.hls.parts");
+    assert!(
+        tokio::fs::try_exists(temp_dir.join("segment-00000.bin"))
+            .await
+            .unwrap()
+    );
+
+    let _ = server.take_requests();
+    engine.resume(task.id).await.unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("aes.ts"))
+            .await
+            .unwrap(),
+        [AES_PLAIN_0, AES_PLAIN_1].concat()
+    );
+
+    let requests = server.take_requests();
+    assert!(!requests.iter().any(|path| path == "/enc-0.ts"));
+    assert!(requests.iter().any(|path| path == "/enc-1.ts"));
+}
+
+#[tokio::test]
+async fn rejects_sample_aes_at_add_time() {
+    let server = HlsServer::spawn(None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let result = engine
+        .add(
+            Link::new(server.url("/sample-aes.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await;
+    assert!(result.is_err());
 }
 
 #[tokio::test]

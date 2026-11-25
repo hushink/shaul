@@ -147,11 +147,13 @@ pub(crate) fn validate_media(media: &MediaPlaylist) -> Result<()> {
             "#EXT-X-BYTERANGE segments are not supported yet".to_string(),
         ));
     }
+    if media.init.is_some() && media.init_key.as_ref().is_some_and(|key| key.iv.is_none()) {
+        return Err(Error::Backend(
+            "encrypted #EXT-X-MAP without an IV is not supported".to_string(),
+        ));
+    }
     match &media.encryption {
-        Encryption::None => Ok(()),
-        Encryption::Aes128 { .. } => Err(Error::Backend(
-            "AES-128 HLS encryption is not supported yet".to_string(),
-        )),
+        Encryption::None | Encryption::Aes128 => Ok(()),
         Encryption::Other(method) => Err(Error::Backend(format!(
             "unsupported HLS encryption method: {method}"
         ))),
@@ -197,15 +199,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_live_and_encrypted_media_playlists() {
+    fn validates_live_and_encryption_methods() {
         let live = "#EXTM3U\n#EXTINF:4.0,\nseg.ts\n";
         let Playlist::Media(media) = Playlist::parse(&base(), live).unwrap() else {
             panic!("expected a media playlist");
         };
         assert!(validate_media(&media).is_err());
 
-        let encrypted = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n#EXTINF:4.0,\nseg.ts\n#EXT-X-ENDLIST\n";
-        let Playlist::Media(media) = Playlist::parse(&base(), encrypted).unwrap() else {
+        let aes128 = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n#EXTINF:4.0,\nseg.ts\n#EXT-X-ENDLIST\n";
+        let Playlist::Media(media) = Playlist::parse(&base(), aes128).unwrap() else {
+            panic!("expected a media playlist");
+        };
+        assert!(validate_media(&media).is_ok());
+
+        let sample_aes = "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"key\"\n#EXTINF:4.0,\nseg.ts\n#EXT-X-ENDLIST\n";
+        let Playlist::Media(media) = Playlist::parse(&base(), sample_aes).unwrap() else {
+            panic!("expected a media playlist");
+        };
+        assert!(validate_media(&media).is_err());
+
+        let encrypted_init = r#"#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="key"
+#EXT-X-MAP:URI="init.mp4"
+#EXTINF:4.0,
+seg.ts
+#EXT-X-ENDLIST
+"#;
+        let Playlist::Media(media) = Playlist::parse(&base(), encrypted_init).unwrap() else {
             panic!("expected a media playlist");
         };
         assert!(validate_media(&media).is_err());

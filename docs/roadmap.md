@@ -2,8 +2,8 @@
 
 - 更新日期：2026-11-19
 - 基线：1.2.1（运维闭环、通用内容缓存与可选 Xet 已发布）
-- 下一开发线：1.5 HLS 增量（AES-128/DASH/临时目录清理）；1.3 仍有本地
-  Xet CAS fixture。
+- 下一开发线：1.5 HLS 增量（DASH/临时目录清理）；1.3 仍有本地 Xet CAS
+  fixture。
 - 目标：在不破坏 1.0 兼容性的前提下，把 shaul 从“能下载”推进到“可长期运行、可嵌入、可扩展”的生产级下载引擎。
 
 ## 原则
@@ -25,7 +25,7 @@
 | **1.3** | Hub 差异化 | 可选 Xet 后端、缓存维护、CAS 增量维护 | Xet 已实现，fixture 待补 |
 | **1.3+** | HTTP 方法与队列 | 非 GET 请求、单请求语义、CLI 批量 pause/resume/cancel/list 过滤 | 已实现，待发布 |
 | **1.4** | 运维与观测 | OpenTelemetry / Prometheus 适配、残留 `.part` 扫描、磁盘预检 | 已实现（适配文档为主） |
-| **1.5** | 流媒体 | 可选 HLS 后端（点播 TS/fMP4、分片续传） | 首期已实现；AES-128/DASH 待后续 |
+| **1.5** | 流媒体 | 可选 HLS 后端（点播 TS/fMP4、AES-128、分片续传） | 已实现；DASH 待后续 |
 
 ---
 
@@ -254,7 +254,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ---
 
-## 1.5 HLS（首期已实现）
+## 1.5 HLS（AES-128 已实现）
 
 - [x] 可选 crate `shaul-hls` + facade `hls` feature；CLI 默认启用。
 - [x] HTTP(S) `.m3u8`、master/media playlist、最高码率变体。
@@ -264,10 +264,13 @@ pub struct ExtractorFinalizer { /* registry */ }
       连接预算。
 - [x] TS 与单 `#EXT-X-MAP` fMP4 拼接；`--output` 优先。
 - [x] 分片级续传：playlist SHA-256 指纹 + 已完成分片文件复用。
-- [x] 跨源 playlist/分片默认剥离敏感头。
-- [ ] AES-128 解密、DASH、直播、`EXT-X-BYTERANGE`、交替音轨、ffmpeg 转封装。
+- [x] 跨源 playlist/密钥/分片默认剥离敏感头。
+- [x] AES-128 解密：密钥轮换、显式 IV、按 media sequence 推导 IV；密钥只驻留
+      内存，加密分片先保存为 `.enc` 再解密为 `.bin`。
+- [ ] DASH、直播、`EXT-X-BYTERANGE`、交替音轨、ffmpeg 转封装。
 - [ ] `clean --orphans` 清理 HLS 分片临时目录。
-- 设计记录见 [ADR 0013](adr/0013-hls-backend.md)。
+- 设计记录见 [ADR 0013](adr/0013-hls-backend.md) 和
+  [ADR 0014](adr/0014-hls-aes128.md)。
 
 ## 扩展边界
 

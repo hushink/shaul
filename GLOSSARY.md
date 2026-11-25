@@ -139,3 +139,8 @@ _Avoid_: Quality, rendition (unqualified)
 media playlist 中的一个分片，由 HlsBackend 内部管理，不是 `FileItem`，也不是
 core 的 `Segment`（HTTP 字节区间）。
 _Avoid_: Segment, chunk (unqualified)
+
+**HLS key**:
+AES-128 密钥，由 `#EXT-X-KEY` 指定并作用于其后的分片；运行时从 URI 获取，
+只驻留内存，不写入 sidecar。
+_Avoid_: Encryption key, DRM key

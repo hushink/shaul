@@ -46,6 +46,8 @@ pub struct MediaPlaylist {
     pub segments: Vec<Segment>,
     /// Initialization segment from `#EXT-X-MAP`, for fMP4 playlists.
     pub init: Option<Url>,
+    /// Key that applies to the initialization segment, when encrypted.
+    pub init_key: Option<Key>,
     /// Whether a later `#EXT-X-MAP` changed the initialization segment.
     pub init_changed: bool,
     /// Whether `#EXT-X-MAP` carried a byte range.
@@ -56,25 +58,29 @@ pub struct MediaPlaylist {
     pub media_sequence: u64,
     /// `#EXT-X-PLAYLIST-TYPE`, when present.
     pub playlist_type: Option<String>,
-    /// Encryption declared by the latest `#EXT-X-KEY`.
+    /// Overall encryption summary for the playlist.
     pub encryption: Encryption,
 }
 
-/// Encryption state of a media playlist.
+/// Overall encryption state of a media playlist.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Encryption {
-    /// No encryption, or `METHOD=NONE`.
+    /// Every segment is unencrypted.
     #[default]
     None,
-    /// AES-128 encryption; decryption is not implemented yet.
-    Aes128 {
-        /// Key URI.
-        uri: Url,
-        /// Optional IV attribute.
-        iv: Option<String>,
-    },
-    /// Another method, such as `SAMPLE-AES`.
+    /// At least one segment uses AES-128.
+    Aes128,
+    /// A method other than AES-128, such as `SAMPLE-AES`.
     Other(String),
+}
+
+/// An AES-128 key that applies to one or more segments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Key {
+    /// Resolved key URI.
+    pub uri: Url,
+    /// Explicit IV from `#EXT-X-KEY`, when present.
+    pub iv: Option<[u8; 16]>,
 }
 
 /// One media segment.
@@ -88,6 +94,10 @@ pub struct Segment {
     pub byte_range: Option<ByteRange>,
     /// Whether `#EXT-X-DISCONTINUITY` preceded this segment.
     pub discontinuity: bool,
+    /// AES-128 key that applies to this segment, when encrypted.
+    pub key: Option<Key>,
+    /// Media sequence number of this segment.
+    pub sequence: u64,
 }
 
 /// A parsed `#EXT-X-BYTERANGE` value.
@@ -183,6 +193,11 @@ impl Playlist {
                 continue;
             }
             if let Some(value) = line.strip_prefix("#EXT-X-MEDIA-SEQUENCE:") {
+                if !media.segments.is_empty() {
+                    return Err(Error::InvalidLink(
+                        "#EXT-X-MEDIA-SEQUENCE must appear before segments".to_string(),
+                    ));
+                }
                 media.media_sequence = value.trim().parse::<u64>().map_err(|_| {
                     Error::InvalidLink(format!("invalid #EXT-X-MEDIA-SEQUENCE: {value}"))
                 })?;
@@ -198,10 +213,13 @@ impl Playlist {
                     return Err(Error::InvalidLink("#EXT-X-MAP is missing URI".to_string()));
                 };
                 let uri = resolve_uri(base, uri)?;
-                if media.init.as_ref().is_some_and(|existing| *existing != uri) {
+                let key_changed =
+                    media.init.is_some() && media.init_key.as_ref() != media.current_key.as_ref();
+                if media.init.as_ref().is_some_and(|existing| *existing != uri) || key_changed {
                     media.init_changed = true;
                 } else if media.init.is_none() {
                     media.init = Some(uri);
+                    media.init_key = media.current_key.clone();
                 }
                 if attributes.contains_key("BYTERANGE") {
                     media.init_byte_range = true;
@@ -209,13 +227,20 @@ impl Playlist {
                 continue;
             }
             if let Some(value) = line.strip_prefix("#EXT-X-KEY:") {
-                let key = parse_key(base, value)?;
-                // A playlist can switch keys or return to METHOD=NONE. Phase 1
-                // must reject any encrypted segment, so keep the first
-                // non-NONE method instead of letting a later NONE hide it.
-                if matches!(media.encryption, Encryption::None) && !matches!(key, Encryption::None)
-                {
-                    media.encryption = key;
+                match parse_key(base, value)? {
+                    ParsedKey::None => media.current_key = None,
+                    ParsedKey::Aes128(key) => {
+                        media.current_key = Some(key);
+                        if matches!(media.encryption, Encryption::None) {
+                            media.encryption = Encryption::Aes128;
+                        }
+                    }
+                    ParsedKey::Unsupported(method) => {
+                        media.current_key = None;
+                        if !matches!(media.encryption, Encryption::Other(_)) {
+                            media.encryption = Encryption::Other(method);
+                        }
+                    }
                 }
                 continue;
             }
@@ -236,11 +261,14 @@ impl Playlist {
                 )));
             };
             let uri = resolve_uri(base, line)?;
+            let sequence = media.media_sequence + media.segments.len() as u64;
             media.segments.push(Segment {
                 uri,
                 duration,
                 byte_range: pending_range.take(),
                 discontinuity: pending_discontinuity,
+                key: media.current_key.clone(),
+                sequence,
             });
             pending_discontinuity = false;
         }
@@ -261,6 +289,7 @@ impl Playlist {
         Ok(Playlist::Media(MediaPlaylist {
             segments: media.segments,
             init: media.init,
+            init_key: media.init_key,
             init_changed: media.init_changed,
             init_byte_range: media.init_byte_range,
             end_list: media.end_list,
@@ -275,11 +304,13 @@ impl Playlist {
 struct MediaState {
     segments: Vec<Segment>,
     init: Option<Url>,
+    init_key: Option<Key>,
     init_changed: bool,
     init_byte_range: bool,
     end_list: bool,
     media_sequence: u64,
     playlist_type: Option<String>,
+    current_key: Option<Key>,
     encryption: Encryption,
 }
 
@@ -384,27 +415,57 @@ fn parse_byte_range(value: &str) -> Result<ByteRange> {
     Ok(ByteRange { length, offset })
 }
 
-fn parse_key(base: &Url, value: &str) -> Result<Encryption> {
+enum ParsedKey {
+    None,
+    Aes128(Key),
+    Unsupported(String),
+}
+
+fn parse_key(base: &Url, value: &str) -> Result<ParsedKey> {
     let attributes = parse_attributes(value);
     let method = attributes
         .get("METHOD")
         .map(String::as_str)
         .unwrap_or_default();
     match method {
-        "" | "NONE" => Ok(Encryption::None),
+        "" | "NONE" => Ok(ParsedKey::None),
         "AES-128" => {
+            let key_format = attributes
+                .get("KEYFORMAT")
+                .map(String::as_str)
+                .unwrap_or("identity");
+            if !key_format.eq_ignore_ascii_case("identity") {
+                return Ok(ParsedKey::Unsupported(format!("KEYFORMAT={key_format}")));
+            }
             let Some(uri) = attributes.get("URI") else {
                 return Err(Error::InvalidLink(
                     "AES-128 #EXT-X-KEY is missing URI".to_string(),
                 ));
             };
-            Ok(Encryption::Aes128 {
+            let iv = attributes
+                .get("IV")
+                .map(|value| parse_iv(value))
+                .transpose()?;
+            Ok(ParsedKey::Aes128(Key {
                 uri: resolve_uri(base, uri)?,
-                iv: attributes.get("IV").cloned(),
-            })
+                iv,
+            }))
         }
-        other => Ok(Encryption::Other(other.to_string())),
+        other => Ok(ParsedKey::Unsupported(other.to_string())),
     }
+}
+
+fn parse_iv(value: &str) -> Result<[u8; 16]> {
+    let trimmed = value.trim();
+    let hex = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    let bytes = hex::decode(hex)
+        .map_err(|_| Error::InvalidLink(format!("invalid #EXT-X-KEY IV: {value}")))?;
+    bytes
+        .try_into()
+        .map_err(|_| Error::InvalidLink(format!("HLS IV must be 16 bytes: {value}")))
 }
 
 /// Parse an HLS attribute list. Commas inside quoted values are preserved.
@@ -535,7 +596,7 @@ media.mp4
     #[test]
     fn exposes_aes_128_keys() {
         let text = r#"#EXTM3U
-#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x1234
+#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x000102030405060708090a0b0c0d0e0f
 #EXTINF:4.0,
 seg.ts
 #EXT-X-ENDLIST
@@ -543,12 +604,16 @@ seg.ts
         let Playlist::Media(media) = Playlist::parse(&base(), text).unwrap() else {
             panic!("expected a media playlist");
         };
-        assert!(matches!(
-            media.encryption,
-            Encryption::Aes128 { ref uri, ref iv }
-                if uri.as_str() == "https://example.com/media/key.bin"
-                    && iv.as_deref() == Some("0x1234")
-        ));
+        assert_eq!(media.encryption, Encryption::Aes128);
+        let key = media.segments[0].key.as_ref().unwrap();
+        assert_eq!(key.uri.as_str(), "https://example.com/media/key.bin");
+        assert_eq!(
+            key.iv,
+            Some([
+                0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+                0x0e, 0x0f,
+            ])
+        );
     }
 
     #[test]
@@ -565,7 +630,58 @@ seg-1.ts
         let Playlist::Media(media) = Playlist::parse(&base(), text).unwrap() else {
             panic!("expected a media playlist");
         };
-        assert!(matches!(media.encryption, Encryption::Aes128 { .. }));
+        assert_eq!(media.encryption, Encryption::Aes128);
+        assert!(media.segments[0].key.is_some());
+        assert!(media.segments[1].key.is_none());
+        assert_eq!(media.segments[0].sequence, 0);
+        assert_eq!(media.segments[1].sequence, 1);
+    }
+
+    #[test]
+    fn tracks_key_rotation_and_media_sequence() {
+        let text = r#"#EXTM3U
+#EXT-X-MEDIA-SEQUENCE:10
+#EXT-X-KEY:METHOD=AES-128,URI="key1.bin"
+#EXTINF:4.0,
+seg-0.ts
+#EXT-X-KEY:METHOD=AES-128,URI="key2.bin",IV=0x000102030405060708090a0b0c0d0e0f
+#EXTINF:4.0,
+seg-1.ts
+#EXT-X-ENDLIST
+"#;
+        let Playlist::Media(media) = Playlist::parse(&base(), text).unwrap() else {
+            panic!("expected a media playlist");
+        };
+        assert_eq!(media.encryption, Encryption::Aes128);
+        assert_eq!(media.segments[0].sequence, 10);
+        assert_eq!(
+            media.segments[0].key.as_ref().unwrap().uri.as_str(),
+            "https://example.com/media/key1.bin"
+        );
+        assert!(media.segments[0].key.as_ref().unwrap().iv.is_none());
+        assert_eq!(media.segments[1].sequence, 11);
+        assert_eq!(
+            media.segments[1].key.as_ref().unwrap().uri.as_str(),
+            "https://example.com/media/key2.bin"
+        );
+        assert!(media.segments[1].key.as_ref().unwrap().iv.is_some());
+    }
+
+    #[test]
+    fn rejects_unsupported_key_formats_and_bad_ivs() {
+        let keyformat = r#"#EXTM3U
+#EXT-X-KEY:METHOD=AES-128,URI="key.bin",KEYFORMAT="com.example.drm"
+#EXTINF:4.0,
+seg.ts
+#EXT-X-ENDLIST
+"#;
+        let Playlist::Media(media) = Playlist::parse(&base(), keyformat).unwrap() else {
+            panic!("expected a media playlist");
+        };
+        assert!(matches!(media.encryption, Encryption::Other(_)));
+
+        let bad_iv = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin\",IV=0x1234\n#EXTINF:4.0,\nseg.ts\n#EXT-X-ENDLIST\n";
+        assert!(Playlist::parse(&base(), bad_iv).is_err());
     }
 
     #[test]

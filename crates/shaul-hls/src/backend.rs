@@ -1,9 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use aes::Aes128;
 use async_trait::async_trait;
+use cbc::cipher::generic_array::GenericArray;
+use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
 use futures_util::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use shaul_core::{
@@ -19,13 +22,14 @@ use url::Url;
 
 use crate::client::{HlsClient, same_origin};
 use crate::parser::{HLS_PROTOCOL, validate_media};
-use crate::playlist::{Playlist, fingerprint};
+use crate::playlist::{MediaPlaylist, Playlist, fingerprint};
 
 const STATE_KEY: &str = "hls.state";
 const TEMP_DIR_KEY: &str = "hls.temp_dir";
 const ORIGIN_KEY: &str = "hls.origin";
 const SEGMENT_DIR_SUFFIX: &str = ".shaul.hls.parts";
 const INIT_NAME: &str = "init.bin";
+const INIT_ENC_NAME: &str = "init.enc";
 
 /// HLS backend. Segments are downloaded concurrently through a shared
 /// [`HttpBackend`] and concatenated into one output file.
@@ -40,6 +44,33 @@ impl HlsBackend {
     /// segment transfers.
     pub fn new(client: Arc<HlsClient>, http: HttpBackend) -> Self {
         Self { client, http }
+    }
+
+    async fn fetch_keys(
+        &self,
+        media: &MediaPlaylist,
+        request: &DownloadRequest,
+        trust_origin: &Url,
+    ) -> Result<HashMap<Url, [u8; 16]>> {
+        let mut urls = HashSet::new();
+        for segment in &media.segments {
+            if let Some(key) = &segment.key {
+                urls.insert(key.uri.clone());
+            }
+        }
+        if let Some(key) = &media.init_key {
+            urls.insert(key.uri.clone());
+        }
+        let mut keys = HashMap::new();
+        for url in urls {
+            let options = request_for_origin(&request.options.request, trust_origin, &url);
+            let key = self
+                .client
+                .fetch_key(&url, &options, &request.cancel)
+                .await?;
+            keys.insert(url, key);
+        }
+        Ok(keys)
     }
 }
 
@@ -172,6 +203,8 @@ impl DownloadBackend for HlsBackend {
             remove_dir_all_if_exists(&temp_dir).await?;
         }
         create_dir_all(&temp_dir).await?;
+        let keys = Arc::new(self.fetch_keys(&media, &request, &trust_origin).await?);
+        decrypt_cached_segments(&media, &keys, &temp_dir).await?;
 
         let completed = if can_resume {
             scan_completed(&temp_dir, segment_count).await
@@ -231,17 +264,44 @@ impl DownloadBackend for HlsBackend {
             && !init_done
         {
             let options = options_for_origin(&request.options, &trust_origin, init_url);
-            let outcome = download_one(
-                &self.http,
-                &request,
-                &options,
-                init_url,
-                &temp_dir,
-                INIT_NAME,
-                &segment_events,
-            )
-            .await?;
-            let current = progress.fetch_add(outcome.size, Ordering::Relaxed) + outcome.size;
+            let plaintext_size = if let Some(init_key) = &media.init_key {
+                download_one(
+                    &self.http,
+                    &request,
+                    &options,
+                    init_url,
+                    &temp_dir,
+                    INIT_ENC_NAME,
+                    &segment_events,
+                )
+                .await?;
+                let key_bytes = keys.get(&init_key.uri).ok_or_else(|| {
+                    Error::Backend("HLS initialization key was not fetched".to_string())
+                })?;
+                let iv = init_key.iv.ok_or_else(|| {
+                    Error::Backend(
+                        "encrypted #EXT-X-MAP without an IV is not supported".to_string(),
+                    )
+                })?;
+                let encrypted = temp_dir.join(INIT_ENC_NAME);
+                let output = temp_dir.join(INIT_NAME);
+                decrypt_file(&encrypted, &output, key_bytes, &iv).await?;
+                let _ = tokio::fs::remove_file(&encrypted).await;
+                tokio::fs::metadata(&output).await?.len()
+            } else {
+                download_one(
+                    &self.http,
+                    &request,
+                    &options,
+                    init_url,
+                    &temp_dir,
+                    INIT_NAME,
+                    &segment_events,
+                )
+                .await?
+                .size
+            };
+            let current = progress.fetch_add(plaintext_size, Ordering::Relaxed) + plaintext_size;
             emit_progress(&request, &relative, &progress);
             writer.lock().await.save_progress(&request, current).await?;
         }
@@ -261,12 +321,20 @@ impl DownloadBackend for HlsBackend {
             stream::iter(pending)
                 .map(|index| {
                     let url = media.segments[index].uri.clone();
+                    let key = media.segments[index].key.clone();
+                    let sequence = media.segments[index].sequence;
+                    let download_name = if key.is_some() {
+                        encrypted_segment_name(index)
+                    } else {
+                        segment_name(index)
+                    };
                     let options = options_for_origin(&request_ref.options, &trust_origin, &url);
                     let segment_events = segment_events.clone();
                     let progress = progress.clone();
                     let relative = relative.clone();
                     let temp_dir = temp_dir_ref.clone();
                     let writer = writer.clone();
+                    let keys = keys.clone();
                     async move {
                         let outcome = download_one(
                             http,
@@ -274,12 +342,25 @@ impl DownloadBackend for HlsBackend {
                             &options,
                             &url,
                             &temp_dir,
-                            &segment_name(index),
+                            &download_name,
                             &segment_events,
                         )
                         .await?;
+                        let plaintext_size = if let Some(key) = &key {
+                            let key_bytes = keys.get(&key.uri).ok_or_else(|| {
+                                Error::Backend("HLS segment key was not fetched".to_string())
+                            })?;
+                            let iv = key.iv.unwrap_or_else(|| sequence_iv(sequence));
+                            let encrypted = encrypted_segment_path(&temp_dir, index);
+                            let output = segment_path(&temp_dir, index);
+                            decrypt_file(&encrypted, &output, key_bytes, &iv).await?;
+                            let _ = tokio::fs::remove_file(&encrypted).await;
+                            tokio::fs::metadata(&output).await?.len()
+                        } else {
+                            outcome.size
+                        };
                         let current =
-                            progress.fetch_add(outcome.size, Ordering::Relaxed) + outcome.size;
+                            progress.fetch_add(plaintext_size, Ordering::Relaxed) + plaintext_size;
                         request_ref.events.emit(EventKind::Progress {
                             task_id: request_ref.task_id,
                             file: relative,
@@ -524,6 +605,118 @@ fn segment_path(temp_dir: &Path, index: usize) -> PathBuf {
     temp_dir.join(segment_name(index))
 }
 
+fn encrypted_segment_name(index: usize) -> String {
+    format!("segment-{index:05}.enc")
+}
+
+fn encrypted_segment_path(temp_dir: &Path, index: usize) -> PathBuf {
+    temp_dir.join(encrypted_segment_name(index))
+}
+
+fn sequence_iv(sequence: u64) -> [u8; 16] {
+    let mut iv = [0u8; 16];
+    iv[8..].copy_from_slice(&sequence.to_be_bytes());
+    iv
+}
+
+async fn decrypt_cached_segments(
+    media: &MediaPlaylist,
+    keys: &HashMap<Url, [u8; 16]>,
+    temp_dir: &Path,
+) -> Result<()> {
+    for (index, segment) in media.segments.iter().enumerate() {
+        let Some(key) = &segment.key else {
+            continue;
+        };
+        let output = segment_path(temp_dir, index);
+        if tokio::fs::try_exists(&output).await? {
+            continue;
+        }
+        let encrypted = encrypted_segment_path(temp_dir, index);
+        if !tokio::fs::try_exists(&encrypted).await? {
+            continue;
+        }
+        let Some(key_bytes) = keys.get(&key.uri) else {
+            return Err(Error::Backend(
+                "HLS segment key was not fetched".to_string(),
+            ));
+        };
+        let iv = key.iv.unwrap_or_else(|| sequence_iv(segment.sequence));
+        match decrypt_file(&encrypted, &output, key_bytes, &iv).await {
+            Ok(()) => {
+                let _ = tokio::fs::remove_file(&encrypted).await;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    index,
+                    error = %error,
+                    "could not decrypt a cached HLS segment; re-downloading"
+                );
+                let _ = tokio::fs::remove_file(&encrypted).await;
+            }
+        }
+    }
+    if let Some(init_key) = &media.init_key {
+        let output = temp_dir.join(INIT_NAME);
+        let encrypted = temp_dir.join(INIT_ENC_NAME);
+        if !tokio::fs::try_exists(&output).await? && tokio::fs::try_exists(&encrypted).await? {
+            let Some(key_bytes) = keys.get(&init_key.uri) else {
+                return Err(Error::Backend(
+                    "HLS initialization key was not fetched".to_string(),
+                ));
+            };
+            let Some(iv) = init_key.iv else {
+                return Err(Error::Backend(
+                    "encrypted #EXT-X-MAP without an IV is not supported".to_string(),
+                ));
+            };
+            match decrypt_file(&encrypted, &output, key_bytes, &iv).await {
+                Ok(()) => {
+                    let _ = tokio::fs::remove_file(&encrypted).await;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "could not decrypt a cached HLS init segment; re-downloading"
+                    );
+                    let _ = tokio::fs::remove_file(&encrypted).await;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn decrypt_file(
+    encrypted: &Path,
+    output: &Path,
+    key: &[u8; 16],
+    iv: &[u8; 16],
+) -> Result<()> {
+    let ciphertext = tokio::fs::read(encrypted).await?;
+    let plaintext = decrypt_aes128(key, iv, &ciphertext)?;
+    let temporary = output.with_extension("dec");
+    tokio::fs::write(&temporary, &plaintext).await?;
+    remove_if_exists(output).await?;
+    tokio::fs::rename(&temporary, output).await?;
+    Ok(())
+}
+
+fn decrypt_aes128(key: &[u8; 16], iv: &[u8; 16], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    if ciphertext.is_empty() || !ciphertext.len().is_multiple_of(16) {
+        return Err(Error::Backend(
+            "AES-128 HLS ciphertext is not a whole number of blocks".to_string(),
+        ));
+    }
+    let mut buffer = ciphertext.to_vec();
+    let decryptor =
+        cbc::Decryptor::<Aes128>::new(GenericArray::from_slice(key), GenericArray::from_slice(iv));
+    let plaintext = decryptor
+        .decrypt_padded_mut::<Pkcs7>(&mut buffer)
+        .map_err(|_| Error::Backend("invalid AES-128 HLS padding or key".to_string()))?;
+    Ok(plaintext.to_vec())
+}
+
 fn emit_progress(request: &DownloadRequest, relative: &str, progress: &AtomicU64) {
     request.events.emit(EventKind::Progress {
         task_id: request.task_id,
@@ -640,4 +833,57 @@ async fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
 async fn create_dir_all(path: &Path) -> Result<()> {
     tokio::fs::create_dir_all(path).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cbc::cipher::BlockEncryptMut;
+
+    #[test]
+    fn decrypts_aes_128_cbc_with_pkcs7() {
+        let key = [7u8; 16];
+        let iv = sequence_iv(42);
+        let plaintext = b"hello HLS AES-128";
+        let encryptor = cbc::Encryptor::<Aes128>::new(
+            GenericArray::from_slice(&key),
+            GenericArray::from_slice(&iv),
+        );
+        let ciphertext = encryptor.encrypt_padded_vec_mut::<Pkcs7>(plaintext);
+        assert!(ciphertext.len().is_multiple_of(16));
+        assert_ne!(ciphertext, plaintext);
+        assert_eq!(decrypt_aes128(&key, &iv, &ciphertext).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn builds_sequence_ivs_as_big_endian() {
+        assert_eq!(sequence_iv(0), [0u8; 16]);
+        let mut expected = [0u8; 16];
+        expected[15] = 1;
+        assert_eq!(sequence_iv(1), expected);
+        expected[8..].copy_from_slice(&42u64.to_be_bytes());
+        assert_eq!(sequence_iv(42), expected);
+    }
+
+    #[test]
+    fn strips_credentials_for_cross_origin_key_urls() {
+        let request = RequestOptions {
+            headers: vec![shaul_core::Header::new("Authorization", "Bearer secret").unwrap()],
+            auth: Some(shaul_core::Auth::bearer("token")),
+            ..RequestOptions::default()
+        };
+        let trust = Url::parse("https://origin.example/media.m3u8").unwrap();
+        let cross = Url::parse("https://cdn.example/key.bin").unwrap();
+        let filtered = request_for_origin(&request, &trust, &cross);
+        assert!(filtered.auth.is_none());
+        assert!(filtered.headers.is_empty());
+
+        let same = request_for_origin(
+            &request,
+            &trust,
+            &Url::parse("https://origin.example/key.bin").unwrap(),
+        );
+        assert!(same.auth.is_some());
+        assert_eq!(same.headers.len(), 1);
+    }
 }

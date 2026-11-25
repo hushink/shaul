@@ -84,9 +84,9 @@ tasks for resume; `--status` overrides the default.
 `list --status` accepts repeated state names.
 
 `--include` / `--exclude` also choose an HLS variant by `NAME`, `RESOLUTION`,
-`BANDWIDTH`, `CODECS` or URI. HLS phase 1 supports VOD TS and single-init-map
-fMP4 playlists; AES-128, `#EXT-X-BYTERANGE`, live playlists and DASH are not
-supported yet.
+`BANDWIDTH`, `CODECS` or URI. HLS supports VOD TS and single-init-map fMP4
+playlists, AES-128 encrypted segments and segment-level resume. SAMPLE-AES,
+`#EXT-X-BYTERANGE`, live playlists and DASH are not supported yet.
 
 `--method`, `--data` and `--data-file` apply to direct HTTP(S) links only.
 `--data` implies `POST` when `--method` is not given. These requests are
