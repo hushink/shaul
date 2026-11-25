@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aes::Aes128;
@@ -334,6 +334,133 @@ fn engine(config: &Config) -> DownloadEngine {
     DownloadEngine::new(Arc::new(router), store, config.clone())
 }
 
+struct LiveHlsServer {
+    addr: SocketAddr,
+    requests: Arc<Mutex<Vec<String>>>,
+}
+
+impl LiveHlsServer {
+    async fn spawn() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let fetches = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let requests = server_requests.clone();
+                let fetches = fetches.clone();
+                tokio::spawn(async move {
+                    handle_live(socket, requests, fetches).await;
+                });
+            }
+        });
+        Self { addr, requests }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("http://{}{path}", self.addr)
+    }
+
+    fn take_requests(&self) -> Vec<String> {
+        std::mem::take(&mut *self.requests.lock().unwrap())
+    }
+}
+
+fn live_playlist(sequence: u64, end_list: bool) -> String {
+    let mut text = format!(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:{sequence}\n\
+         #EXT-X-KEY:METHOD=AES-128,URI=\"live-key.bin\",\
+         IV=0x000102030405060708090a0b0c0d0e0f\n\
+         #EXTINF:4.0,\nlive-{sequence}.ts\n#EXTINF:4.0,\nlive-{}.ts\n",
+        sequence + 1
+    );
+    if end_list {
+        text.push_str("#EXT-X-ENDLIST\n");
+    }
+    text
+}
+
+fn live_plaintext(sequence: u64) -> Vec<u8> {
+    format!("L{sequence}").into_bytes()
+}
+
+async fn handle_live(
+    mut socket: TcpStream,
+    requests: Arc<Mutex<Vec<String>>>,
+    fetches: Arc<AtomicUsize>,
+) {
+    let mut buffer = vec![0u8; 16 * 1024];
+    let mut read = 0;
+    loop {
+        let Ok(count) = socket.read(&mut buffer[read..]).await else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        read += count;
+        if buffer[..read]
+            .windows(4)
+            .any(|window| window == b"\r\n\r\n")
+        {
+            break;
+        }
+        if read == buffer.len() {
+            return;
+        }
+    }
+    let request = String::from_utf8_lossy(&buffer[..read]);
+    let path = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .to_string();
+    requests.lock().unwrap().push(path.clone());
+
+    if path == "/live.m3u8" {
+        let fetch = fetches.fetch_add(1, Ordering::SeqCst) + 1;
+        let (sequence, end_list) = match fetch {
+            1 => (100, false),
+            2 => (102, false),
+            _ => (104, true),
+        };
+        respond(
+            &mut socket,
+            "200 OK",
+            live_playlist(sequence, end_list).as_bytes(),
+        )
+        .await;
+        return;
+    }
+    if path == "/live-key.bin" {
+        respond(&mut socket, "200 OK", &AES_KEY).await;
+        return;
+    }
+    for sequence in 100..=105 {
+        if path == format!("/live-{sequence}.ts") {
+            let encrypted = encrypt(&live_plaintext(sequence), &AES_KEY, &AES_IV);
+            respond(&mut socket, "200 OK", &encrypted).await;
+            return;
+        }
+    }
+    respond(&mut socket, "404 Not Found", b"not found").await;
+}
+
+fn live_expected(sequences: &[u64]) -> Vec<u8> {
+    sequences
+        .iter()
+        .flat_map(|sequence| live_plaintext(*sequence))
+        .collect()
+}
+
 #[tokio::test]
 async fn downloads_a_master_playlist_and_concatenates_the_highest_variant() {
     let server = HlsServer::spawn(None).await;
@@ -645,7 +772,7 @@ async fn rejects_sample_aes_at_add_time() {
 }
 
 #[tokio::test]
-async fn rejects_live_playlists_at_add_time() {
+async fn rejects_live_playlists_without_a_target_duration_at_add_time() {
     let server = HlsServer::spawn(None).await;
     let dir = tempfile::tempdir().unwrap();
     let config = test_config(dir.path());
@@ -659,6 +786,147 @@ async fn rejects_live_playlists_at_add_time() {
         )
         .await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn records_a_live_playlist_until_the_segment_limit() {
+    let server = LiveHlsServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/live.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                live_segments: Some(4),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+
+    let output = config.download.dir.join("live.ts");
+    assert_eq!(
+        tokio::fs::read(&output).await.unwrap(),
+        live_expected(&[102, 103, 104, 105])
+    );
+    assert!(
+        !tokio::fs::try_exists(config.download.dir.join("live.ts.shaul.hls.parts"))
+            .await
+            .unwrap()
+    );
+
+    let requests = server.take_requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.as_str() == "/live.m3u8")
+            .count(),
+        3
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.as_str() == "/live-key.bin")
+            .count(),
+        1
+    );
+    assert!(requests.iter().any(|path| path == "/live-105.ts"));
+    assert!(!requests.iter().any(|path| path == "/live-106.ts"));
+}
+
+#[tokio::test]
+async fn records_a_live_playlist_until_the_duration_limit() {
+    let server = LiveHlsServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/live.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                live_duration_secs: Some(8),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("live.ts"))
+            .await
+            .unwrap(),
+        live_expected(&[102, 103])
+    );
+
+    let requests = server.take_requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.as_str() == "/live.m3u8")
+            .count(),
+        2
+    );
+    assert!(!requests.iter().any(|path| path == "/live-104.ts"));
+}
+
+#[tokio::test]
+async fn stops_a_live_capture_when_the_playlist_ends() {
+    let server = LiveHlsServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/live.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                live_segments: Some(10),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("live.ts"))
+            .await
+            .unwrap(),
+        live_expected(&[102, 103, 104, 105])
+    );
+}
+
+#[tokio::test]
+async fn live_capture_requires_a_limit() {
+    let server = LiveHlsServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/live.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let result = engine.run_task(task.id).await;
+    assert!(result.is_err());
+    let task = engine.status(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+
+    let requests = server.take_requests();
+    assert!(!requests.iter().any(|path| path == "/live-102.ts"));
 }
 
 #[tokio::test]

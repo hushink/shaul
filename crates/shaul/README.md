@@ -38,8 +38,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 | `xet` | Hugging Face Xet downloads with HTTP fallback |
 
 HLS supports TS and single-init-map fMP4 playlists, AES-128 encryption,
-`#EXT-X-BYTERANGE`, segment-level resume and concurrent segment downloads.
-SAMPLE-AES and live playlists are not supported yet. DASH supports static
+`#EXT-X-BYTERANGE`, segment-level VOD resume, concurrent segment downloads and
+bounded live capture through `live_duration_secs`/`live_segments` in
+`TaskOptions` (not resumable). SAMPLE-AES is not supported yet. DASH supports static
 single-period manifests with SegmentTemplate, SegmentList or SegmentBase
 addressing and segment-level resume; DRM, live and multi-period manifests are
 not supported yet.
@@ -638,8 +639,8 @@ fn attach(mut engine: shaul::DownloadEngine) -> shaul::DownloadEngine {
 - Archive extraction after verification, with a pluggable extractor API
 - Hugging Face and ModelScope repositories with optional provider caches
 - Optional Xet downloads for Hugging Face files with `xetHash`
-- HLS playlists through the `hls` feature and static DASH manifests through
-  the `dash` feature
+- HLS VOD and bounded live capture through the `hls` feature, and static DASH
+  manifests through the `dash` feature
 - BitTorrent, magnet and `.torrent` support through the `bt` feature
 - Single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume
 - Concurrent multi-file downloads

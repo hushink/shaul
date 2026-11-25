@@ -8,8 +8,8 @@
 [shaul](https://crates.io/crates/shaul) 的 HLS 后端。
 
 这个 crate 增加可选的 HTTP(S) `.m3u8` 解析器与后端：从 master playlist 选择
-最高码率变体，并发下载分片，并拼接成一个输出文件。分片是内部细节，任务仍然
-只产出一个文件。
+最高码率变体，并发下载分片，并拼接成一个输出文件；支持点播和有界直播录制。
+分片是内部细节，任务仍然只产出一个文件。
 
 ## 用法
 
@@ -31,6 +31,13 @@ $ shaul download https://example.com/video/master.m3u8 --connections 8
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 ```
 
+用时长或分片上限录制直播：
+
+```console
+$ shaul download https://example.com/live/index.m3u8 --live-duration 10m
+$ shaul download https://example.com/live/index.m3u8 --live-segments 300
+```
+
 `HlsParser` 与 `HlsBackend` 也可以注册到自定义 router。后端保持协议隔离：
 `shaul-core` 不依赖 HLS。
 
@@ -43,12 +50,16 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 - `#EXT-X-BYTERANGE` 分片和 init map，包括隐式偏移
 - 通过共享 HTTP 后端并发下载分片，因此代理、认证、超时、重试、限速和连接预算
   都生效
-- 分片级续传：暂停或失败后复用已完成的分片文件
+- 点播分片级续传：暂停或失败后复用已完成的分片文件
+- 有界直播录制：`live_duration_secs`（`--live-duration`）或
+  `live_segments`（`--live-segments`）；后端按 target duration 轮询，只录制
+  新的 media sequence，达到上限或出现 `#EXT-X-ENDLIST` 时停止
 
 暂不支持：
 
 - SAMPLE-AES 加密
-- 直播列表
+- 无限直播录制（必须提供时长或分片上限）
+- 直播续传（每次运行从当前窗口重新开始）
 - DASH（请使用独立的 `shaul-dash` crate）
 - 交替音轨和多音轨选择
 - ffmpeg 转封装
@@ -65,6 +76,9 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
   目录及拼接 `.part` 可由 `shaul clean --orphans` 清理。
 - 跨源 playlist/密钥/分片 URL 默认剥离敏感请求头；开启
   `allow_cross_origin_auth` 后保留。
+- 直播录制每次都从新的临时目录开始。取消或失败会保留已录分片供检查；
+  `clean --orphans` 也会清理失败直播任务的临时文件。输出只在录制停止后
+  一次性收尾。
 - AES-128 密钥在运行时获取，只驻留内存，不写入任务 sidecar。加密分片先保存为
   `.enc`，解密后的 `.bin` 才用于续传和拼接。
 - BYTERANGE 分片使用精确的 `Range` 请求；如果服务器忽略 `Range` 并返回完整
@@ -78,5 +92,6 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 - [HLS ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0013-hls-backend.md)
 - [AES-128 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0014-hls-aes128.md)
 - [BYTERANGE ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0015-hls-byterange.md)
+- [直播 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0017-hls-live.md)
 - [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
 - [API 参考](https://docs.rs/shaul-hls)

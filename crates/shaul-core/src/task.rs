@@ -204,6 +204,12 @@ pub struct TaskOptions {
     /// Whether to resume from existing partial data.
     #[serde(default)]
     pub resume: Option<bool>,
+    /// Stop a live stream capture after this many seconds of media.
+    #[serde(default)]
+    pub live_duration_secs: Option<u64>,
+    /// Stop a live stream capture after this many segments.
+    #[serde(default)]
+    pub live_segments: Option<usize>,
     /// Checksum verification policy for this task.
     #[serde(default)]
     pub verify: Option<VerifyMode>,

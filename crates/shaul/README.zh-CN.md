@@ -38,9 +38,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 | `xet` | Hugging Face Xet 下载，失败时回退 HTTP |
 
 HLS 支持 TS、单 init map 的 fMP4、AES-128 加密、`#EXT-X-BYTERANGE`、
-分片级续传与分片并发下载；暂不支持 SAMPLE-AES 和直播列表。DASH 支持静态
-单 Period 清单、SegmentTemplate/SegmentList/SegmentBase 寻址和分片级续传；
-暂不支持 DRM、直播和多 Period 清单。
+点播分片级续传、分片并发下载，以及通过 `TaskOptions` 的
+`live_duration_secs`/`live_segments` 进行有界直播录制（不可续传）；暂不支持
+SAMPLE-AES。DASH 支持静态单 Period 清单、SegmentTemplate/SegmentList/
+SegmentBase 寻址和分片级续传；暂不支持 DRM、DASH 直播/动态清单和多 Period
+清单。
 
 ## 快速开始
 
@@ -632,7 +634,8 @@ fn attach(mut engine: shaul::DownloadEngine) -> shaul::DownloadEngine {
 - 校验后解压，解压器可插拔
 - Hugging Face 与 ModelScope 仓库，可选 provider 缓存
 - 对带 `xetHash` 的 Hugging Face 文件可选启用 Xet
-- 通过 `hls` feature 支持 HLS，通过 `dash` feature 支持静态 DASH 清单
+- 通过 `hls` feature 支持 HLS 点播与有界直播录制，通过 `dash` feature 支持
+  静态 DASH 清单
 - 通过 `bt` feature 支持 BitTorrent、magnet 与 `.torrent`
 - 通过 `ftp` feature 支持单流 `ftp://` 下载，使用 `SIZE`/`MDTM`/`REST` 续传
 - 多文件并发下载

@@ -95,6 +95,10 @@ $ shaul download https://example.com/api/export \
 $ shaul download https://example.com/video/master.m3u8 --connections 8
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 
+# HLS 直播：录到时长或分片上限（出现 ENDLIST 也会提前结束）
+$ shaul download https://example.com/live/index.m3u8 --live-duration 10m
+$ shaul download https://example.com/live/index.m3u8 --live-segments 300
+
 # DASH：从静态点播 MPD 中选择最高码率视频 Representation
 $ shaul download https://example.com/video/manifest.mpd --connections 8
 $ shaul download https://example.com/video/manifest.mpd --include '*1080*'
@@ -213,7 +217,10 @@ DASH 链接用 `--include`/`--exclude` 选择变体或 Representation。
 - 支持 `#EXT-X-BYTERANGE` 分片和 init map，包括隐式偏移。
 - 分片级续传：用 playlist 的 SHA-256 校验 `<output>.shaul.hls.parts/` 中已完成
   的分片。
-- 支持 TS，以及带单个 `#EXT-X-MAP` 的 fMP4。暂不支持 SAMPLE-AES 和直播列表。
+- 直播 media playlist 可用 `--live-duration` 或 `--live-segments` 录制。后端
+  按 `#EXT-X-TARGETDURATION` 轮询，只记录新的 media sequence，达到上限或出现
+  `#EXT-X-ENDLIST` 时停止。直播录制不支持续传。
+- 支持 TS，以及带单个 `#EXT-X-MAP` 的 fMP4。暂不支持 SAMPLE-AES。
 
 ### DASH
 
@@ -227,7 +234,7 @@ DASH 链接用 `--include`/`--exclude` 选择变体或 Representation。
   精确 `Range` HTTP 路径。
 - init 与媒体分片通过共享 HTTP 栈并发下载，拼接为一个 `.mp4` 或 `.webm`
   文件。分片级续传由 MPD SHA-256、Representation id 和分片数量共同保护。
-- 暂不支持 DRM（`ContentProtection`）、直播/动态清单、多 Period、字幕、
+- 暂不支持 DRM（`ContentProtection`）、DASH 直播/动态清单、多 Period、字幕、
   交替音轨混流和转封装。
 
 ### 校验与后处理
@@ -353,7 +360,9 @@ provider token 在运行时解析，不会写入任务 sidecar。Unix 上 sideca
   删除临时目录。续传是分片级的；playlist 或清单指纹变化会从零开始。
   `--mirror` 和最终输出的内容寻址缓存不适用于 HLS/DASH。
   跨源 playlist/密钥/分片 URL 默认剥离敏感请求头，除非开启
-  `allow_cross_origin_auth`。AES-128 密钥在运行时获取且不落盘；加密分片
+  `allow_cross_origin_auth`。直播 HLS 每次都从新窗口开始，不支持续传；取消或
+  失败会保留已录分片供检查，`clean --orphans` 也会清理失败直播任务的临时
+  文件。AES-128 密钥在运行时获取且不落盘；加密分片
   先保存为 `.enc`，解密后的 `.bin` 用于续传和拼接。BYTERANGE 分片使用精确
   `Range` 请求；服务器忽略 `Range` 时退化为完整对象加前缀丢弃。
 - `--verify` 要求存在校验值；`--no-verify` 关闭可选校验。BitTorrent piece

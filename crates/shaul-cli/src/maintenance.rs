@@ -12,6 +12,7 @@ use crate::args::CleanArgs;
 
 const STREAM_TEMP_DIR_KEYS: [&str; 2] = ["hls.temp_dir", "dash.temp_dir"];
 const STREAM_TEMP_SUFFIXES: [&str; 2] = [".shaul.hls.parts", ".shaul.dash.parts"];
+const HLS_LIVE_KEY: &str = "hls.live";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -263,16 +264,28 @@ pub async fn command_clean(config: &Config, args: CleanArgs, json: bool) -> Resu
     let mut orphan_dirs = BTreeSet::new();
     if args.orphans {
         for task in &tasks {
-            if !matches!(task.state, TaskState::Completed | TaskState::Cancelled) {
+            let finished = matches!(task.state, TaskState::Completed | TaskState::Cancelled);
+            if !finished && task.state != TaskState::Failed {
                 continue;
             }
-            for file in &task.files {
-                if let Some(path) = safe_orphan_part(&task.destination, &file.path) {
-                    orphan_parts.insert(path);
+            if finished {
+                for file in &task.files {
+                    if let Some(path) = safe_orphan_part(&task.destination, &file.path) {
+                        orphan_parts.insert(path);
+                    }
                 }
             }
             if let Some(resume) = &task.resume {
                 for file in resume.files.values() {
+                    // Live captures are not resumable, so failed live temp
+                    // files are orphans even before the task is cancelled.
+                    let live = file
+                        .metadata
+                        .get(HLS_LIVE_KEY)
+                        .is_some_and(|value| value == "true");
+                    if !finished && !live {
+                        continue;
+                    }
                     if let Some(path) = safe_resume_part(&task.destination, &file.part_path) {
                         orphan_parts.insert(path);
                     }
@@ -516,7 +529,7 @@ async fn check_directory(name: &str, path: &Path) -> Check {
     }
 }
 
-fn parse_duration(value: &str) -> Result<Duration> {
+pub(crate) fn parse_duration(value: &str) -> Result<Duration> {
     let value = value.trim().to_ascii_lowercase();
     let (number, multiplier) = if let Some(number) = value.strip_suffix('w') {
         (number, 7 * 24 * 60 * 60)

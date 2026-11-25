@@ -155,9 +155,12 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    - `shaul` 的 `hls` feature 启用 `shaul-hls`：`HlsParser` 解析 HTTP(S)
      `.m3u8`，`HlsBackend` 下载分片并拼接为一个文件。支持点播 TS、单 init
      map 的 fMP4、AES-128 加密（密钥轮换、显式/默认 IV）和
-     `EXT-X-BYTERANGE`（含隐式偏移）；SAMPLE-AES 和直播暂不支持，后续作为
-     增量；DASH 由独立的 `dash` feature 处理。AES-128 密钥只驻留内存，不写入
-     sidecar。`reqwest` 类型
+     `EXT-X-BYTERANGE`（含隐式偏移）和有界直播录制；SAMPLE-AES 暂不支持。
+     直播通过新增的 `TaskOptions::live_duration_secs`/`live_segments`（minor
+     公开字段）限定停止条件，
+     按 `#EXT-X-TARGETDURATION` 轮询、按 media sequence 去重；直播不支持续传，
+     失败/取消的临时目录由 `clean --orphans` 清理。DASH 由独立的 `dash`
+     feature 处理。AES-128 密钥只驻留内存，不写入 sidecar。`reqwest` 类型
      不泄漏到 `shaul-core`。CLI `clean --orphans` 会为已完成/已取消任务
      删除 HLS 分片临时目录，跳过符号链接和不安全路径。
    - `shaul` 的 `dash` feature 启用 `shaul-dash`：`DashParser` 解析 HTTP(S)

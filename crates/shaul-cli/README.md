@@ -43,6 +43,10 @@ $ shaul download ftp://user:password@example.com/pub/file.bin
 $ shaul download https://example.com/video/master.m3u8 --connections 8
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 
+# HLS live: record until a duration or segment limit (ENDLIST also stops it)
+$ shaul download https://example.com/live/index.m3u8 --live-duration 10m
+$ shaul download https://example.com/live/index.m3u8 --live-segments 300
+
 # DASH: highest-bandwidth video representation from a static VOD manifest
 $ shaul download https://example.com/video/manifest.mpd --connections 8
 $ shaul download https://example.com/video/manifest.mpd --include '*1080*'
@@ -78,9 +82,9 @@ Common flags: `--dir`, `--output`, `--checksum`, `--verify/--no-verify`,
 `--header-file`, `--bearer-token`, `--basic`, `--method`, `--data`,
 `--data-file`, `--revision`, `--include`,
 `--exclude`, `--cache/--no-cache`, `--content-cache/--no-content-cache`,
-`--file-jobs`, `--mirror`, `--priority`, `--global-connections`,
-`--per-host-active`, `--per-host-limit`, `--json`, `--force`, `--overwrite`
-and `--rename`.
+`--file-jobs`, `--mirror`, `--priority`, `--live-duration`, `--live-segments`,
+`--global-connections`, `--per-host-active`, `--per-host-limit`, `--json`,
+`--force`, `--overwrite` and `--rename`.
 
 `pause` / `resume` / `cancel` accept several ids, or `--all`. `--all` defaults
 to pending/running/paused tasks for pause and cancel, and to paused/failed
@@ -91,10 +95,13 @@ tasks for resume; `--status` overrides the default.
 `BANDWIDTH`, `CODECS` or URI, and a DASH Representation by `id`, `mimeType`,
 `codecs`, `lang`, resolution or `bandwidth`. HLS supports VOD TS and
 single-init-map fMP4 playlists, AES-128 encrypted segments,
-`#EXT-X-BYTERANGE` and segment-level resume. DASH supports static
-single-period manifests with SegmentTemplate, SegmentList or SegmentBase
-addressing and segment-level resume. SAMPLE-AES, live playlists, DRM and
-multi-period DASH are not supported yet.
+`#EXT-X-BYTERANGE` and segment-level resume. Live HLS playlists can be recorded
+with `--live-duration` and/or `--live-segments`; recording polls at the
+playlist's target duration and stops at the limit or `#EXT-X-ENDLIST`. Live
+captures are not resumable. DASH supports static single-period manifests with
+SegmentTemplate, SegmentList or SegmentBase addressing and segment-level
+resume. SAMPLE-AES, DASH live/dynamic manifests, DRM and multi-period DASH are
+not supported yet.
 
 `--method`, `--data` and `--data-file` apply to direct HTTP(S) links only.
 `--data` implies `POST` when `--method` is not given. These requests are
@@ -126,8 +133,8 @@ Hugging Face and ModelScope credential files. Verification failures are renamed
 to `<name>.shaul.failed`, and `clean --orphans` ignores unsafe paths recorded in
 a sidecar. It removes leftover `.shaul.part` files plus HLS
 `.shaul.hls.parts/` and DASH `.shaul.dash.parts/` directories for completed or
-cancelled tasks, does not follow symlinks while sizing them, and never deletes
-destination files.
+cancelled tasks (and for failed live HLS captures, which cannot resume), does
+not follow symlinks while sizing them, and never deletes destination files.
 
 ## Documentation
 

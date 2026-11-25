@@ -145,6 +145,12 @@ AES-128 密钥，由 `#EXT-X-KEY` 指定并作用于其后的分片；运行时�
 只驻留内存，不写入 sidecar。
 _Avoid_: Encryption key, DRM key
 
+**HLS live capture**:
+对没有 `#EXT-X-ENDLIST` 的 media playlist 做有界录制；必须提供
+`live_duration_secs` 或 `live_segments`，按 target duration 轮询并按 media
+sequence 去重。不可续传。
+_Avoid_: Live stream, DVR
+
 **DASH**:
 基于 MPD（XML）的流媒体协议；DASH 任务与 HLS 一样只产生一个最终文件。
 首期只支持静态、单 Period 的点播清单。

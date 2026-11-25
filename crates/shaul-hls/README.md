@@ -9,8 +9,9 @@ HLS backend for [shaul](https://crates.io/crates/shaul).
 
 This crate adds an optional parser and backend for HTTP(S) `.m3u8` links. It
 selects the highest-bandwidth variant from a master playlist, downloads media
-segments concurrently, and concatenates them into one output file. Segments
-are internal: the task still produces a single file.
+segments concurrently, and concatenates them into one output file. VOD and
+bounded live capture are supported. Segments are internal: the task still
+produces a single file.
 
 ## Usage
 
@@ -32,6 +33,13 @@ Use `--include` / `--exclude` globs to choose a variant by `NAME`,
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 ```
 
+Record a live stream with a duration or segment limit:
+
+```console
+$ shaul download https://example.com/live/index.m3u8 --live-duration 10m
+$ shaul download https://example.com/live/index.m3u8 --live-segments 300
+```
+
 `HlsParser` and `HlsBackend` can also be registered in a custom router. The
 backend is protocol-isolated: `shaul-core` does not depend on HLS.
 
@@ -45,13 +53,18 @@ backend is protocol-isolated: `shaul-core` does not depend on HLS.
 - `#EXT-X-BYTERANGE` segments and init maps, including implicit offsets
 - Concurrent segment downloads through the shared HTTP backend, so proxy,
   authentication, timeouts, retries, rate limits and connection budgets apply
-- Segment-level resume: completed segment files are reused after a pause or
-  failure
+- Segment-level resume for VOD: completed segment files are reused after a
+  pause or failure
+- Bounded live capture with `live_duration_secs` (`--live-duration`) or
+  `live_segments` (`--live-segments`); the backend polls at the target
+  duration, records new media sequence numbers, and stops at the limit or
+  `#EXT-X-ENDLIST`
 
 Not supported yet:
 
 - SAMPLE-AES encryption
-- Live playlists
+- Unbounded live capture (a duration or segment limit is required)
+- Live resume (a new run starts from the current window)
 - DASH (use the separate `shaul-dash` crate)
 - Alternate audio renditions and multi-track selection
 - ffmpeg remuxing
@@ -78,6 +91,10 @@ The output extension is `.mp4` when the playlist has an init map, otherwise
   `Range` and returns the full object falls back to discarding the prefix.
 - A video-only variant will produce a video-only output when the master uses
   separate audio renditions.
+- Live captures always start from a fresh temp directory. Cancelling or
+  failing keeps the recorded segments; `clean --orphans` removes temp files
+  from failed live captures as well as completed/cancelled tasks. The output
+  is finalized only when the capture stops.
 
 ## Documentation
 
@@ -85,5 +102,6 @@ The output extension is `.mp4` when the playlist has an init map, otherwise
 - [HLS ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0013-hls-backend.md)
 - [AES-128 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0014-hls-aes128.md)
 - [BYTERANGE ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0015-hls-byterange.md)
+- [Live ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0017-hls-live.md)
 - [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
 - [API reference](https://docs.rs/shaul-hls)

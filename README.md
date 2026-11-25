@@ -100,6 +100,10 @@ $ shaul download https://example.com/api/export \
 $ shaul download https://example.com/video/master.m3u8 --connections 8
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 
+# HLS live: record until a duration or segment limit (ENDLIST also stops it)
+$ shaul download https://example.com/live/index.m3u8 --live-duration 10m
+$ shaul download https://example.com/live/index.m3u8 --live-segments 300
+
 # DASH: highest-bandwidth video representation from a static VOD manifest
 $ shaul download https://example.com/video/manifest.mpd --connections 8
 $ shaul download https://example.com/video/manifest.mpd --include '*1080*'
@@ -225,8 +229,12 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
 - `#EXT-X-BYTERANGE` segments and init maps, including implicit offsets.
 - Segment-level resume: a playlist SHA-256 guards the completed segment files
   in `<output>.shaul.hls.parts/`.
-- TS output and fMP4 playlists with a single `#EXT-X-MAP`. SAMPLE-AES and live
-  playlists are not supported yet.
+- Live media playlists can be recorded with `--live-duration` or
+  `--live-segments`. The backend polls at `#EXT-X-TARGETDURATION`, records only
+  new media sequence numbers, and stops at the limit or `#EXT-X-ENDLIST`.
+  Live captures are not resumable.
+- TS output and fMP4 playlists with a single `#EXT-X-MAP`. SAMPLE-AES is not
+  supported yet.
 
 ### DASH
 
@@ -382,7 +390,10 @@ redacts sensitive headers and removes query strings from HTTP task views.
   success. Resume is segment-level; a changed playlist or manifest fingerprint
   restarts. `--mirror` and the final-output content cache do not apply.
   Cross-origin playlist/key/segment URLs strip sensitive headers unless
-  `allow_cross_origin_auth` is set. HLS AES-128 keys are
+  `allow_cross_origin_auth` is set. Live HLS captures always start fresh and
+  are not resumable; cancelling or failing leaves the recorded segments for
+  inspection, and `clean --orphans` also removes temp files from failed live
+  captures. HLS AES-128 keys are
   fetched at run time and are never persisted; encrypted segments are staged
   as `.enc` and decrypted to `.bin` files used for resume and concatenation.
   Byte-range segments use exact `Range` requests, with a full-object fallback

@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-period VOD `.mpd` manifests, highest-bandwidth representation
   selection, SegmentTemplate/SegmentList/SegmentBase addressing, byte ranges,
   concurrent segment downloads and segment-level resume
+- *(hls,cli)* record live HLS playlists with `--live-duration` and/or
+  `--live-segments`: target-duration polling, media-sequence deduplication,
+  AES-128 and `#EXT-X-ENDLIST` early stop; live captures are not resumable and
+  `clean --orphans` also removes temp files from failed live captures
+- *(core)* add `TaskOptions::live_duration_secs` and
+  `TaskOptions::live_segments` for bounded live capture
 - *(cli)* batch `pause`/`resume`/`cancel` with multiple ids or `--all`, plus
   `list --status` state filters
 - *(cli)* `clean --orphans` removes HLS/DASH segment temp directories for

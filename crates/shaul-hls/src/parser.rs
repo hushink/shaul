@@ -72,7 +72,11 @@ impl LinkParser for HlsParser {
                 variant.uri.clone()
             }
             Playlist::Media(media) => {
-                validate_media(&media)?;
+                if media.is_vod() {
+                    validate_media(&media)?;
+                } else {
+                    validate_live_media(&media)?;
+                }
                 final_url
             }
         };
@@ -124,10 +128,34 @@ fn output_name(url: &Url) -> String {
 pub(crate) fn validate_media(media: &MediaPlaylist) -> Result<()> {
     if !media.is_vod() {
         return Err(Error::Backend(
-            "live HLS playlists are not supported; only VOD with #EXT-X-ENDLIST is supported"
+            "HLS media playlist is missing #EXT-X-ENDLIST; use --live-duration or \
+             --live-segments to record a live stream"
                 .to_string(),
         ));
     }
+    if media.segments.is_empty() {
+        return Err(Error::Backend(
+            "VOD HLS playlist has no segments".to_string(),
+        ));
+    }
+    validate_stream(media)
+}
+
+pub(crate) fn validate_live_media(media: &MediaPlaylist) -> Result<()> {
+    if !media.end_list && media.playlist_type.as_deref() == Some("VOD") {
+        return Err(Error::Backend(
+            "HLS playlist is marked VOD but has no #EXT-X-ENDLIST".to_string(),
+        ));
+    }
+    if media.target_duration.is_none_or(|value| value == 0) {
+        return Err(Error::Backend(
+            "live HLS playlist needs a positive #EXT-X-TARGETDURATION".to_string(),
+        ));
+    }
+    validate_stream(media)
+}
+
+fn validate_stream(media: &MediaPlaylist) -> Result<()> {
     if media.init_changed {
         return Err(Error::Backend(
             "HLS playlists with multiple different #EXT-X-MAP values are not supported".to_string(),
@@ -191,6 +219,20 @@ mod tests {
             panic!("expected a media playlist");
         };
         assert!(validate_media(&media).is_err());
+        assert!(validate_live_media(&media).is_err());
+
+        let live_with_target = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:4.0,\nseg.ts\n";
+        let Playlist::Media(media) = Playlist::parse(&base(), live_with_target).unwrap() else {
+            panic!("expected a media playlist");
+        };
+        assert!(validate_live_media(&media).is_ok());
+
+        let marked_vod =
+            "#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-TARGETDURATION:2\n#EXTINF:4.0,\nseg.ts\n";
+        let Playlist::Media(media) = Playlist::parse(&base(), marked_vod).unwrap() else {
+            panic!("expected a media playlist");
+        };
+        assert!(validate_live_media(&media).is_err());
 
         let aes128 = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n#EXTINF:4.0,\nseg.ts\n#EXT-X-ENDLIST\n";
         let Playlist::Media(media) = Playlist::parse(&base(), aes128).unwrap() else {

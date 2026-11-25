@@ -241,6 +241,10 @@ pub struct ResolvedOptions {
     pub segment_size: u64,
     /// Whether resume is enabled for this task.
     pub resume: bool,
+    /// Stop a live stream capture after this many seconds of media.
+    pub live_duration_secs: Option<u64>,
+    /// Stop a live stream capture after this many segments.
+    pub live_segments: Option<usize>,
     /// Effective checksum verification policy.
     pub verify: VerifyMode,
     /// Expected checksum supplied by the task, if any.
@@ -633,6 +637,8 @@ impl Config {
             mirrors: options.mirrors.clone(),
             segment_size: self.download.segment_size.max(64 * 1024),
             resume: options.resume.unwrap_or(self.download.resume),
+            live_duration_secs: options.live_duration_secs,
+            live_segments: options.live_segments,
             verify: options.verify.unwrap_or(self.download.verify),
             checksum: options.checksum.clone(),
             extract: options.extract.unwrap_or(self.download.extract),

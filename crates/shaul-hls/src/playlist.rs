@@ -57,6 +57,8 @@ pub struct MediaPlaylist {
     pub end_list: bool,
     /// `#EXT-X-MEDIA-SEQUENCE`, when present.
     pub media_sequence: u64,
+    /// `#EXT-X-TARGETDURATION`, when present.
+    pub target_duration: Option<u64>,
     /// `#EXT-X-PLAYLIST-TYPE`, when present.
     pub playlist_type: Option<String>,
     /// Overall encryption summary for the playlist.
@@ -178,6 +180,11 @@ impl Playlist {
                     .map_err(|_| {
                         Error::InvalidLink(format!("invalid #EXTINF duration: {value}"))
                     })?;
+                if !duration.is_finite() || duration < 0.0 {
+                    return Err(Error::InvalidLink(format!(
+                        "invalid #EXTINF duration: {value}"
+                    )));
+                }
                 pending_inf = Some(duration);
                 continue;
             }
@@ -206,6 +213,12 @@ impl Playlist {
             }
             if let Some(value) = line.strip_prefix("#EXT-X-PLAYLIST-TYPE:") {
                 media.playlist_type = Some(value.trim().to_string());
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("#EXT-X-TARGETDURATION:") {
+                media.target_duration = Some(value.trim().parse::<u64>().map_err(|_| {
+                    Error::InvalidLink(format!("invalid #EXT-X-TARGETDURATION: {value}"))
+                })?);
                 continue;
             }
             if let Some(value) = line.strip_prefix("#EXT-X-MAP:") {
@@ -294,11 +307,6 @@ impl Playlist {
             }
             return Ok(Playlist::Master(MasterPlaylist { variants: master }));
         }
-        if media.segments.is_empty() {
-            return Err(Error::InvalidLink(
-                "HLS media playlist has no segments".to_string(),
-            ));
-        }
         Ok(Playlist::Media(MediaPlaylist {
             segments: media.segments,
             init: media.init,
@@ -307,6 +315,7 @@ impl Playlist {
             init_byte_range: media.init_byte_range,
             end_list: media.end_list,
             media_sequence: media.media_sequence,
+            target_duration: media.target_duration,
             playlist_type: media.playlist_type,
             encryption: media.encryption,
         }))
@@ -322,6 +331,7 @@ struct MediaState {
     init_byte_range: Option<ByteRange>,
     end_list: bool,
     media_sequence: u64,
+    target_duration: Option<u64>,
     playlist_type: Option<String>,
     current_key: Option<Key>,
     encryption: Encryption,
@@ -353,7 +363,7 @@ impl MasterPlaylist {
 impl MediaPlaylist {
     /// Whether the playlist is a complete video-on-demand list.
     pub fn is_vod(&self) -> bool {
-        self.end_list && self.playlist_type.as_deref() != Some("EVENT")
+        self.end_list
     }
 }
 
@@ -608,6 +618,7 @@ https://cdn.example.com/seg-001.ts
         };
         assert!(media.is_vod());
         assert_eq!(media.media_sequence, 42);
+        assert_eq!(media.target_duration, Some(6));
         assert_eq!(media.segments.len(), 2);
         assert_eq!(
             media.segments[0].uri.as_str(),
@@ -811,6 +822,26 @@ seg.ts
             panic!("expected a media playlist");
         };
         assert!(!media.is_vod());
+    }
+
+    #[test]
+    fn rejects_non_finite_and_negative_segment_durations() {
+        for value in ["NaN", "inf", "-1.0"] {
+            let text = format!("#EXTM3U\n#EXTINF:{value},\nseg.ts\n");
+            assert!(Playlist::parse(&base(), &text).is_err(), "{value}");
+        }
+    }
+
+    #[test]
+    fn parses_live_target_durations_and_empty_windows() {
+        let text = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:7\n";
+        let Playlist::Media(media) = Playlist::parse(&base(), text).unwrap() else {
+            panic!("expected a media playlist");
+        };
+        assert!(!media.is_vod());
+        assert_eq!(media.target_duration, Some(2));
+        assert_eq!(media.media_sequence, 7);
+        assert!(media.segments.is_empty());
     }
 
     #[test]

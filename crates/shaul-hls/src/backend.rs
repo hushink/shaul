@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use aes::Aes128;
 use async_trait::async_trait;
@@ -10,9 +11,9 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
 use futures_util::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use shaul_core::{
-    BackendCapabilities, ByteRange, DownloadBackend, DownloadOutcome, DownloadRequest, Error,
-    EventKind, EventSink, FileOutcome, FileResume, RequestOptions, ResolvedOptions, Resource,
-    ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskResume, VerifyMode,
+    BackendCapabilities, ByteRange, Checksum, DownloadBackend, DownloadOutcome, DownloadRequest,
+    Error, EventKind, EventSink, FileOutcome, FileResume, RequestOptions, ResolvedOptions,
+    Resource, ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskResume, VerifyMode,
     ensure_free_space, part_path,
 };
 use shaul_http::HttpBackend;
@@ -21,11 +22,12 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::client::{HlsClient, same_origin};
-use crate::parser::{HLS_PROTOCOL, validate_media};
-use crate::playlist::{ByteRange as HlsByteRange, MediaPlaylist, Playlist, fingerprint};
+use crate::parser::{HLS_PROTOCOL, validate_live_media, validate_media};
+use crate::playlist::{ByteRange as HlsByteRange, MediaPlaylist, Playlist, Segment, fingerprint};
 
 const STATE_KEY: &str = "hls.state";
 const TEMP_DIR_KEY: &str = "hls.temp_dir";
+const LIVE_KEY: &str = "hls.live";
 const ORIGIN_KEY: &str = "hls.origin";
 const SEGMENT_DIR_SUFFIX: &str = ".shaul.hls.parts";
 const INIT_NAME: &str = "init.bin";
@@ -52,6 +54,19 @@ impl HlsBackend {
         request: &DownloadRequest,
         trust_origin: &Url,
     ) -> Result<HashMap<Url, [u8; 16]>> {
+        let mut keys = HashMap::new();
+        self.extend_keys(media, request, trust_origin, &mut keys)
+            .await?;
+        Ok(keys)
+    }
+
+    async fn extend_keys(
+        &self,
+        media: &MediaPlaylist,
+        request: &DownloadRequest,
+        trust_origin: &Url,
+        keys: &mut HashMap<Url, [u8; 16]>,
+    ) -> Result<()> {
         let mut urls = HashSet::new();
         for segment in &media.segments {
             if let Some(key) = &segment.key {
@@ -61,8 +76,10 @@ impl HlsBackend {
         if let Some(key) = &media.init_key {
             urls.insert(key.uri.clone());
         }
-        let mut keys = HashMap::new();
         for url in urls {
+            if keys.contains_key(&url) {
+                continue;
+            }
             let options = request_for_origin(&request.options.request, trust_origin, &url);
             let key = self
                 .client
@@ -70,7 +87,54 @@ impl HlsBackend {
                 .await?;
             keys.insert(url, key);
         }
-        Ok(keys)
+        Ok(())
+    }
+
+    async fn download_init(
+        &self,
+        request: &DownloadRequest,
+        trust_origin: &Url,
+        media: &MediaPlaylist,
+        temp_dir: &Path,
+        keys: &HashMap<Url, [u8; 16]>,
+        events: &EventSink,
+    ) -> Result<u64> {
+        let Some(init_url) = &media.init else {
+            return Err(Error::Backend(
+                "HLS playlist has no initialization segment".to_string(),
+            ));
+        };
+        let options = options_for_origin(&request.options, trust_origin, init_url);
+        let range = media.init_byte_range.map(core_range).transpose()?;
+        if let Some(init_key) = &media.init_key {
+            download_one(
+                &self.http,
+                request,
+                &options,
+                init_url,
+                temp_dir,
+                INIT_ENC_NAME,
+                range,
+                events,
+            )
+            .await?;
+            let key_bytes = keys.get(&init_key.uri).ok_or_else(|| {
+                Error::Backend("HLS initialization key was not fetched".to_string())
+            })?;
+            let iv = init_key.iv.ok_or_else(|| {
+                Error::Backend("encrypted #EXT-X-MAP without an IV is not supported".to_string())
+            })?;
+            let encrypted = temp_dir.join(INIT_ENC_NAME);
+            let output = temp_dir.join(INIT_NAME);
+            decrypt_file(&encrypted, &output, key_bytes, &iv).await?;
+            let _ = tokio::fs::remove_file(&encrypted).await;
+            Ok(tokio::fs::metadata(&output).await?.len())
+        } else {
+            download_one(
+                &self.http, request, &options, init_url, temp_dir, INIT_NAME, range, events,
+            )
+            .await
+        }
     }
 }
 
@@ -161,7 +225,14 @@ impl DownloadBackend for HlsBackend {
                 "HLS resource does not point to a media playlist".to_string(),
             ));
         };
-        validate_media(&media)?;
+        if media.is_vod() {
+            validate_media(&media)?;
+        } else {
+            validate_live_media(&media)?;
+            return self
+                .download_live(request, file, checksum, trust_origin, media_url, media)
+                .await;
+        }
 
         let extension = if media.init.is_some() { "mp4" } else { "ts" };
         let (final_path, _) = resolve_final_path(&request, &file, extension)?;
@@ -260,49 +331,17 @@ impl DownloadBackend for HlsBackend {
 
         let segment_events =
             EventSink::default().with_telemetry(request.events.telemetry().clone());
-        let init_range = media.init_byte_range.map(core_range).transpose()?;
-        if let Some(init_url) = &media.init
-            && !init_done
-        {
-            let options = options_for_origin(&request.options, &trust_origin, init_url);
-            let plaintext_size = if let Some(init_key) = &media.init_key {
-                download_one(
-                    &self.http,
+        if media.init.is_some() && !init_done {
+            let plaintext_size = self
+                .download_init(
                     &request,
-                    &options,
-                    init_url,
+                    &trust_origin,
+                    &media,
                     &temp_dir,
-                    INIT_ENC_NAME,
-                    init_range,
+                    &keys,
                     &segment_events,
                 )
                 .await?;
-                let key_bytes = keys.get(&init_key.uri).ok_or_else(|| {
-                    Error::Backend("HLS initialization key was not fetched".to_string())
-                })?;
-                let iv = init_key.iv.ok_or_else(|| {
-                    Error::Backend(
-                        "encrypted #EXT-X-MAP without an IV is not supported".to_string(),
-                    )
-                })?;
-                let encrypted = temp_dir.join(INIT_ENC_NAME);
-                let output = temp_dir.join(INIT_NAME);
-                decrypt_file(&encrypted, &output, key_bytes, &iv).await?;
-                let _ = tokio::fs::remove_file(&encrypted).await;
-                tokio::fs::metadata(&output).await?.len()
-            } else {
-                download_one(
-                    &self.http,
-                    &request,
-                    &options,
-                    init_url,
-                    &temp_dir,
-                    INIT_NAME,
-                    init_range,
-                    &segment_events,
-                )
-                .await?
-            };
             let current = progress.fetch_add(plaintext_size, Ordering::Relaxed) + plaintext_size;
             emit_progress(&request, &relative, &progress);
             writer.lock().await.save_progress(&request, current).await?;
@@ -422,6 +461,326 @@ impl DownloadBackend for HlsBackend {
             final_path, relative, written, checksum, false,
         )]))
     }
+}
+
+impl HlsBackend {
+    async fn download_live(
+        &self,
+        request: DownloadRequest,
+        file: ResourceFile,
+        checksum: Option<Checksum>,
+        trust_origin: Url,
+        mut media_url: Url,
+        mut media: MediaPlaylist,
+    ) -> Result<DownloadOutcome> {
+        let duration_limit = request.options.live_duration_secs;
+        let segment_limit = request.options.live_segments;
+        if duration_limit == Some(0) || segment_limit == Some(0) {
+            return Err(Error::Config(
+                "live HLS limits must be greater than zero".to_string(),
+            ));
+        }
+        if duration_limit.is_none() && segment_limit.is_none() {
+            return Err(Error::Config(
+                "live HLS capture requires --live-duration or --live-segments".to_string(),
+            ));
+        }
+
+        let extension = if media.init.is_some() { "mp4" } else { "ts" };
+        let (final_path, _) = resolve_final_path(&request, &file, extension)?;
+        let final_path = apply_conflict_policy(final_path, &request.options).await?;
+        let relative = relative_path(&request.destination, &final_path);
+        let part = part_path(&final_path);
+        let temp_relative = format!("{relative}{SEGMENT_DIR_SUFFIX}");
+        let temp_dir = request.destination.join(&temp_relative);
+        // Live captures are not resumable: always start from a clean window.
+        remove_dir_all_if_exists(&temp_dir).await?;
+        create_dir_all(&temp_dir).await?;
+
+        let mut playlist_request =
+            request_for_origin(&request.options.request, &trust_origin, &media_url);
+        let mut keys = HashMap::new();
+
+        request.events.emit(EventKind::FileStarted {
+            task_id: request.task_id,
+            file: relative.clone(),
+            total_bytes: None,
+        });
+        let progress = Arc::new(AtomicU64::new(0));
+        let key = file.url.as_str().to_string();
+        let file_resume = FileResume {
+            url: key.clone(),
+            final_path: path_for_manifest(&request.destination, &final_path),
+            part_path: path_for_manifest(&request.destination, &part),
+            validator: Default::default(),
+            total_size: None,
+            segment_size: request.options.segment_size,
+            completed: Vec::new(),
+            checksum: checksum.clone(),
+            metadata: BTreeMap::from([
+                (TEMP_DIR_KEY.to_string(), temp_relative),
+                (LIVE_KEY.to_string(), "true".to_string()),
+            ]),
+            updated_at_ms: 0,
+        };
+        let writer = Arc::new(Mutex::new(CheckpointWriter {
+            task_resume: request.resume.clone().unwrap_or_default(),
+            file_resume,
+            key: key.clone(),
+        }));
+        writer.lock().await.save_progress(&request, 0).await?;
+
+        // Fetch keys only after the temp directory is registered, so a key
+        // failure still leaves a cleanable live temp directory.
+        self.extend_keys(&media, &request, &trust_origin, &mut keys)
+            .await?;
+
+        let segment_events =
+            EventSink::default().with_telemetry(request.events.telemetry().clone());
+        let init_path = media.init.as_ref().map(|_| temp_dir.join(INIT_NAME));
+        if init_path.is_some() {
+            let size = self
+                .download_init(
+                    &request,
+                    &trust_origin,
+                    &media,
+                    &temp_dir,
+                    &keys,
+                    &segment_events,
+                )
+                .await?;
+            let current = progress.fetch_add(size, Ordering::Relaxed) + size;
+            emit_progress(&request, &relative, &progress);
+            writer.lock().await.save_progress(&request, current).await?;
+        }
+
+        let mut ordered: Vec<u64> = Vec::new();
+        let mut seen: HashSet<u64> = HashSet::new();
+        let mut total_duration = 0.0_f64;
+        let mut last_sequence: Option<u64> = None;
+
+        loop {
+            if let Some(last) = last_sequence
+                && let Some(first) = media.segments.first()
+                && first.sequence > last.saturating_add(1)
+            {
+                return Err(Error::Backend(format!(
+                    "live HLS window advanced past unrecorded segments (last recorded {last}, \
+                     playlist starts at {})",
+                    first.sequence
+                )));
+            }
+
+            let new_segments: Vec<&Segment> = media
+                .segments
+                .iter()
+                .filter(|segment| !seen.contains(&segment.sequence))
+                .collect();
+            for segment in new_segments {
+                let options = options_for_origin(&request.options, &trust_origin, &segment.uri);
+                let size = self
+                    .download_live_segment(
+                        &request,
+                        &options,
+                        segment,
+                        &temp_dir,
+                        &keys,
+                        &segment_events,
+                    )
+                    .await?;
+                seen.insert(segment.sequence);
+                ordered.push(segment.sequence);
+                total_duration += segment.duration;
+                let current = progress.fetch_add(size, Ordering::Relaxed) + size;
+                request.events.emit(EventKind::Progress {
+                    task_id: request.task_id,
+                    file: relative.clone(),
+                    downloaded_bytes: current,
+                    total_bytes: None,
+                });
+                writer.lock().await.save_progress(&request, current).await?;
+                if live_limit_reached(&ordered, total_duration, duration_limit, segment_limit) {
+                    break;
+                }
+            }
+            last_sequence = ordered.last().copied().or(last_sequence);
+            if media.end_list
+                || live_limit_reached(&ordered, total_duration, duration_limit, segment_limit)
+            {
+                break;
+            }
+
+            let target = Duration::from_secs(media.target_duration.unwrap_or(1).max(1));
+            tokio::select! {
+                _ = request.cancel.cancelled() => return Err(Error::Cancelled),
+                _ = tokio::time::sleep(target) => {}
+            }
+
+            let (text, next_url) = self
+                .client
+                .fetch_text(&media_url, &playlist_request, &request.cancel)
+                .await?;
+            let Playlist::Media(next) = Playlist::parse(&next_url, &text)? else {
+                return Err(Error::Backend(
+                    "live HLS URL stopped returning a media playlist".to_string(),
+                ));
+            };
+            validate_live_media(&next)?;
+            if !same_init(&media, &next) {
+                return Err(Error::Backend(
+                    "live HLS initialization segment changed during capture".to_string(),
+                ));
+            }
+            self.extend_keys(&next, &request, &trust_origin, &mut keys)
+                .await?;
+            if next_url != media_url {
+                media_url = next_url;
+                playlist_request =
+                    request_for_origin(&request.options.request, &trust_origin, &media_url);
+            }
+            media = next;
+        }
+
+        if ordered.is_empty() {
+            return Err(Error::Backend(
+                "live HLS capture recorded no segments".to_string(),
+            ));
+        }
+        let total = total_live_bytes(&temp_dir, init_path.as_deref(), &ordered).await?;
+        if request.options.disk_space_check {
+            ensure_free_space(&request.destination, total)?;
+        }
+        let written = concat_live(&final_path, &temp_dir, init_path.as_deref(), &ordered).await?;
+
+        {
+            let mut writer = writer.lock().await;
+            writer.file_resume.total_size = Some(written);
+            writer.file_resume.completed = if written > 0 {
+                vec![ByteRange::new(0, written)?]
+            } else {
+                Vec::new()
+            };
+            writer.file_resume.normalize();
+            let key = writer.key.clone();
+            let entry = writer.file_resume.clone();
+            writer.task_resume.files.insert(key, entry);
+            request.checkpoint.save(&writer.task_resume).await?;
+        }
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+
+        request.events.emit(EventKind::Progress {
+            task_id: request.task_id,
+            file: relative.clone(),
+            downloaded_bytes: written,
+            total_bytes: Some(written),
+        });
+        Ok(DownloadOutcome::Completed(vec![FileOutcome::new(
+            final_path, relative, written, checksum, false,
+        )]))
+    }
+
+    async fn download_live_segment(
+        &self,
+        request: &DownloadRequest,
+        options: &ResolvedOptions,
+        segment: &Segment,
+        temp_dir: &Path,
+        keys: &HashMap<Url, [u8; 16]>,
+        events: &EventSink,
+    ) -> Result<u64> {
+        let range = segment.byte_range.map(core_range).transpose()?;
+        let name = if segment.key.is_some() {
+            encrypted_live_segment_name(segment.sequence)
+        } else {
+            live_segment_name(segment.sequence)
+        };
+        let size = download_one(
+            &self.http,
+            request,
+            options,
+            &segment.uri,
+            temp_dir,
+            &name,
+            range,
+            events,
+        )
+        .await?;
+        if let Some(key) = &segment.key {
+            let key_bytes = keys.get(&key.uri).ok_or_else(|| {
+                Error::Backend("HLS live segment key was not fetched".to_string())
+            })?;
+            let iv = key.iv.unwrap_or_else(|| sequence_iv(segment.sequence));
+            let encrypted = temp_dir.join(encrypted_live_segment_name(segment.sequence));
+            let output = temp_dir.join(live_segment_name(segment.sequence));
+            decrypt_file(&encrypted, &output, key_bytes, &iv).await?;
+            let _ = tokio::fs::remove_file(&encrypted).await;
+            Ok(tokio::fs::metadata(&output).await?.len())
+        } else {
+            Ok(size)
+        }
+    }
+}
+
+fn live_limit_reached(
+    ordered: &[u64],
+    total_duration: f64,
+    duration_limit: Option<u64>,
+    segment_limit: Option<usize>,
+) -> bool {
+    segment_limit.is_some_and(|limit| ordered.len() >= limit)
+        || duration_limit.is_some_and(|limit| total_duration >= limit as f64)
+}
+
+fn same_init(left: &MediaPlaylist, right: &MediaPlaylist) -> bool {
+    left.init == right.init
+        && left.init_key == right.init_key
+        && left.init_byte_range == right.init_byte_range
+}
+
+fn live_segment_name(sequence: u64) -> String {
+    format!("live-{sequence}.bin")
+}
+
+fn encrypted_live_segment_name(sequence: u64) -> String {
+    format!("live-{sequence}.enc")
+}
+
+async fn total_live_bytes(temp_dir: &Path, init: Option<&Path>, sequences: &[u64]) -> Result<u64> {
+    let mut total = 0;
+    if let Some(init) = init {
+        total += tokio::fs::metadata(init).await?.len();
+    }
+    for sequence in sequences {
+        total += tokio::fs::metadata(temp_dir.join(live_segment_name(*sequence)))
+            .await?
+            .len();
+    }
+    Ok(total)
+}
+
+async fn concat_live(
+    final_path: &Path,
+    temp_dir: &Path,
+    init: Option<&Path>,
+    sequences: &[u64],
+) -> Result<u64> {
+    let part = part_path(final_path);
+    ensure_parent(&part).await?;
+    remove_if_exists(&part).await?;
+    let mut output = tokio::fs::File::create(&part).await?;
+    let mut written = 0u64;
+    if let Some(init) = init {
+        written += copy_file(init, &mut output).await?;
+    }
+    for sequence in sequences {
+        written += copy_file(&temp_dir.join(live_segment_name(*sequence)), &mut output).await?;
+    }
+    output.flush().await?;
+    output.sync_all().await?;
+    drop(output);
+    remove_if_exists(final_path).await?;
+    tokio::fs::rename(&part, final_path).await?;
+    Ok(written)
 }
 
 struct NoopCheckpoint;

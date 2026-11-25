@@ -158,6 +158,14 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub no_resume: bool,
 
+    /// Stop a live HLS capture after this duration (for example 30m, 1h)
+    #[arg(long, value_name = "DURATION")]
+    pub live_duration: Option<String>,
+
+    /// Stop a live HLS capture after this many segments
+    #[arg(long, value_name = "N")]
+    pub live_segments: Option<usize>,
+
     /// Require checksum verification (fails if no checksum is known)
     #[arg(long, conflicts_with = "no_verify")]
     pub verify: bool,
@@ -481,6 +489,29 @@ impl DownloadArgs {
         if request.body.is_some() && request.method.is_none() {
             request.method = Some("POST".to_string());
         }
+        let live_duration_secs = self
+            .live_duration
+            .as_deref()
+            .map(crate::maintenance::parse_duration)
+            .transpose()?
+            .map(|duration| {
+                let seconds = duration.as_secs();
+                if seconds == 0 {
+                    return Err(Error::Config(
+                        "--live-duration must be greater than zero".to_string(),
+                    ));
+                }
+                Ok(seconds)
+            })
+            .transpose()?;
+        let live_segments = match self.live_segments {
+            Some(0) => {
+                return Err(Error::Config(
+                    "--live-segments must be greater than zero".to_string(),
+                ));
+            }
+            value => value,
+        };
         Ok(TaskOptions {
             output: self.output.clone(),
             connections: self.connections,
@@ -489,6 +520,8 @@ impl DownloadArgs {
             mirrors,
             priority: self.priority,
             resume,
+            live_duration_secs,
+            live_segments,
             verify,
             checksum,
             extract,

@@ -23,7 +23,8 @@ Killing a `shaul run` worker is safe: the next worker requeues tasks left in
 
 Yes. Disable it per task with `--no-resume` or in config with
 `download.resume = false`. A changed `ETag`, `Last-Modified` or size restarts
-the file safely instead of appending to stale data.
+the file safely instead of appending to stale data. Live HLS captures are
+never resumed; every run starts from the playlist window at run time.
 
 Services that ignore `Range` are handled with a single-stream fallback;
 `200 + Content-Range` is treated as a partial response. Segment size shrinks
@@ -110,7 +111,8 @@ downloads are not cached. `shaul stats` reports entries/bytes and
   `--completed`, `--cancelled` and `--failed` select individual states;
   `--orphans` removes destination-relative `.shaul.part` files plus HLS
   `.shaul.hls.parts/` and DASH `.shaul.dash.parts/` directories left by
-  completed/cancelled tasks (unsafe paths in a sidecar are ignored);
+  completed/cancelled tasks (and by failed live HLS captures, which cannot
+  resume; unsafe paths in a sidecar are ignored);
   `--cache` removes content-cache entries (it refuses a directory whose top
   level does not look like a content cache). With `--cache`, add
   `--cache-older-than 30d` and/or `--cache-max-size 50GiB` to prune instead of
@@ -168,12 +170,29 @@ and explicit or media-sequence IVs; keys are fetched at run time and never
 persisted. Encrypted segments are staged as `.enc` and decrypted to the `.bin`
 files used for resume and concatenation. `#EXT-X-BYTERANGE` segments and init
 maps are supported, including implicit offsets; a server that ignores `Range`
-is handled by reading the full object and discarding the prefix. SAMPLE-AES,
-live playlists and alternate audio renditions are not supported yet.
+is handled by reading the full object and discarding the prefix. Bounded live
+capture is supported with `--live-duration` and/or `--live-segments` (see
+below). SAMPLE-AES and alternate audio renditions are not supported yet.
 `--mirror` and the final-output content cache do not apply to HLS tasks.
 Completed segments live in `<output>.shaul.hls.parts/`; `shaul clean --orphans`
 removes that directory for completed or cancelled tasks, along with the
 concatenation `.part`.
+
+## Can I record a live HLS stream?
+
+Yes, as a bounded capture. Pass `--live-duration 10m`, `--live-segments 300`,
+or both; at least one limit is required. The media playlist must be live (no
+`#EXT-X-ENDLIST`) and must declare `#EXT-X-TARGETDURATION`. Recording starts
+from the playlist window present when the task runs, polls the playlist every
+target duration, downloads only new media sequence numbers, and stops when a
+limit is reached or `#EXT-X-ENDLIST` appears. Durations are measured from
+`#EXTINF` values, not wall-clock time.
+
+Live captures are not resumable: each run starts from a fresh temp directory
+and the current window. Cancelling or failing leaves the recorded segments for
+inspection; `shaul clean --orphans` removes temp files from failed live
+captures as well as completed/cancelled tasks. The output file is written only
+when recording stops. DASH live/dynamic manifests are not supported yet.
 
 ## Does shaul support DASH?
 

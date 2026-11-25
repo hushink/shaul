@@ -42,6 +42,8 @@ opens the sidecar task store:
   the tree API reports a `xetHash`)
 - FTP (only with the `ftp` feature; single-stream, no FTPS yet)
 - HLS (only with the `hls` feature; VOD playlists, one concatenated output)
+  and bounded live HLS capture when `TaskOptions::live_duration_secs` or
+  `live_segments` is set (not resumable)
 - DASH (only with the `dash` feature; static single-period manifests, one
   concatenated output)
 - direct links as the fallback

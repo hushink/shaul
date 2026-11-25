@@ -62,9 +62,9 @@ shaul 的 `Resource` / `FileItem` 模型把 `FileItem` 定义为落盘与校验�
 - 支持：HTTP(S) `.m3u8`、master/media playlist、最高码率自动选择、
   `--include`/`--exclude` 变体选择、VOD、TS、单 init map 的 fMP4、
   分片并发、分片级续传、`--output`。
-- 不支持（后续增量）：直播、多音轨/交替 rendition、ffmpeg 转封装、分片内
-  字节级续传。DASH 由独立的 `shaul-dash` crate 处理，见
-  [ADR 0016](0016-dash-backend.md)。
+- 不支持（后续增量）：多音轨/交替 rendition、ffmpeg 转封装、分片内字节级
+  续传。直播由 [ADR 0017](0017-hls-live.md) 以有界录制方式加入；DASH 由独立
+  的 `shaul-dash` crate 处理，见 [ADR 0016](0016-dash-backend.md)。
 - AES-128 已由二期加入；密钥、IV 和解密细节见
   [ADR 0014](0014-hls-aes128.md)。BYTERANGE 已由三期加入，见
   [ADR 0015](0015-hls-byterange.md)。

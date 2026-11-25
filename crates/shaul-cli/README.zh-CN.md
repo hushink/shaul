@@ -43,6 +43,10 @@ $ shaul download ftp://user:password@example.com/pub/file.bin
 $ shaul download https://example.com/video/master.m3u8 --connections 8
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 
+# HLS 直播：录到时长或分片上限（出现 ENDLIST 也会提前结束）
+$ shaul download https://example.com/live/index.m3u8 --live-duration 10m
+$ shaul download https://example.com/live/index.m3u8 --live-segments 300
+
 # DASH：从静态点播清单选择最高码率视频 Representation
 $ shaul download https://example.com/video/manifest.mpd --connections 8
 $ shaul download https://example.com/video/manifest.mpd --include '*1080*'
@@ -78,9 +82,9 @@ $ shaul completions bash
 `--header-file`、`--bearer-token`、`--basic`、`--method`、`--data`、
 `--data-file`、`--revision`、`--include`、
 `--exclude`、`--cache/--no-cache`、`--content-cache/--no-content-cache`、
-`--file-jobs`、`--mirror`、`--priority`、`--global-connections`、
-`--per-host-active`、`--per-host-limit`、`--json`、`--force`、`--overwrite`
-与 `--rename`。
+`--file-jobs`、`--mirror`、`--priority`、`--live-duration`、
+`--live-segments`、`--global-connections`、`--per-host-active`、
+`--per-host-limit`、`--json`、`--force`、`--overwrite` 与 `--rename`。
 
 `pause` / `resume` / `cancel` 支持多个 id 或 `--all`。`--all` 对 pause 和
 cancel 默认选择 pending/running/paused，对 resume 默认选择 paused/failed；
@@ -89,9 +93,12 @@ cancel 默认选择 pending/running/paused，对 resume 默认选择 paused/fail
 `--include` / `--exclude` 也可用于按 `NAME`、`RESOLUTION`、`BANDWIDTH`、
 `CODECS` 或 URI 选择 HLS 变体，或按 `id`、`mimeType`、`codecs`、`lang`、
 分辨率和 `bandwidth` 选择 DASH Representation。HLS 支持点播 TS、单 init map
-的 fMP4、AES-128 加密分片、`#EXT-X-BYTERANGE` 和分片级续传。DASH 支持静态
-单 Period 清单、SegmentTemplate/SegmentList/SegmentBase 寻址和分片级续传；
-暂不支持 SAMPLE-AES、直播列表、DRM 和多 Period DASH。
+的 fMP4、AES-128 加密分片、`#EXT-X-BYTERANGE` 和分片级续传。直播 HLS 可用
+`--live-duration` 和/或 `--live-segments` 录制；后端按 playlist 的 target
+duration 轮询，达到上限或出现 `#EXT-X-ENDLIST` 时停止，且直播录制不支持
+续传。DASH 支持静态单 Period 清单、SegmentTemplate/SegmentList/SegmentBase
+寻址和分片级续传；暂不支持 SAMPLE-AES、DASH 直播/动态清单、DRM 和多 Period
+DASH。
 
 `--method`、`--data`、`--data-file` 只适用于直接 HTTP(S) 链接。未指定
 `--method` 时，`--data` 隐含 `POST`。这类请求是单请求语义：不分片、不续传、
@@ -120,8 +127,9 @@ provider token 永不持久化。`--json` 输出会对敏感请求头做脱敏�
 还会检查 Hugging Face 与 ModelScope 的官方凭据文件。校验失败的文件会被重命名
 为 `<name>.shaul.failed`，`clean --orphans` 会忽略 sidecar 中记录的不安全路径。
 它还会清理已完成/已取消任务遗留的 `.shaul.part` 文件，以及 HLS
-`.shaul.hls.parts/` 和 DASH `.shaul.dash.parts/` 目录；统计目录大小时不跟随
-符号链接，并且永远不会删除目标文件。
+`.shaul.hls.parts/` 和 DASH `.shaul.dash.parts/` 目录（失败的直播 HLS 任务
+也无法续传，因此同样会清理）；统计目录大小时不跟随符号链接，并且永远不会
+删除目标文件。
 
 ## 文档
 
