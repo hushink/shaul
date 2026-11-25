@@ -40,10 +40,11 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 HLS supports TS and single-init-map fMP4 playlists, AES-128 encryption,
 `#EXT-X-BYTERANGE`, segment-level VOD resume, concurrent segment downloads and
 bounded live capture through `live_duration_secs`/`live_segments` in
-`TaskOptions` (not resumable). SAMPLE-AES is not supported yet. DASH supports static
+`TaskOptions` (not resumable). SAMPLE-AES is not supported yet. DASH supports static and dynamic
 single-period manifests with SegmentTemplate, SegmentList or SegmentBase
-addressing and segment-level resume; DRM, live and multi-period manifests are
-not supported yet.
+addressing, segment-level VOD resume, and bounded dynamic captures when the
+manifest uses SegmentTemplate + SegmentTimeline. DRM, multiple periods and
+dynamic manifests without a SegmentTimeline are not supported yet.
 
 ## Quick start
 
@@ -639,8 +640,8 @@ fn attach(mut engine: shaul::DownloadEngine) -> shaul::DownloadEngine {
 - Archive extraction after verification, with a pluggable extractor API
 - Hugging Face and ModelScope repositories with optional provider caches
 - Optional Xet downloads for Hugging Face files with `xetHash`
-- HLS VOD and bounded live capture through the `hls` feature, and static DASH
-  manifests through the `dash` feature
+- HLS VOD/live capture through the `hls` feature, and DASH VOD/live capture
+  through the `dash` feature
 - BitTorrent, magnet and `.torrent` support through the `bt` feature
 - Single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume
 - Concurrent multi-file downloads

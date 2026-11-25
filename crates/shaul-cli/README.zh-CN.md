@@ -51,6 +51,10 @@ $ shaul download https://example.com/live/index.m3u8 --live-segments 300
 $ shaul download https://example.com/video/manifest.mpd --connections 8
 $ shaul download https://example.com/video/manifest.mpd --include '*1080*'
 
+# DASH 直播：有界录制动态清单
+$ shaul download https://example.com/live/manifest.mpd --live-duration 10m
+$ shaul download https://example.com/live/manifest.mpd --live-segments 300
+
 # 代理与带宽限制
 $ shaul download https://example.com/file.bin \
       --proxy socks5://127.0.0.1:1080 \
@@ -97,8 +101,10 @@ cancel 默认选择 pending/running/paused，对 resume 默认选择 paused/fail
 `--live-duration` 和/或 `--live-segments` 录制；后端按 playlist 的 target
 duration 轮询，达到上限或出现 `#EXT-X-ENDLIST` 时停止，且直播录制不支持
 续传。DASH 支持静态单 Period 清单、SegmentTemplate/SegmentList/SegmentBase
-寻址和分片级续传；暂不支持 SAMPLE-AES、DASH 直播/动态清单、DRM 和多 Period
-DASH。
+寻址和分片级续传，也支持使用 SegmentTemplate + SegmentTimeline 的动态单
+Period 清单；动态录制使用同样的 `--live-duration` / `--live-segments` 限制，
+按 `minimumUpdatePeriod` 轮询，清单变为静态时停止。暂不支持 SAMPLE-AES、
+没有 SegmentTimeline 的动态 DASH、DRM 和多 Period DASH。
 
 `--method`、`--data`、`--data-file` 只适用于直接 HTTP(S) 链接。未指定
 `--method` 时，`--data` 隐含 `POST`。这类请求是单请求语义：不分片、不续传、
@@ -127,9 +133,9 @@ provider token 永不持久化。`--json` 输出会对敏感请求头做脱敏�
 还会检查 Hugging Face 与 ModelScope 的官方凭据文件。校验失败的文件会被重命名
 为 `<name>.shaul.failed`，`clean --orphans` 会忽略 sidecar 中记录的不安全路径。
 它还会清理已完成/已取消任务遗留的 `.shaul.part` 文件，以及 HLS
-`.shaul.hls.parts/` 和 DASH `.shaul.dash.parts/` 目录（失败的直播 HLS 任务
-也无法续传，因此同样会清理）；统计目录大小时不跟随符号链接，并且永远不会
-删除目标文件。
+`.shaul.hls.parts/` 和 DASH `.shaul.dash.parts/` 目录（失败的直播 HLS/DASH
+任务也无法续传，因此同样会清理）；统计目录大小时不跟随符号链接，并且永远
+不会删除目标文件。
 
 ## 文档
 

@@ -164,3 +164,9 @@ _Avoid_: Variant (unqualified)
 **DASH segment**:
 MPD 描述的 init 或媒体分片，由 DashBackend 内部管理，不是 `FileItem`。
 _Avoid_: Segment, chunk (unqualified)
+
+**DASH live capture**:
+对 `type="dynamic"` 的单 Period MPD 做有界录制；要求 SegmentTemplate +
+SegmentTimeline，按 `minimumUpdatePeriod` 轮询、按 presentation time 去重，
+达到 live 限制或 MPD 变为 static 时停止。不可续传。
+_Avoid_: DASH stream, DVR

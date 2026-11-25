@@ -7,10 +7,12 @@
 //! are an internal detail: the task still produces one
 //! [`shaul_core::FileOutcome`].
 //!
-//! Phase 1 supports static, single-period VOD manifests with one selected
-//! representation, SegmentTemplate, SegmentList or SegmentBase/BaseURL
-//! addressing, and segment-level resume. Live manifests, multiple periods,
-//! DRM, subtitles, alternate audio and remuxing are not supported.
+//! Supports static single-period VOD manifests with SegmentTemplate,
+//! SegmentList or SegmentBase/BaseURL addressing and segment-level resume, and
+//! bounded dynamic (live) captures when the manifest uses SegmentTemplate +
+//! SegmentTimeline. Dynamic captures are not resumable. Multiple periods, DRM,
+//! dynamic manifests without a timeline, subtitles, alternate audio and
+//! remuxing are not supported.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

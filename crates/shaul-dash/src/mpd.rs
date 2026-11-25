@@ -9,20 +9,47 @@ use url::Url;
 
 const MAX_SEGMENTS: u64 = 1_000_000;
 
-/// A parsed static DASH manifest.
+/// A parsed DASH manifest.
 #[derive(Clone, Debug)]
 pub struct DashManifest {
     media_duration: Option<f64>,
+    dynamic: bool,
+    minimum_update_period: Option<f64>,
     periods: Vec<Period>,
 }
 
 /// One initialization or media segment selected from a representation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentRef {
     /// Absolute segment URL.
     pub url: Url,
     /// Optional exact byte range within `url`.
     pub range: Option<ByteRange>,
+    /// Presentation timing from a SegmentTemplate, when known.
+    pub timing: Option<SegmentTiming>,
+}
+
+/// Timing of one template-expanded segment, in `timescale` units.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SegmentTiming {
+    /// Presentation start time.
+    pub start: u64,
+    /// Duration in timescale units.
+    pub duration: u64,
+    /// Timescale of `start` and `duration`.
+    pub timescale: u64,
+}
+
+impl SegmentTiming {
+    /// Duration in seconds.
+    pub fn seconds(&self) -> f64 {
+        self.duration as f64 / self.timescale as f64
+    }
+
+    /// Exclusive presentation end time.
+    pub fn end(&self) -> Option<u64> {
+        self.start.checked_add(self.duration)
+    }
 }
 
 /// The representation chosen for a DASH download.
@@ -38,6 +65,10 @@ pub struct SelectedRepresentation {
     pub codecs: Option<String>,
     /// Default output extension (`mp4` or `webm`).
     pub extension: &'static str,
+    /// Whether the manifest was dynamic (`type="dynamic"`).
+    pub live: bool,
+    /// `minimumUpdatePeriod` in seconds for dynamic manifests.
+    pub minimum_update_period_secs: Option<f64>,
     /// Optional initialization segment.
     pub initialization: Option<SegmentRef>,
     /// Media segments in presentation order.
@@ -82,6 +113,7 @@ struct Representation {
 #[derive(Clone, Debug, Default)]
 struct Template {
     attributes: BTreeMap<String, String>,
+    has_timeline: bool,
     timeline: Vec<TimelineEntry>,
 }
 
@@ -119,13 +151,21 @@ impl DashManifest {
             ));
         }
         let manifest_type = root.attr("type").unwrap_or("static");
-        if manifest_type != "static" {
-            return Err(Error::Backend(format!(
-                "only static DASH manifests are supported (found type={manifest_type})"
-            )));
-        }
+        let dynamic = match manifest_type {
+            "static" => false,
+            "dynamic" => true,
+            other => {
+                return Err(Error::Backend(format!(
+                    "unsupported DASH manifest type: {other}"
+                )));
+            }
+        };
         let media_duration = root
             .attr("mediaPresentationDuration")
+            .map(parse_iso_duration)
+            .transpose()?;
+        let minimum_update_period = root
+            .attr("minimumUpdatePeriod")
             .map(parse_iso_duration)
             .transpose()?;
         let base_url = resolve_base(url, &root)?;
@@ -219,6 +259,8 @@ impl DashManifest {
 
         Ok(Self {
             media_duration,
+            dynamic,
+            minimum_update_period,
             periods: vec![Period {
                 duration: period_duration,
                 adaptation_sets,
@@ -261,7 +303,42 @@ impl DashManifest {
                 "no DASH representation matched --include/--exclude".to_string(),
             ));
         };
-        resolve_selected(set, representation, total_duration)
+        resolve_selected(
+            set,
+            representation,
+            total_duration,
+            self.dynamic,
+            self.minimum_update_period,
+        )
+    }
+
+    /// Resolve a previously selected representation by its stable `id`.
+    /// Dynamic live captures use this so a newly added higher-bandwidth
+    /// representation does not change the recording mid-stream.
+    pub fn select_representation(&self, id: &str) -> Result<SelectedRepresentation> {
+        let period = &self.periods[0];
+        let total_duration = period.duration.or(self.media_duration);
+        for set in &period.adaptation_sets {
+            for representation in &set.representations {
+                if representation.id == id {
+                    return resolve_selected(
+                        set,
+                        representation,
+                        total_duration,
+                        self.dynamic,
+                        self.minimum_update_period,
+                    );
+                }
+            }
+        }
+        Err(Error::Backend(format!(
+            "DASH representation {id} disappeared from the manifest"
+        )))
+    }
+
+    /// Whether the manifest was declared with `type="dynamic"`.
+    pub fn is_dynamic(&self) -> bool {
+        self.dynamic
     }
 }
 
@@ -274,9 +351,26 @@ fn resolve_selected(
     set: &AdaptationSet,
     representation: &Representation,
     total_duration: Option<f64>,
+    dynamic: bool,
+    minimum_update_period: Option<f64>,
 ) -> Result<SelectedRepresentation> {
     let template = merge_template(set.template.as_ref(), representation.template.as_ref());
     let list = merge_segment_list(set.list.as_ref(), representation.list.as_ref());
+    if dynamic {
+        let Some(template) = template
+            .as_ref()
+            .filter(|template| template.attributes.contains_key("media"))
+        else {
+            return Err(Error::Backend(
+                "dynamic DASH requires a SegmentTemplate with media".to_string(),
+            ));
+        };
+        if !template.has_timeline {
+            return Err(Error::Backend(
+                "dynamic DASH SegmentTemplate requires SegmentTimeline".to_string(),
+            ));
+        }
+    }
     let (initialization, segments) = if let Some(template) = &template
         && template.attributes.contains_key("media")
     {
@@ -285,6 +379,7 @@ fn resolve_selected(
             representation,
             template,
             total_duration,
+            dynamic,
         )?
     } else if let Some(list) = &list
         && !list.urls.is_empty()
@@ -294,7 +389,7 @@ fn resolve_selected(
         resolve_base_object(representation)?
     };
 
-    if segments.is_empty() {
+    if segments.is_empty() && !dynamic {
         return Err(Error::Backend(format!(
             "DASH representation {} has no media segments",
             representation.id
@@ -319,6 +414,8 @@ fn resolve_selected(
         mime_type,
         codecs,
         extension,
+        live: dynamic,
+        minimum_update_period_secs: dynamic.then_some(minimum_update_period).flatten(),
         initialization,
         segments,
     })
@@ -329,6 +426,7 @@ fn resolve_template(
     representation: &Representation,
     template: &Template,
     total_duration: Option<f64>,
+    dynamic: bool,
 ) -> Result<(Option<SegmentRef>, Vec<SegmentRef>)> {
     let media = template
         .attributes
@@ -377,12 +475,19 @@ fn resolve_template(
             Ok::<SegmentRef, Error>(SegmentRef {
                 url: join_url(base, &expanded)?,
                 range: None,
+                timing: None,
             })
         })
         .transpose()?;
 
     let mut segments = Vec::new();
-    if !template.timeline.is_empty() {
+    if template.has_timeline && template.timeline.is_empty() {
+        if !dynamic {
+            return Err(Error::Backend(
+                "SegmentTimeline has no S entries".to_string(),
+            ));
+        }
+    } else if !template.timeline.is_empty() {
         let mut number = start_number;
         let mut previous_end: Option<u64> = None;
         for entry in &template.timeline {
@@ -403,6 +508,11 @@ fn resolve_template(
                 segments.push(SegmentRef {
                     url: join_url(base, &expanded)?,
                     range: None,
+                    timing: Some(SegmentTiming {
+                        start: time,
+                        duration: entry.d,
+                        timescale,
+                    }),
                 });
                 number = number.checked_add(1).ok_or_else(|| {
                     Error::Backend("DASH segment number overflows u64".to_string())
@@ -483,6 +593,11 @@ fn resolve_template(
             segments.push(SegmentRef {
                 url: join_url(base, &expanded)?,
                 range: None,
+                timing: duration.map(|duration| SegmentTiming {
+                    start: time,
+                    duration,
+                    timescale,
+                }),
             });
         }
     }
@@ -504,6 +619,7 @@ fn resolve_segment_list(
             Ok::<SegmentRef, Error>(SegmentRef {
                 url,
                 range: range.as_deref().map(parse_byte_range).transpose()?,
+                timing: None,
             })
         })
         .transpose()?;
@@ -516,6 +632,7 @@ fn resolve_segment_list(
         segments.push(SegmentRef {
             url,
             range: range.as_deref().map(parse_byte_range).transpose()?,
+            timing: None,
         });
     }
     Ok((initialization, segments))
@@ -535,6 +652,7 @@ fn resolve_base_object(
         vec![SegmentRef {
             url: representation.base_url.clone(),
             range: None,
+            timing: None,
         }],
     ))
 }
@@ -546,13 +664,16 @@ fn merge_template(parent: Option<&Template>, child: Option<&Template>) -> Option
         (Some(parent), Some(child)) => {
             let mut attributes = parent.attributes.clone();
             attributes.extend(child.attributes.clone());
-            let timeline = if child.timeline.is_empty() {
-                parent.timeline.clone()
+            let (timeline, has_timeline) = if child.has_timeline {
+                (child.timeline.clone(), true)
+            } else if parent.has_timeline {
+                (parent.timeline.clone(), true)
             } else {
-                child.timeline.clone()
+                (Vec::new(), false)
             };
             Some(Template {
                 attributes,
+                has_timeline,
                 timeline,
             })
         }
@@ -872,6 +993,7 @@ fn parse_template(node: &Node) -> Result<Option<Template>> {
         ));
     }
     let attributes = template.attributes.clone();
+    let has_timeline = template.child("SegmentTimeline").is_some();
     let timeline = match template.child("SegmentTimeline") {
         Some(timeline) => timeline
             .children("S")
@@ -902,6 +1024,7 @@ fn parse_template(node: &Node) -> Result<Option<Template>> {
     };
     Ok(Some(Template {
         attributes,
+        has_timeline,
         timeline,
     }))
 }
@@ -1207,6 +1330,50 @@ mod tests {
             selected.segments[2].url.as_str(),
             "https://example.com/media/s-5.m4s"
         );
+    }
+
+    #[test]
+    fn accepts_dynamic_manifests_with_a_segment_timeline() {
+        let text = r#"<MPD type="dynamic" minimumUpdatePeriod="PT2S"><Period>
+          <AdaptationSet mimeType="video/mp4">
+            <Representation id="v" bandwidth="1">
+              <SegmentTemplate media="s$Time$.m4s" initialization="init.mp4" timescale="1000">
+                <SegmentTimeline>
+                  <S t="0" d="2000" r="1"/>
+                </SegmentTimeline>
+              </SegmentTemplate>
+            </Representation>
+          </AdaptationSet>
+        </Period></MPD>"#;
+        let manifest = DashManifest::parse(&base(), text).unwrap();
+        assert!(manifest.is_dynamic());
+        let selected = manifest.select(&[], &[]).unwrap();
+        assert!(selected.live);
+        assert_eq!(selected.minimum_update_period_secs, Some(2.0));
+        assert_eq!(selected.segments.len(), 2);
+        assert_eq!(
+            selected.segments[0].url.as_str(),
+            "https://example.com/media/s0.m4s"
+        );
+        let timing = selected.segments[1].timing.unwrap();
+        assert_eq!(timing.start, 2000);
+        assert_eq!(timing.seconds(), 2.0);
+        let again = manifest.select_representation("v").unwrap();
+        assert_eq!(again.segments[1].url, selected.segments[1].url);
+        assert!(manifest.select_representation("missing").is_err());
+    }
+
+    #[test]
+    fn rejects_dynamic_manifests_without_a_timeline() {
+        let text = r#"<MPD type="dynamic"><Period>
+          <AdaptationSet mimeType="video/mp4">
+            <Representation id="v" bandwidth="1">
+              <SegmentTemplate media="s-$Number$.m4s" duration="2000" timescale="1000"/>
+            </Representation>
+          </AdaptationSet>
+        </Period></MPD>"#;
+        let manifest = DashManifest::parse(&base(), text).unwrap();
+        assert!(manifest.select(&[], &[]).is_err());
     }
 
     #[test]

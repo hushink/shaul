@@ -158,11 +158,11 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub no_resume: bool,
 
-    /// Stop a live HLS capture after this duration (for example 30m, 1h)
+    /// Stop a live HLS/DASH capture after this duration (for example 30m, 1h)
     #[arg(long, value_name = "DURATION")]
     pub live_duration: Option<String>,
 
-    /// Stop a live HLS capture after this many segments
+    /// Stop a live HLS/DASH capture after this many segments
     #[arg(long, value_name = "N")]
     pub live_segments: Option<usize>,
 

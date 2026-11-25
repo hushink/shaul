@@ -51,6 +51,10 @@ $ shaul download https://example.com/live/index.m3u8 --live-segments 300
 $ shaul download https://example.com/video/manifest.mpd --connections 8
 $ shaul download https://example.com/video/manifest.mpd --include '*1080*'
 
+# DASH live: bounded dynamic-manifest capture
+$ shaul download https://example.com/live/manifest.mpd --live-duration 10m
+$ shaul download https://example.com/live/manifest.mpd --live-segments 300
+
 # Proxy and bandwidth limits
 $ shaul download https://example.com/file.bin \
       --proxy socks5://127.0.0.1:1080 \
@@ -100,8 +104,11 @@ with `--live-duration` and/or `--live-segments`; recording polls at the
 playlist's target duration and stops at the limit or `#EXT-X-ENDLIST`. Live
 captures are not resumable. DASH supports static single-period manifests with
 SegmentTemplate, SegmentList or SegmentBase addressing and segment-level
-resume. SAMPLE-AES, DASH live/dynamic manifests, DRM and multi-period DASH are
-not supported yet.
+resume, plus dynamic single-period manifests when they use SegmentTemplate +
+SegmentTimeline; dynamic captures use the same `--live-duration` /
+`--live-segments` limits, poll at `minimumUpdatePeriod`, and stop when the
+manifest becomes static. SAMPLE-AES, DASH dynamic manifests without a
+SegmentTimeline, DRM and multi-period DASH are not supported yet.
 
 `--method`, `--data` and `--data-file` apply to direct HTTP(S) links only.
 `--data` implies `POST` when `--method` is not given. These requests are
@@ -133,8 +140,9 @@ Hugging Face and ModelScope credential files. Verification failures are renamed
 to `<name>.shaul.failed`, and `clean --orphans` ignores unsafe paths recorded in
 a sidecar. It removes leftover `.shaul.part` files plus HLS
 `.shaul.hls.parts/` and DASH `.shaul.dash.parts/` directories for completed or
-cancelled tasks (and for failed live HLS captures, which cannot resume), does
-not follow symlinks while sizing them, and never deletes destination files.
+cancelled tasks (and for failed live HLS/DASH captures, which cannot resume),
+does not follow symlinks while sizing them, and never deletes destination
+files.
 
 ## Documentation
 

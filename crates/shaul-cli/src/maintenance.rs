@@ -12,7 +12,7 @@ use crate::args::CleanArgs;
 
 const STREAM_TEMP_DIR_KEYS: [&str; 2] = ["hls.temp_dir", "dash.temp_dir"];
 const STREAM_TEMP_SUFFIXES: [&str; 2] = [".shaul.hls.parts", ".shaul.dash.parts"];
-const HLS_LIVE_KEY: &str = "hls.live";
+const LIVE_KEYS: [&str; 2] = ["hls.live", "dash.live"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -279,10 +279,9 @@ pub async fn command_clean(config: &Config, args: CleanArgs, json: bool) -> Resu
                 for file in resume.files.values() {
                     // Live captures are not resumable, so failed live temp
                     // files are orphans even before the task is cancelled.
-                    let live = file
-                        .metadata
-                        .get(HLS_LIVE_KEY)
-                        .is_some_and(|value| value == "true");
+                    let live = LIVE_KEYS
+                        .iter()
+                        .any(|key| file.metadata.get(*key).is_some_and(|value| value == "true"));
                     if !finished && !live {
                         continue;
                     }

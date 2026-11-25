@@ -1037,6 +1037,82 @@ fn clean_removes_failed_live_temp_directories() {
 }
 
 #[test]
+fn live_dash_download_runs_through_the_cli() {
+    let (url, _server) = spawn_live_dash_server(None);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let output_path = dir.path().join("downloads").join("live.mp4");
+
+    run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "download",
+        &url,
+        "--live-segments",
+        "2",
+    ]));
+
+    assert_eq!(fs::read(&output_path).unwrap(), b"INITD0D2000".to_vec());
+}
+
+#[test]
+fn clean_removes_failed_dash_live_temp_directories() {
+    let (url, _server) = spawn_live_dash_server(Some("/seg-2000.m4s"));
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "[network]\nretries = 0\n");
+    let config = path.to_str().unwrap();
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "add",
+        &url,
+        "--live-segments",
+        "2",
+    ]));
+    let id = json_stdout(&output)[0]["id"].as_str().unwrap().to_string();
+
+    let _ = shaul()
+        .args(["--config", config, "run", "--once"])
+        .output()
+        .unwrap();
+
+    let output = run(shaul().args(["--config", config, "--json", "status", &id]));
+    assert_eq!(json_stdout(&output)["state"], "failed");
+
+    // Dynamic DASH captures are not resumable, so failed temp files are
+    // orphans even without cancelling the task first.
+    let temp = dir
+        .path()
+        .join("downloads")
+        .join("live.mp4.shaul.dash.parts");
+    assert!(
+        temp.is_dir(),
+        "DASH live temp directory should exist: {}",
+        temp.display()
+    );
+    fs::write(temp.join("live-0.bin"), b"partial").unwrap();
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "clean",
+        "--orphans",
+        "--dry-run",
+    ]));
+    assert_eq!(json_stdout(&output)["orphan_dirs"], 1);
+    assert!(temp.exists());
+
+    let output = run(shaul().args(["--config", config, "--json", "clean", "--orphans"]));
+    assert_eq!(json_stdout(&output)["orphan_dirs"], 1);
+    assert!(!temp.exists());
+}
+
+#[test]
 fn post_download_sends_method_and_body() {
     let data: Vec<u8> = (0..32 * 1024).map(|index| (index % 251) as u8).collect();
     let (url, requests) = spawn_method_server(data.clone());
@@ -1509,6 +1585,65 @@ fn spawn_live_hls_server(fail_segment: Option<&str>) -> (String, thread::JoinHan
         }
     });
     (format!("http://{address}/live.m3u8"), handle)
+}
+
+/// Serves a tiny dynamic DASH manifest with an init segment and two media
+/// segments. When `fail_segment` is set, the first request for that path gets
+/// a 500.
+fn spawn_live_dash_server(fail_segment: Option<&str>) -> (String, thread::JoinHandle<()>) {
+    const MANIFEST: &[u8] = br#"<MPD type="dynamic" minimumUpdatePeriod="PT1S"><Period>
+<AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+<SegmentTemplate media="seg-$Time$.m4s" initialization="init.mp4" timescale="1000">
+<SegmentTimeline><S t="0" d="2000"/><S t="2000" d="2000"/></SegmentTimeline>
+</SegmentTemplate>
+</Representation></AdaptationSet></Period></MPD>"#;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let fail_segment = fail_segment.map(str::to_string);
+    let failed = Arc::new(AtomicBool::new(false));
+    let handle = thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            let fail_segment = fail_segment.clone();
+            let failed = failed.clone();
+            thread::spawn(move || {
+                let mut request = [0_u8; 16 * 1024];
+                let _ = stream.read(&mut request);
+                let text = String::from_utf8_lossy(&request);
+                let path = text
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .split('?')
+                    .next()
+                    .unwrap_or("/");
+                if fail_segment.as_deref() == Some(path) && !failed.swap(true, Ordering::SeqCst) {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 6\r\nConnection: close\r\n\r\nfailed",
+                    );
+                    return;
+                }
+                let (body, content_type) = match path {
+                    "/live.mpd" => (MANIFEST, "application/dash+xml"),
+                    "/init.mp4" => (&b"INIT"[..], "video/mp4"),
+                    "/seg-0.m4s" => (&b"D0"[..], "video/mp4"),
+                    "/seg-2000.m4s" => (&b"D2000"[..], "video/mp4"),
+                    _ => (&b""[..], "application/octet-stream"),
+                };
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+                let _ = stream.flush();
+            });
+        }
+    });
+    (format!("http://{address}/live.mpd"), handle)
 }
 
 /// Serves a tiny static DASH manifest with an init segment and two media

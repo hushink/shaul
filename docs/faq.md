@@ -23,8 +23,9 @@ Killing a `shaul run` worker is safe: the next worker requeues tasks left in
 
 Yes. Disable it per task with `--no-resume` or in config with
 `download.resume = false`. A changed `ETag`, `Last-Modified` or size restarts
-the file safely instead of appending to stale data. Live HLS captures are
-never resumed; every run starts from the playlist window at run time.
+the file safely instead of appending to stale data. Live HLS and dynamic DASH
+captures are never resumed; every run starts from the current playlist or
+manifest window.
 
 Services that ignore `Range` are handled with a single-stream fallback;
 `200 + Content-Range` is treated as a partial response. Segment size shrinks
@@ -111,8 +112,8 @@ downloads are not cached. `shaul stats` reports entries/bytes and
   `--completed`, `--cancelled` and `--failed` select individual states;
   `--orphans` removes destination-relative `.shaul.part` files plus HLS
   `.shaul.hls.parts/` and DASH `.shaul.dash.parts/` directories left by
-  completed/cancelled tasks (and by failed live HLS captures, which cannot
-  resume; unsafe paths in a sidecar are ignored);
+  completed/cancelled tasks (and by failed live HLS/DASH captures, which
+  cannot resume; unsafe paths in a sidecar are ignored);
   `--cache` removes content-cache entries (it refuses a directory whose top
   level does not look like a content cache). With `--cache`, add
   `--cache-older-than 30d` and/or `--cache-max-size 50GiB` to prune instead of
@@ -192,14 +193,31 @@ Live captures are not resumable: each run starts from a fresh temp directory
 and the current window. Cancelling or failing leaves the recorded segments for
 inspection; `shaul clean --orphans` removes temp files from failed live
 captures as well as completed/cancelled tasks. The output file is written only
-when recording stops. DASH live/dynamic manifests are not supported yet.
+when recording stops.
+
+## Can I record a live DASH stream?
+
+Yes, as a bounded capture, when the `type="dynamic"` MPD uses
+`SegmentTemplate` + `SegmentTimeline` and has a single Period. Pass
+`--live-duration`, `--live-segments`, or both. The backend polls at
+`minimumUpdatePeriod` (clamped to 1-60 seconds), keeps the initially selected
+representation id, deduplicates by presentation time, requires a continuous
+timeline, and stops at a limit or when the MPD becomes `type="static"`.
+Durations are measured from the timeline, not wall-clock time.
+
+Dynamic captures are not resumable and always start from a fresh temp directory
+and the current timeline window. `shaul clean --orphans` removes temp files
+from failed dynamic captures as well as completed/cancelled tasks. Dynamic
+manifests with constant-duration templates, multiple Periods, DRM, subtitles or
+alternate audio muxing are not supported yet.
 
 ## Does shaul support DASH?
 
 Yes, through the optional `dash` feature (the CLI enables it). Point shaul at
-an HTTP(S) `.mpd` URL. Phase 1 accepts static (`type="static"`), single-period
-VOD manifests and selects the highest-bandwidth video representation; audio-only
-manifests fall back to the best audio representation. `--include`/`--exclude`
+an HTTP(S) `.mpd` URL. It accepts static (`type="static"`) and dynamic
+(`type="dynamic"`) single-period manifests and selects the highest-bandwidth
+video representation; audio-only manifests fall back to the best audio
+representation. `--include`/`--exclude`
 globs match `id`, `mimeType`, `codecs`, `lang`, resolution or `bandwidth`.
 SegmentTemplate (constant duration, `endNumber` or SegmentTimeline),
 SegmentList and SegmentBase/BaseURL single-object representations are
@@ -207,13 +225,16 @@ supported, including BaseURL inheritance and byte ranges. Initialization and med
 download concurrently through the shared HTTP stack and are concatenated into
 one `.mp4` or `.webm` file.
 
-DASH resumes at segment granularity using a manifest SHA-256, the
-representation id and the segment count. DRM (`ContentProtection`), live
-manifests, multiple periods, subtitles, alternate audio muxing, `sidx` parsing
-and ffmpeg remuxing are not supported yet. `--mirror` and the final-output
-content cache do not apply. Completed segments live in
-`<output>.shaul.dash.parts/`; `shaul clean --orphans` removes that directory
-for completed or cancelled tasks, along with the concatenation `.part`.
+DASH resumes VOD at segment granularity using a manifest SHA-256, the
+representation id and the segment count. Dynamic (`type="dynamic"`) manifests
+can also be recorded as bounded live captures when they use SegmentTemplate +
+SegmentTimeline; see the live questions below. DRM (`ContentProtection`),
+dynamic manifests without a SegmentTimeline, multiple periods, subtitles,
+alternate audio muxing, `sidx` parsing and ffmpeg remuxing are not supported
+yet. `--mirror` and the final-output content cache do not apply. Completed
+segments live in `<output>.shaul.dash.parts/`; `shaul clean --orphans` removes
+that directory for completed or cancelled tasks, along with the concatenation
+`.part`.
 
 ## Does BitTorrent seed after completion?
 

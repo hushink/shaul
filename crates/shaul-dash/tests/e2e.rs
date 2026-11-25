@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use shaul_core::{Config, DownloadEngine, Link, SidecarStore, TaskOptions, TaskState};
@@ -76,7 +76,13 @@ const DRM_MPD: &str = r#"<MPD type="static"><Period><AdaptationSet>
   <Representation id="v"><BaseURL>movie.mp4</BaseURL></Representation>
 </AdaptationSet></Period></MPD>"#;
 
-const LIVE_MPD: &str = r#"<MPD type="dynamic"><Period/></MPD>"#;
+const DYNAMIC_NO_TIMELINE_MPD: &str = r#"<MPD type="dynamic"><Period>
+  <AdaptationSet mimeType="video/mp4">
+    <Representation id="v" bandwidth="1">
+      <SegmentTemplate media="s-$Number$.m4s" duration="2000" timescale="1000"/>
+    </Representation>
+  </AdaptationSet>
+</Period></MPD>"#;
 
 const MULTI_PERIOD_MPD: &str = r#"<MPD type="static"><Period/><Period/></MPD>"#;
 
@@ -190,7 +196,7 @@ async fn handle(
         "/single.mpd" => SINGLE_MPD.as_bytes().to_vec(),
         "/fail.mpd" => FAIL_MPD.as_bytes().to_vec(),
         "/drm.mpd" => DRM_MPD.as_bytes().to_vec(),
-        "/live.mpd" => LIVE_MPD.as_bytes().to_vec(),
+        "/no-timeline.mpd" => DYNAMIC_NO_TIMELINE_MPD.as_bytes().to_vec(),
         "/multi.mpd" => MULTI_PERIOD_MPD.as_bytes().to_vec(),
         "/init-720p.mp4" => b"INIT-720".to_vec(),
         "/init-1080p.mp4" => b"INIT-1080".to_vec(),
@@ -284,6 +290,136 @@ async fn download(
         .await
         .unwrap();
     engine.run_task(task.id).await.unwrap()
+}
+
+struct LiveDashServer {
+    addr: SocketAddr,
+    requests: Arc<Mutex<Vec<String>>>,
+}
+
+impl LiveDashServer {
+    async fn spawn() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let fetches = Arc::new(AtomicUsize::new(0));
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let requests = server_requests.clone();
+                let fetches = fetches.clone();
+                tokio::spawn(async move {
+                    handle_live_dash(socket, requests, fetches).await;
+                });
+            }
+        });
+        Self { addr, requests }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("http://{}{path}", self.addr)
+    }
+
+    fn take_requests(&self) -> Vec<String> {
+        std::mem::take(&mut *self.requests.lock().unwrap())
+    }
+}
+
+fn dynamic_mpd(segment_count: usize, static_manifest: bool) -> String {
+    let mut timeline = String::new();
+    for index in 0..segment_count {
+        let time = index as u64 * 2000;
+        timeline.push_str(&format!("<S t=\"{time}\" d=\"2000\"/>"));
+    }
+    let kind = if static_manifest { "static" } else { "dynamic" };
+    format!(
+        r#"<MPD type="{kind}" minimumUpdatePeriod="PT1S"><Period>
+<AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+<SegmentTemplate media="seg-$Time$.m4s" initialization="init.mp4" timescale="1000">
+<SegmentTimeline>{timeline}</SegmentTimeline>
+</SegmentTemplate>
+</Representation></AdaptationSet></Period></MPD>"#
+    )
+}
+
+fn live_dash_payload(time: u64) -> Vec<u8> {
+    format!("D{time}").into_bytes()
+}
+
+fn live_dash_expected(times: &[u64]) -> Vec<u8> {
+    let mut output = b"INIT".to_vec();
+    for time in times {
+        output.extend_from_slice(&live_dash_payload(*time));
+    }
+    output
+}
+
+async fn handle_live_dash(
+    mut socket: TcpStream,
+    requests: Arc<Mutex<Vec<String>>>,
+    fetches: Arc<AtomicUsize>,
+) {
+    let mut buffer = vec![0u8; 16 * 1024];
+    let mut read = 0;
+    loop {
+        let Ok(count) = socket.read(&mut buffer[read..]).await else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        read += count;
+        if buffer[..read]
+            .windows(4)
+            .any(|window| window == b"\r\n\r\n")
+        {
+            break;
+        }
+        if read == buffer.len() {
+            return;
+        }
+    }
+    let request = String::from_utf8_lossy(&buffer[..read]);
+    let path = request
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/")
+        .to_string();
+    requests.lock().unwrap().push(path.clone());
+
+    if path == "/live.mpd" {
+        let fetch = fetches.fetch_add(1, Ordering::SeqCst) + 1;
+        let (count, static_manifest) = match fetch {
+            1 => (2, false),
+            2 => (4, false),
+            _ => (5, true),
+        };
+        respond(
+            &mut socket,
+            "200 OK",
+            dynamic_mpd(count, static_manifest).as_bytes(),
+        )
+        .await;
+        return;
+    }
+    if path == "/init.mp4" {
+        respond(&mut socket, "200 OK", b"INIT").await;
+        return;
+    }
+    for time in [0, 2000, 4000, 6000, 8000] {
+        if path == format!("/seg-{time}.m4s") {
+            respond(&mut socket, "200 OK", &live_dash_payload(time)).await;
+            return;
+        }
+    }
+    respond(&mut socket, "404 Not Found", b"not found").await;
 }
 
 #[tokio::test]
@@ -475,7 +611,7 @@ async fn rejects_unsupported_manifests() {
     let config = test_config(dir.path());
     let engine = engine(&config);
 
-    for path in ["/drm.mpd", "/live.mpd", "/multi.mpd"] {
+    for path in ["/drm.mpd", "/no-timeline.mpd", "/multi.mpd"] {
         let result = engine
             .add(
                 Link::new(server.url(path)).unwrap(),
@@ -485,4 +621,142 @@ async fn rejects_unsupported_manifests() {
             .await;
         assert!(result.is_err(), "{path} should be rejected");
     }
+}
+
+#[tokio::test]
+async fn records_a_dynamic_manifest_until_the_segment_limit() {
+    let server = LiveDashServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/live.mpd")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                live_segments: Some(4),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("live.mp4"))
+            .await
+            .unwrap(),
+        live_dash_expected(&[0, 2000, 4000, 6000])
+    );
+    assert!(
+        !tokio::fs::try_exists(config.download.dir.join("live.mp4.shaul.dash.parts"))
+            .await
+            .unwrap()
+    );
+
+    let requests = server.take_requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.as_str() == "/live.mpd")
+            .count(),
+        2
+    );
+    assert!(requests.iter().any(|path| path == "/init.mp4"));
+    assert!(!requests.iter().any(|path| path == "/seg-8000.m4s"));
+}
+
+#[tokio::test]
+async fn records_a_dynamic_manifest_until_the_duration_limit() {
+    let server = LiveDashServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/live.mpd")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                live_duration_secs: Some(4),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("live.mp4"))
+            .await
+            .unwrap(),
+        live_dash_expected(&[0, 2000])
+    );
+
+    let requests = server.take_requests();
+    assert!(!requests.iter().any(|path| path == "/seg-4000.m4s"));
+}
+
+#[tokio::test]
+async fn stops_a_dynamic_capture_when_the_manifest_becomes_static() {
+    let server = LiveDashServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/live.mpd")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions {
+                live_segments: Some(100),
+                ..TaskOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("live.mp4"))
+            .await
+            .unwrap(),
+        live_dash_expected(&[0, 2000, 4000, 6000, 8000])
+    );
+
+    let requests = server.take_requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|path| path.as_str() == "/live.mpd")
+            .count(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn dynamic_capture_requires_a_limit() {
+    let server = LiveDashServer::spawn().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/live.mpd")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let result = engine.run_task(task.id).await;
+    assert!(result.is_err());
+    let task = engine.status(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+
+    let requests = server.take_requests();
+    assert!(!requests.iter().any(|path| path == "/init.mp4"));
+    assert!(!requests.iter().any(|path| path == "/seg-0.m4s"));
 }

@@ -108,6 +108,10 @@ $ shaul download https://example.com/live/index.m3u8 --live-segments 300
 $ shaul download https://example.com/video/manifest.mpd --connections 8
 $ shaul download https://example.com/video/manifest.mpd --include '*1080*'
 
+# DASH live: bounded dynamic-manifest capture
+$ shaul download https://example.com/live/manifest.mpd --live-duration 10m
+$ shaul download https://example.com/live/manifest.mpd --live-segments 300
+
 # Hugging Face repository snapshot
 $ export HF_TOKEN=hf_...
 $ shaul download https://huggingface.co/org/repo \
@@ -238,10 +242,10 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
 
 ### DASH
 
-- HTTP(S) `.mpd` manifests with `type="static"` and a single Period. The
-  highest-bandwidth video Representation is selected by default; repeat
-  `--include`/`--exclude` with globs matching `id`, `mimeType`, `codecs`,
-  `lang`, resolution or `bandwidth` to choose another.
+- HTTP(S) `.mpd` manifests with `type="static"` or `type="dynamic"` and a
+  single Period. The highest-bandwidth video Representation is selected by
+  default; repeat `--include`/`--exclude` with globs matching `id`, `mimeType`,
+  `codecs`, `lang`, resolution or `bandwidth` to choose another.
 - `SegmentTemplate` (`$Number$`, `$Time$`, `$RepresentationID$`,
   `$Bandwidth$`, constant duration, `endNumber` or `SegmentTimeline`),
   `SegmentList`, and `SegmentBase`/BaseURL single-object representations.
@@ -249,10 +253,16 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
   byte ranges reuse the exact `Range` HTTP path.
 - Initialization and media segments download concurrently through the shared
   HTTP stack and are concatenated into one `.mp4` or `.webm` file.
-  Segment-level resume is guarded by an MPD SHA-256, the representation id and
-  the segment count.
-- DRM (`ContentProtection`), live/dynamic manifests, multiple Periods,
-  subtitles, alternate audio muxing and remuxing are not supported yet.
+  VOD resume is guarded by an MPD SHA-256, the representation id and the
+  segment count.
+- Dynamic (live) manifests can be recorded with `--live-duration` or
+  `--live-segments` when they use `SegmentTemplate` + `SegmentTimeline`. The
+  backend polls at `minimumUpdatePeriod`, deduplicates by presentation time,
+  and stops at the limit or when the MPD becomes static. Dynamic captures are
+  not resumable.
+- DRM (`ContentProtection`), dynamic manifests without a SegmentTimeline,
+  multiple Periods, subtitles, alternate audio muxing and remuxing are not
+  supported yet.
 
 ### Integrity and post-processing
 
@@ -390,10 +400,10 @@ redacts sensitive headers and removes query strings from HTTP task views.
   success. Resume is segment-level; a changed playlist or manifest fingerprint
   restarts. `--mirror` and the final-output content cache do not apply.
   Cross-origin playlist/key/segment URLs strip sensitive headers unless
-  `allow_cross_origin_auth` is set. Live HLS captures always start fresh and
-  are not resumable; cancelling or failing leaves the recorded segments for
-  inspection, and `clean --orphans` also removes temp files from failed live
-  captures. HLS AES-128 keys are
+  `allow_cross_origin_auth` is set. Live HLS and dynamic DASH captures always
+  start fresh and are not resumable; cancelling or failing leaves the recorded
+  segments for inspection, and `clean --orphans` also removes temp files from
+  failed live captures. HLS AES-128 keys are
   fetched at run time and are never persisted; encrypted segments are staged
   as `.enc` and decrypted to `.bin` files used for resume and concatenation.
   Byte-range segments use exact `Range` requests, with a full-object fallback

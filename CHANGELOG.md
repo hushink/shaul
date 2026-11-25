@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--live-segments`: target-duration polling, media-sequence deduplication,
   AES-128 and `#EXT-X-ENDLIST` early stop; live captures are not resumable and
   `clean --orphans` also removes temp files from failed live captures
+- *(dash,cli)* record bounded dynamic DASH manifests (`type="dynamic"`) using
+  SegmentTemplate + SegmentTimeline: `minimumUpdatePeriod` polling,
+  presentation-time deduplication, representation-id pinning and static-MPD
+  early stop; dynamic captures share the live limits and cleanup behavior
 - *(core)* add `TaskOptions::live_duration_secs` and
   `TaskOptions::live_segments` for bounded live capture
 - *(cli)* batch `pause`/`resume`/`cancel` with multiple ids or `--all`, plus

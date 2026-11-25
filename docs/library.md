@@ -44,7 +44,8 @@ opens the sidecar task store:
 - HLS (only with the `hls` feature; VOD playlists, one concatenated output)
   and bounded live HLS capture when `TaskOptions::live_duration_secs` or
   `live_segments` is set (not resumable)
-- DASH (only with the `dash` feature; static single-period manifests, one
+- DASH (only with the `dash` feature; static single-period manifests and
+  bounded dynamic captures with SegmentTemplate + SegmentTimeline, one
   concatenated output)
 - direct links as the fallback
 

@@ -103,6 +103,10 @@ $ shaul download https://example.com/live/index.m3u8 --live-segments 300
 $ shaul download https://example.com/video/manifest.mpd --connections 8
 $ shaul download https://example.com/video/manifest.mpd --include '*1080*'
 
+# DASH 直播：有界录制动态清单
+$ shaul download https://example.com/live/manifest.mpd --live-duration 10m
+$ shaul download https://example.com/live/manifest.mpd --live-segments 300
+
 # Hugging Face 仓库快照
 $ export HF_TOKEN=hf_...
 $ shaul download https://huggingface.co/org/repo \
@@ -224,18 +228,22 @@ DASH 链接用 `--include`/`--exclude` 选择变体或 Representation。
 
 ### DASH
 
-- HTTP(S) `.mpd` 静态（`type="static"`）单 Period 清单。默认选择最高码率的
-  视频 Representation；可用 `--include`/`--exclude` glob 匹配 `id`、
-  `mimeType`、`codecs`、`lang`、分辨率和 `bandwidth`。
+- HTTP(S) `.mpd` 静态（`type="static"`）或动态（`type="dynamic"`）单 Period
+  清单。默认选择最高码率的视频 Representation；可用 `--include`/`--exclude`
+  glob 匹配 `id`、`mimeType`、`codecs`、`lang`、分辨率和 `bandwidth`。
 - 支持 `SegmentTemplate`（`$Number$`、`$Time$`、`$RepresentationID$`、
   `$Bandwidth$`、constant duration、`endNumber` 或 `SegmentTimeline`）、
   `SegmentList`，以及 `SegmentBase`/BaseURL 单对象 Representation。
 - BaseURL 沿 MPD → Period → AdaptationSet → Representation 继承；字节范围复用
   精确 `Range` HTTP 路径。
 - init 与媒体分片通过共享 HTTP 栈并发下载，拼接为一个 `.mp4` 或 `.webm`
-  文件。分片级续传由 MPD SHA-256、Representation id 和分片数量共同保护。
-- 暂不支持 DRM（`ContentProtection`）、DASH 直播/动态清单、多 Period、字幕、
-  交替音轨混流和转封装。
+  文件。点播续传由 MPD SHA-256、Representation id 和分片数量共同保护。
+- 动态（直播）清单在 `SegmentTemplate` + `SegmentTimeline` 下可用
+  `--live-duration` 或 `--live-segments` 录制。后端按 `minimumUpdatePeriod`
+  轮询、按 presentation time 去重，达到上限或清单变为静态时停止。动态录制
+  不支持续传。
+- 暂不支持 DRM（`ContentProtection`）、没有 SegmentTimeline 的动态清单、
+  多 Period、字幕、交替音轨混流和转封装。
 
 ### 校验与后处理
 
@@ -360,9 +368,9 @@ provider token 在运行时解析，不会写入任务 sidecar。Unix 上 sideca
   删除临时目录。续传是分片级的；playlist 或清单指纹变化会从零开始。
   `--mirror` 和最终输出的内容寻址缓存不适用于 HLS/DASH。
   跨源 playlist/密钥/分片 URL 默认剥离敏感请求头，除非开启
-  `allow_cross_origin_auth`。直播 HLS 每次都从新窗口开始，不支持续传；取消或
-  失败会保留已录分片供检查，`clean --orphans` 也会清理失败直播任务的临时
-  文件。AES-128 密钥在运行时获取且不落盘；加密分片
+  `allow_cross_origin_auth`。直播 HLS 和动态 DASH 每次都从新窗口开始，不支持
+  续传；取消或失败会保留已录分片供检查，`clean --orphans` 也会清理失败直播
+  任务的临时文件。AES-128 密钥在运行时获取且不落盘；加密分片
   先保存为 `.enc`，解密后的 `.bin` 用于续传和拼接。BYTERANGE 分片使用精确
   `Range` 请求；服务器忽略 `Range` 时退化为完整对象加前缀丢弃。
 - `--verify` 要求存在校验值；`--no-verify` 关闭可选校验。BitTorrent piece

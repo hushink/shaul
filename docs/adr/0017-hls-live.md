@@ -47,7 +47,8 @@ cancelled，语义含糊。
 
 ## Out of scope (phase 1)
 
-- DASH 动态清单（`type="dynamic"`）与 DASH 直播；
+- DASH 动态清单（`type="dynamic"`）与 DASH 直播（由
+  [ADR 0018](0018-dash-live.md) 单独处理）；
 - 取消时自动收尾并生成部分输出；
 - 直播续传、跨运行拼接、EPG/时间平移窗口；
 - 交替音轨、SAMPLE-AES、ffmpeg 转封装；

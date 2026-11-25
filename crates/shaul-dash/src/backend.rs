@@ -1,15 +1,16 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use shaul_core::{
-    BackendCapabilities, ByteRange, DownloadBackend, DownloadOutcome, DownloadRequest, Error,
-    EventKind, EventSink, FileOutcome, FileResume, RequestOptions, ResolvedOptions, Resource,
-    ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskResume, VerifyMode,
+    BackendCapabilities, ByteRange, Checksum, DownloadBackend, DownloadOutcome, DownloadRequest,
+    Error, EventKind, EventSink, FileOutcome, FileResume, RequestOptions, ResolvedOptions,
+    Resource, ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskResume, VerifyMode,
     ensure_free_space, part_path,
 };
 use shaul_http::HttpBackend;
@@ -18,11 +19,12 @@ use tokio::sync::Mutex;
 use url::Url;
 
 use crate::client::{DashClient, same_origin};
-use crate::mpd::{DashManifest, SegmentRef, fingerprint};
+use crate::mpd::{DashManifest, SegmentRef, SegmentTiming, SelectedRepresentation, fingerprint};
 use crate::parser::DASH_PROTOCOL;
 
 const STATE_KEY: &str = "dash.state";
 const TEMP_DIR_KEY: &str = "dash.temp_dir";
+const LIVE_KEY: &str = "dash.live";
 const ORIGIN_KEY: &str = "dash.origin";
 const SEGMENT_DIR_SUFFIX: &str = ".shaul.dash.parts";
 const INIT_NAME: &str = "init.bin";
@@ -125,6 +127,18 @@ impl DownloadBackend for DashBackend {
             .await?;
         let manifest = DashManifest::parse(&manifest_url, &text)?;
         let selected = manifest.select(&request.options.include, &request.options.exclude)?;
+        if manifest.is_dynamic() {
+            return self
+                .download_live(
+                    request,
+                    file,
+                    checksum,
+                    trust_origin,
+                    manifest_url,
+                    selected,
+                )
+                .await;
+        }
 
         let (final_path, _) = resolve_final_path(&request, &file, selected.extension)?;
         let final_path = apply_conflict_policy(final_path, &request.options).await?;
@@ -328,6 +342,331 @@ impl DownloadBackend for DashBackend {
             final_path, relative, written, checksum, false,
         )]))
     }
+}
+
+impl DashBackend {
+    async fn download_live(
+        &self,
+        request: DownloadRequest,
+        file: ResourceFile,
+        checksum: Option<Checksum>,
+        trust_origin: Url,
+        mut manifest_url: Url,
+        mut selected: SelectedRepresentation,
+    ) -> Result<DownloadOutcome> {
+        let duration_limit = request.options.live_duration_secs;
+        let segment_limit = request.options.live_segments;
+        if duration_limit == Some(0) || segment_limit == Some(0) {
+            return Err(Error::Config(
+                "live DASH limits must be greater than zero".to_string(),
+            ));
+        }
+        if duration_limit.is_none() && segment_limit.is_none() {
+            return Err(Error::Config(
+                "live DASH capture requires --live-duration or --live-segments".to_string(),
+            ));
+        }
+
+        let extension = selected.extension;
+        let (final_path, _) = resolve_final_path(&request, &file, extension)?;
+        let final_path = apply_conflict_policy(final_path, &request.options).await?;
+        let relative = relative_path(&request.destination, &final_path);
+        let part = part_path(&final_path);
+        let temp_relative = format!("{relative}{SEGMENT_DIR_SUFFIX}");
+        let temp_dir = request.destination.join(&temp_relative);
+        // Live captures are not resumable: always start from a clean window.
+        remove_dir_all_if_exists(&temp_dir).await?;
+        create_dir_all(&temp_dir).await?;
+
+        let mut manifest_request =
+            request_for_origin(&request.options.request, &trust_origin, &manifest_url);
+
+        request.events.emit(EventKind::FileStarted {
+            task_id: request.task_id,
+            file: relative.clone(),
+            total_bytes: None,
+        });
+        let progress = Arc::new(AtomicU64::new(0));
+        let key = file.url.as_str().to_string();
+        let file_resume = FileResume {
+            url: key.clone(),
+            final_path: path_for_manifest(&request.destination, &final_path),
+            part_path: path_for_manifest(&request.destination, &part),
+            validator: Default::default(),
+            total_size: None,
+            segment_size: request.options.segment_size,
+            completed: Vec::new(),
+            checksum: checksum.clone(),
+            metadata: BTreeMap::from([
+                (TEMP_DIR_KEY.to_string(), temp_relative),
+                (LIVE_KEY.to_string(), "true".to_string()),
+            ]),
+            updated_at_ms: 0,
+        };
+        let writer = Arc::new(Mutex::new(CheckpointWriter {
+            task_resume: request.resume.clone().unwrap_or_default(),
+            file_resume,
+            key: key.clone(),
+        }));
+        writer.lock().await.save_progress(&request, 0).await?;
+
+        let segment_events =
+            EventSink::default().with_telemetry(request.events.telemetry().clone());
+        let init_path = selected
+            .initialization
+            .as_ref()
+            .map(|_| temp_dir.join(INIT_NAME));
+        if init_path.is_some() {
+            let size = self
+                .download_init(
+                    &request,
+                    &trust_origin,
+                    &selected,
+                    &temp_dir,
+                    &segment_events,
+                )
+                .await?;
+            let current = progress.fetch_add(size, Ordering::Relaxed) + size;
+            emit_progress(&request, &relative, &progress);
+            writer.lock().await.save_progress(&request, current).await?;
+        }
+
+        let initial_id = selected.id.clone();
+        let initial_initialization = selected.initialization.clone();
+        let initial_extension = selected.extension;
+        let initial_mime_type = selected.mime_type.clone();
+        let initial_codecs = selected.codecs.clone();
+        let mut ordered: Vec<u64> = Vec::new();
+        let mut seen: HashSet<u64> = HashSet::new();
+        let mut total_duration = 0.0_f64;
+        let mut last_timing: Option<SegmentTiming> = None;
+        let mut timeline_timescale: Option<u64> = None;
+
+        loop {
+            let new_segments: Vec<SegmentRef> = selected
+                .segments
+                .iter()
+                .filter(|segment| {
+                    segment
+                        .timing
+                        .is_some_and(|timing| !seen.contains(&timing.start))
+                })
+                .cloned()
+                .collect();
+            for segment in new_segments {
+                let Some(timing) = segment.timing else {
+                    return Err(Error::Backend(
+                        "dynamic DASH segment is missing SegmentTimeline timing".to_string(),
+                    ));
+                };
+                if let Some(expected) = timeline_timescale {
+                    if timing.timescale != expected {
+                        return Err(Error::Backend(
+                            "dynamic DASH SegmentTimeline timescale changed during capture"
+                                .to_string(),
+                        ));
+                    }
+                } else {
+                    timeline_timescale = Some(timing.timescale);
+                }
+                if let Some(last) = last_timing {
+                    let expected = last.end().ok_or_else(|| {
+                        Error::Backend("DASH segment timing overflows u64".to_string())
+                    })?;
+                    if timing.start < expected {
+                        return Err(Error::Backend(format!(
+                            "dynamic DASH SegmentTimeline overlaps at {}/{}",
+                            timing.start, timing.timescale
+                        )));
+                    }
+                    if timing.start > expected {
+                        return Err(Error::Backend(format!(
+                            "dynamic DASH SegmentTimeline skipped segments: expected {expected}, \
+                             got {}",
+                            timing.start
+                        )));
+                    }
+                }
+                let options = options_for_origin(&request.options, &trust_origin, &segment.url);
+                let size = download_one(
+                    &self.http,
+                    &request,
+                    &options,
+                    &segment,
+                    &temp_dir,
+                    &live_segment_name(timing.start),
+                    &segment_events,
+                )
+                .await?;
+                seen.insert(timing.start);
+                ordered.push(timing.start);
+                total_duration += timing.seconds();
+                last_timing = Some(timing);
+                let current = progress.fetch_add(size, Ordering::Relaxed) + size;
+                request.events.emit(EventKind::Progress {
+                    task_id: request.task_id,
+                    file: relative.clone(),
+                    downloaded_bytes: current,
+                    total_bytes: None,
+                });
+                writer.lock().await.save_progress(&request, current).await?;
+                if live_limit_reached(&ordered, total_duration, duration_limit, segment_limit) {
+                    break;
+                }
+            }
+            if !selected.live
+                || live_limit_reached(&ordered, total_duration, duration_limit, segment_limit)
+            {
+                break;
+            }
+
+            let interval = selected.minimum_update_period_secs.unwrap_or(5.0);
+            let wait = Duration::from_secs_f64(interval.clamp(1.0, 60.0));
+            tokio::select! {
+                _ = request.cancel.cancelled() => return Err(Error::Cancelled),
+                _ = tokio::time::sleep(wait) => {}
+            }
+
+            let (text, next_url) = self
+                .client
+                .fetch_text(&manifest_url, &manifest_request, &request.cancel)
+                .await?;
+            let next_manifest = DashManifest::parse(&next_url, &text)?;
+            let next_selected = next_manifest.select_representation(&initial_id)?;
+            if next_selected.initialization != initial_initialization {
+                return Err(Error::Backend(
+                    "dynamic DASH initialization segment changed during capture".to_string(),
+                ));
+            }
+            let mime_changed = initial_mime_type.is_some()
+                && next_selected.mime_type.is_some()
+                && next_selected.mime_type != initial_mime_type;
+            let codecs_changed = initial_codecs.is_some()
+                && next_selected.codecs.is_some()
+                && next_selected.codecs != initial_codecs;
+            if next_selected.extension != initial_extension || mime_changed || codecs_changed {
+                return Err(Error::Backend(
+                    "dynamic DASH representation MIME type or codecs changed during capture"
+                        .to_string(),
+                ));
+            }
+            if next_url != manifest_url {
+                manifest_url = next_url;
+                manifest_request =
+                    request_for_origin(&request.options.request, &trust_origin, &manifest_url);
+            }
+            selected = next_selected;
+        }
+
+        if ordered.is_empty() {
+            return Err(Error::Backend(
+                "dynamic DASH capture recorded no segments".to_string(),
+            ));
+        }
+        let total = total_live_bytes(&temp_dir, init_path.as_deref(), &ordered).await?;
+        if request.options.disk_space_check {
+            ensure_free_space(&request.destination, total)?;
+        }
+        let written = concat_live(&final_path, &temp_dir, init_path.as_deref(), &ordered).await?;
+
+        {
+            let mut writer = writer.lock().await;
+            writer.file_resume.total_size = Some(written);
+            writer.file_resume.completed = if written > 0 {
+                vec![ByteRange::new(0, written)?]
+            } else {
+                Vec::new()
+            };
+            writer.file_resume.normalize();
+            let key = writer.key.clone();
+            let entry = writer.file_resume.clone();
+            writer.task_resume.files.insert(key, entry);
+            request.checkpoint.save(&writer.task_resume).await?;
+        }
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+
+        request.events.emit(EventKind::Progress {
+            task_id: request.task_id,
+            file: relative.clone(),
+            downloaded_bytes: written,
+            total_bytes: Some(written),
+        });
+        Ok(DownloadOutcome::Completed(vec![FileOutcome::new(
+            final_path, relative, written, checksum, false,
+        )]))
+    }
+
+    async fn download_init(
+        &self,
+        request: &DownloadRequest,
+        trust_origin: &Url,
+        selected: &SelectedRepresentation,
+        temp_dir: &Path,
+        events: &EventSink,
+    ) -> Result<u64> {
+        let Some(init) = &selected.initialization else {
+            return Err(Error::Backend(
+                "DASH representation has no initialization segment".to_string(),
+            ));
+        };
+        let options = options_for_origin(&request.options, trust_origin, &init.url);
+        download_one(
+            &self.http, request, &options, init, temp_dir, INIT_NAME, events,
+        )
+        .await
+    }
+}
+
+fn live_limit_reached(
+    ordered: &[u64],
+    total_duration: f64,
+    duration_limit: Option<u64>,
+    segment_limit: Option<usize>,
+) -> bool {
+    segment_limit.is_some_and(|limit| ordered.len() >= limit)
+        || duration_limit.is_some_and(|limit| total_duration >= limit as f64)
+}
+
+fn live_segment_name(start: u64) -> String {
+    format!("live-{start}.bin")
+}
+
+async fn total_live_bytes(temp_dir: &Path, init: Option<&Path>, starts: &[u64]) -> Result<u64> {
+    let mut total = 0;
+    if let Some(init) = init {
+        total += tokio::fs::metadata(init).await?.len();
+    }
+    for start in starts {
+        total += tokio::fs::metadata(temp_dir.join(live_segment_name(*start)))
+            .await?
+            .len();
+    }
+    Ok(total)
+}
+
+async fn concat_live(
+    final_path: &Path,
+    temp_dir: &Path,
+    init: Option<&Path>,
+    starts: &[u64],
+) -> Result<u64> {
+    let part = part_path(final_path);
+    ensure_parent(&part).await?;
+    remove_if_exists(&part).await?;
+    let mut output = tokio::fs::File::create(&part).await?;
+    let mut written = 0u64;
+    if let Some(init) = init {
+        written += copy_file(init, &mut output).await?;
+    }
+    for start in starts {
+        written += copy_file(&temp_dir.join(live_segment_name(*start)), &mut output).await?;
+    }
+    output.flush().await?;
+    output.sync_all().await?;
+    drop(output);
+    remove_if_exists(final_path).await?;
+    tokio::fs::rename(&part, final_path).await?;
+    Ok(written)
 }
 
 struct NoopCheckpoint;
