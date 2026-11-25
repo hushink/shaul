@@ -50,7 +50,8 @@ DASH 时钟模型。
 - constant-duration 动态 MPD（后续由
   [ADR 0019](0019-dash-live-constant-duration.md) 以可用时间窗口加入）、
   `availabilityStartTime`/`publishTime` 时钟推算；
-- 动态 SegmentList/SegmentBase、多 Period、Period 切换；
+- 动态 SegmentList/SegmentBase、多 Period、Period 切换（静态多 Period 的兼容
+  子集见 [ADR 0020](0020-dash-multi-period.md)）；
 - DRM/CENC、`ContentProtection`、多音轨/字幕；
 - 取消时自动收尾、直播续传、跨运行拼接；
 - DASH 的 `$Bandwidth$` 动态变化、Representation 切换。

@@ -2,8 +2,8 @@
 
 - 更新日期：2026-11-26
 - 基线：1.2.2（运维闭环、通用内容缓存与可选 Xet 已发布）
-- 下一开发线：1.5 流媒体加固（交替音轨/转封装、DASH 多 Period/DRM）；1.3
-  仍有本地 Xet CAS fixture。
+- 下一开发线：1.5 流媒体加固（交替音轨/转封装、DASH 动态多 Period/DRM）；
+  1.3 仍有本地 Xet CAS fixture。
 - 目标：在不破坏 1.0 兼容性的前提下，把 shaul 从“能下载”推进到“可长期运行、可嵌入、可扩展”的生产级下载引擎。
 
 ## 原则
@@ -25,7 +25,7 @@
 | **1.3** | Hub 差异化 | 可选 Xet 后端、缓存维护、CAS 增量维护 | Xet 已实现，fixture 待补 |
 | **1.3+** | HTTP 方法与队列 | 非 GET 请求、单请求语义、CLI 批量 pause/resume/cancel/list 过滤 | 已实现，待发布 |
 | **1.4** | 运维与观测 | OpenTelemetry / Prometheus 适配、残留 `.part` 扫描、磁盘预检 | 已实现（适配文档为主） |
-| **1.5** | 流媒体 | 可选 HLS 与 DASH 后端（点播、AES-128、BYTERANGE、分片续传、HLS/DASH 有界直播，含常量时长动态模板） | 已实现；交替音轨/转封装待后续 |
+| **1.5** | 流媒体 | 可选 HLS 与 DASH 后端（点播、AES-128、BYTERANGE、分片续传、HLS/DASH 有界直播、静态多 Period） | 已实现；交替音轨/转封装待后续 |
 
 ---
 
@@ -281,15 +281,18 @@ pub struct ExtractorFinalizer { /* registry */ }
       `minimumUpdatePeriod` 轮询，清单变静态时结束。
 - [x] constant-duration 动态 DASH：按 `availabilityStartTime`/
       `publishTime` 计算可用窗口，从 live edge 开始，过期分片报错。
-- [ ] 交替音轨混流、ffmpeg 转封装；DASH 多 Period、DRM 和低延迟
-      `availabilityTimeOffset`。
+- [x] 静态多 Period DASH 的安全子集：逐 Period 选择、优先复用首个
+      Representation id，要求 MIME/codecs 一致且 init 相同或都缺失。
+- [ ] 交替音轨混流、ffmpeg 转封装；DASH 动态多 Period、不同 init 的
+      多 Period、DRM 和低延迟 `availabilityTimeOffset`。
 - 设计记录见 [ADR 0013](adr/0013-hls-backend.md)、
   [ADR 0014](adr/0014-hls-aes128.md)、
   [ADR 0015](adr/0015-hls-byterange.md)、
   [ADR 0016](adr/0016-dash-backend.md)、
   [ADR 0017](adr/0017-hls-live.md)、
-  [ADR 0018](adr/0018-dash-live.md) 和
-  [ADR 0019](adr/0019-dash-live-constant-duration.md)。
+  [ADR 0018](adr/0018-dash-live.md)、
+  [ADR 0019](adr/0019-dash-live-constant-duration.md) 和
+  [ADR 0020](adr/0020-dash-multi-period.md)。
 
 ## 扩展边界
 

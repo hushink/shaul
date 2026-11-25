@@ -41,9 +41,10 @@ HLS 支持 TS、单 init map 的 fMP4、AES-128 加密、`#EXT-X-BYTERANGE`、
 点播分片级续传、分片并发下载，以及通过 `TaskOptions` 的
 `live_duration_secs`/`live_segments` 进行有界直播录制（不可续传）；暂不支持
 SAMPLE-AES。DASH 支持静态与动态单 Period 清单、SegmentTemplate/SegmentList/
-SegmentBase 寻址和点播分片级续传；动态清单支持 SegmentTemplate +
-SegmentTimeline 或 constant-duration 模板的有界直播录制。暂不支持 DRM、
-多 Period 清单和低延迟 `availabilityTimeOffset`。
+SegmentBase 寻址、点播分片级续传和兼容的静态多 Period 拼接；动态清单支持
+SegmentTemplate + SegmentTimeline 或 constant-duration 模板的有界直播录制。
+暂不支持 DRM、动态多 Period、init 不兼容的多 Period 和低延迟
+`availabilityTimeOffset`。
 
 ## 快速开始
 

@@ -228,9 +228,10 @@ DASH 链接用 `--include`/`--exclude` 选择变体或 Representation。
 
 ### DASH
 
-- HTTP(S) `.mpd` 静态（`type="static"`）或动态（`type="dynamic"`）单 Period
-  清单。默认选择最高码率的视频 Representation；可用 `--include`/`--exclude`
-  glob 匹配 `id`、`mimeType`、`codecs`、`lang`、分辨率和 `bandwidth`。
+- HTTP(S) `.mpd`：静态（`type="static"`）清单支持一个或多个 Period，动态
+  （`type="dynamic"`）清单只支持单 Period。默认选择最高码率的视频
+  Representation；可用 `--include`/`--exclude` glob 匹配 `id`、`mimeType`、
+  `codecs`、`lang`、分辨率和 `bandwidth`。
 - 支持 `SegmentTemplate`（`$Number$`、`$Time$`、`$RepresentationID$`、
   `$Bandwidth$`、constant duration、`endNumber` 或 `SegmentTimeline`）、
   `SegmentList`，以及 `SegmentBase`/BaseURL 单对象 Representation。
@@ -238,14 +239,18 @@ DASH 链接用 `--include`/`--exclude` 选择变体或 Representation。
   精确 `Range` HTTP 路径。
 - init 与媒体分片通过共享 HTTP 栈并发下载，拼接为一个 `.mp4` 或 `.webm`
   文件。点播续传由 MPD SHA-256、Representation id 和分片数量共同保护。
+- 静态多 Period 清单在 MIME/codecs 一致、且所有 Period 都没有 init 或使用
+  同一 init 时按顺序拼接；公共 init 只写一次。不同 init 需要转封装，会明确
+  报错。
 - 动态（直播）清单在 `SegmentTemplate` + `SegmentTimeline`，或
   constant-duration `SegmentTemplate` + `availabilityStartTime` 下可用
   `--live-duration` 或 `--live-segments` 录制。后端按 `minimumUpdatePeriod`
   轮询、按 presentation time 去重，达到上限、清单变为静态或 Period 结束时
   停止。constant-duration 录制从 live edge 开始，用 `publishTime`（缺失时用
   本机时钟）计算可用窗口。动态录制不支持续传。
-- 暂不支持 DRM（`ContentProtection`）、多 Period、`availabilityTimeOffset`
-  与低延迟分块、字幕、交替音轨混流和转封装。
+- 暂不支持 DRM（`ContentProtection`）、动态多 Period、init/MIME/codecs 不一致
+  的多 Period、`availabilityTimeOffset` 与低延迟分块、字幕、交替音轨混流和
+  转封装。
 
 ### 校验与后处理
 

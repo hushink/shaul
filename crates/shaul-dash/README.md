@@ -45,10 +45,13 @@ backend is protocol-isolated: `shaul-core` does not depend on DASH.
 
 ## Supported
 
-- Static (`type="static"`) and dynamic (`type="dynamic"`) manifests with exactly
-  one Period
+- Static (`type="static"`) manifests with one or more Periods, and dynamic
+  (`type="dynamic"`) manifests with one Period
 - Highest-bandwidth video representation by default; audio-only manifests fall
   back to the best audio representation
+- Static multi-Period manifests concatenate compatible representations:
+  identical MIME/codecs and either no initialization segments or the same
+  initialization segment in every Period. The common init is written once
 - `SegmentTemplate` with `$Number$`, `$Time$`, `$RepresentationID$`,
   `$Bandwidth$`, `%0Nd` formatting, constant `duration`, `endNumber` or
   `SegmentTimeline` (non-negative repeat counts)
@@ -69,7 +72,8 @@ backend is protocol-isolated: `shaul-core` does not depend on DASH.
 
 Not supported yet:
 
-- Multiple Periods
+- Dynamic multi-Period manifests, or static Periods with different
+  initialization segments/MIME types/codecs (these need remuxing)
 - `availabilityTimeOffset`, low-latency chunked delivery and DVR-window start
   selection
 - DRM (`ContentProtection`, CENC) and `xlink:href`
@@ -95,6 +99,9 @@ The output extension is `.webm` for WebM representations, otherwise `.mp4`.
   `allow_cross_origin_auth` is enabled.
 - A video-only representation will produce a video-only output when the
   manifest uses separate audio AdaptationSets.
+- For static multi-Period manifests, `SelectedRepresentation.parts` exposes
+  per-Period initialization/segments; the backend concatenates the flattened
+  segments with the common initialization segment written once.
 - Dynamic captures always start from a fresh temp directory and the current
   window. Constant-duration captures use `publishTime` as the reference clock
   when present (otherwise the local clock), start at the live edge, and use
@@ -110,5 +117,6 @@ The output extension is `.webm` for WebM representations, otherwise `.mp4`.
 - [DASH ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0016-dash-backend.md)
 - [Live ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0018-dash-live.md)
 - [Constant-duration live ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0019-dash-live-constant-duration.md)
+- [Multi-period ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0020-dash-multi-period.md)
 - [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
 - [API reference](https://docs.rs/shaul-dash)

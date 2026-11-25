@@ -171,3 +171,8 @@ SegmentTimeline，以及带 `availabilityStartTime` 的 constant-duration
 SegmentTemplate。按 `minimumUpdatePeriod` 轮询、按 presentation time 去重，
 达到 live 限制、MPD 变为 static 或 Period 结束时停止。不可续传。
 _Avoid_: DASH stream, DVR
+
+**DASH multi-period**:
+静态 MPD 中顺序排列的多个 Period；只拼接 MIME/codecs 一致、且 init 相同或
+都缺失的 Representation，公共 init 只写一次。不同 init 需要转封装。
+_Avoid_: Period concatenation, ad periods

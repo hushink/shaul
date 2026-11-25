@@ -43,8 +43,11 @@ $ shaul download https://example.com/live/manifest.mpd --live-segments 300
 
 ## 支持范围
 
-- 静态（`type="static"`）与动态（`type="dynamic"`）且只有一个 Period 的清单
+- 静态（`type="static"`）多 Period 清单，以及只有一个 Period 的动态
+  （`type="dynamic"`）清单
 - 默认选择最高码率的视频 Representation；纯音频清单回退到最佳音频
+- 静态多 Period 清单在 MIME/codecs 一致、且所有 Period 都没有 init 或使用
+  同一 init 时按顺序拼接；公共 init 只写一次
 - `SegmentTemplate`：`$Number$`、`$Time$`、`$RepresentationID$`、
   `$Bandwidth$`、`%0Nd` 补零、constant `duration`、`endNumber` 或
   `SegmentTimeline`（非负重复次数）
@@ -62,7 +65,8 @@ $ shaul download https://example.com/live/manifest.mpd --live-segments 300
 
 暂不支持：
 
-- 多 Period
+- 动态多 Period 清单，以及 init/MIME/codecs 不一致的静态多 Period 清单
+  （这些需要转封装）
 - `availabilityTimeOffset`、低延迟分块和显式从 DVR 窗口起点录制
 - DRM（`ContentProtection`、CENC）与 `xlink:href`
 - 字幕、缩略图、交替音轨混流和多音轨选择
@@ -84,6 +88,8 @@ $ shaul download https://example.com/live/manifest.mpd --live-segments 300
   `allow_cross_origin_auth`。
 - 当清单使用独立音频 AdaptationSet 时，视频 Representation 会产出无音轨的
   视频文件。
+- 静态多 Period 清单通过 `SelectedRepresentation.parts` 暴露每个 Period 的
+  init/分片；后端把公共 init 写一次，再顺序拼接扁平分片。
 - 动态录制每次都从新的临时目录和当前窗口开始。constant-duration 录制优先用
   `publishTime` 作为参考时钟（缺失时用本机时钟），从 live edge 开始，并用
   `timeShiftBufferDepth`（或 30 秒的回看）判断分片是否过期。取消或失败会
@@ -96,5 +102,6 @@ $ shaul download https://example.com/live/manifest.mpd --live-segments 300
 - [DASH ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0016-dash-backend.md)
 - [直播 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0018-dash-live.md)
 - [常量时长直播 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0019-dash-live-constant-duration.md)
+- [多 Period ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0020-dash-multi-period.md)
 - [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
 - [API reference](https://docs.rs/shaul-dash)

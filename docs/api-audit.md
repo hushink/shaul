@@ -172,11 +172,14 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      time 去重，并在达到 `TaskOptions` live 限制、MPD 变为 static 或 Period
      结束时停止；constant-duration 录制从 live edge 开始，用
      `publishTime`（缺失时本机时钟）和 `timeShiftBufferDepth` 计算可用窗口。
+     静态多 Period 清单逐 Period 选择，优先复用首个 Representation id，
+     要求 MIME/codecs 一致且 init 相同或都缺失，公共 init 只写一次。
      动态录制不支持续传，失败临时目录由 `clean --orphans` 清理。新增
      `SegmentTiming`、`SegmentRef.timing`、`DynamicTemplate`、
-     `SelectedRepresentation.live`/`minimum_update_period_secs`/`dynamic`、
-     `DashManifest::is_dynamic`/`select_representation` 等公开项，属于新
-     crate 的 additive API。DRM、多 Period、低延迟
+     `RepresentationPart`、`SelectedRepresentation.parts`/`live`/
+     `minimum_update_period_secs`/`dynamic`、`DashManifest::is_dynamic`/
+     `select_representation` 等公开项，属于新 crate 的 additive API。DRM、
+     动态多 Period、init/codecs/MIME 不一致的多 Period、低延迟
      `availabilityTimeOffset` 和交替音轨暂不支持。`quick-xml` 和 `reqwest`
      类型不泄漏到 `shaul-core`。
    - `HttpBackend::download_range(request, file, range, destination)` 下载

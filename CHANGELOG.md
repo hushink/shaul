@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(dash)* support constant-duration dynamic DASH templates: availability
   windows from `availabilityStartTime`/`publishTime`, live-edge start,
   `timeShiftBufferDepth` expiry checks, and static/Period-end finalization
+- *(dash)* concatenate compatible static multi-period manifests: per-period
+  representation selection, identical init or no init, MIME/codecs checks, and
+  flattened segments with the common init written once
 - *(core)* add `TaskOptions::live_duration_secs` and
   `TaskOptions::live_segments` for bounded live capture
 - *(cli)* batch `pause`/`resume`/`cancel` with multiple ids or `--all`, plus

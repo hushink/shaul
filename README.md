@@ -242,10 +242,10 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
 
 ### DASH
 
-- HTTP(S) `.mpd` manifests with `type="static"` or `type="dynamic"` and a
-  single Period. The highest-bandwidth video Representation is selected by
-  default; repeat `--include`/`--exclude` with globs matching `id`, `mimeType`,
-  `codecs`, `lang`, resolution or `bandwidth` to choose another.
+- HTTP(S) `.mpd` manifests: static lists with one or more Periods, or dynamic
+  lists with a single Period. The highest-bandwidth video Representation is
+  selected by default; repeat `--include`/`--exclude` with globs matching `id`,
+  `mimeType`, `codecs`, `lang`, resolution or `bandwidth` to choose another.
 - `SegmentTemplate` (`$Number$`, `$Time$`, `$RepresentationID$`,
   `$Bandwidth$`, constant duration, `endNumber` or `SegmentTimeline`),
   `SegmentList`, and `SegmentBase`/BaseURL single-object representations.
@@ -255,6 +255,10 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
   HTTP stack and are concatenated into one `.mp4` or `.webm` file.
   VOD resume is guarded by an MPD SHA-256, the representation id and the
   segment count.
+- Static multi-Period manifests concatenate compatible representations: all
+  Periods must share MIME/codecs and either have no initialization segment or
+  the same initialization segment. The common init is written once. Different
+  init segments require remuxing and fail explicitly.
 - Dynamic (live) manifests can be recorded with `--live-duration` or
   `--live-segments` when they use `SegmentTemplate` + `SegmentTimeline`, or a
   constant-duration `SegmentTemplate` with `availabilityStartTime`. The backend
@@ -262,9 +266,10 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
   at the limit, when the MPD becomes static, or when the Period ends.
   Constant-duration captures start at the live edge and use `publishTime` (or
   the local clock) to compute availability. Dynamic captures are not resumable.
-- DRM (`ContentProtection`), multiple Periods, `availabilityTimeOffset` and
-  low-latency chunked delivery, subtitles, alternate audio muxing and remuxing
-  are not supported yet.
+- DRM (`ContentProtection`), dynamic multi-Period manifests, multi-Period
+  manifests with different init segments/MIME/codecs, `availabilityTimeOffset`
+  and low-latency chunked delivery, subtitles, alternate audio muxing and
+  remuxing are not supported yet.
 
 ### Integrity and post-processing
 

@@ -84,7 +84,51 @@ const DYNAMIC_NO_TIMELINE_MPD: &str = r#"<MPD type="dynamic"><Period>
   </AdaptationSet>
 </Period></MPD>"#;
 
-const MULTI_PERIOD_MPD: &str = r#"<MPD type="static"><Period/><Period/></MPD>"#;
+const MULTI_SHARED_INIT_MPD: &str = r#"<MPD type="static"><Period id="p1">
+  <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+    <SegmentTemplate media="p1-$Number$.m4s" initialization="multi-init-a.mp4"
+        timescale="1000" startNumber="1">
+      <SegmentTimeline><S t="0" d="2000" r="1"/></SegmentTimeline>
+    </SegmentTemplate>
+  </Representation></AdaptationSet>
+</Period><Period id="p2">
+  <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+    <SegmentTemplate media="p2-$Number$.m4s" initialization="multi-init-a.mp4"
+        timescale="1000" startNumber="1">
+      <SegmentTimeline><S t="0" d="2000" r="1"/></SegmentTimeline>
+    </SegmentTemplate>
+  </Representation></AdaptationSet>
+</Period></MPD>"#;
+
+const MULTI_NO_INIT_MPD: &str = r#"<MPD type="static"><Period id="p1">
+  <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+    <SegmentTemplate media="p1-$Number$.m4s" timescale="1000" startNumber="1">
+      <SegmentTimeline><S t="0" d="2000" r="1"/></SegmentTimeline>
+    </SegmentTemplate>
+  </Representation></AdaptationSet>
+</Period><Period id="p2">
+  <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+    <SegmentTemplate media="p2-$Number$.m4s" timescale="1000" startNumber="1">
+      <SegmentTimeline><S t="0" d="2000" r="1"/></SegmentTimeline>
+    </SegmentTemplate>
+  </Representation></AdaptationSet>
+</Period></MPD>"#;
+
+const MULTI_DIFFERENT_INIT_MPD: &str = r#"<MPD type="static"><Period id="p1">
+  <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+    <SegmentTemplate media="p1-$Number$.m4s" initialization="multi-init-a.mp4"
+        timescale="1000" startNumber="1">
+      <SegmentTimeline><S t="0" d="2000" r="1"/></SegmentTimeline>
+    </SegmentTemplate>
+  </Representation></AdaptationSet>
+</Period><Period id="p2">
+  <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+    <SegmentTemplate media="p2-$Number$.m4s" initialization="multi-init-b.mp4"
+        timescale="1000" startNumber="1">
+      <SegmentTimeline><S t="0" d="2000" r="1"/></SegmentTimeline>
+    </SegmentTemplate>
+  </Representation></AdaptationSet>
+</Period></MPD>"#;
 
 const RANGE_DATA: &[u8] = b"IIIIAAABBB";
 
@@ -197,7 +241,15 @@ async fn handle(
         "/fail.mpd" => FAIL_MPD.as_bytes().to_vec(),
         "/drm.mpd" => DRM_MPD.as_bytes().to_vec(),
         "/no-timeline.mpd" => DYNAMIC_NO_TIMELINE_MPD.as_bytes().to_vec(),
-        "/multi.mpd" => MULTI_PERIOD_MPD.as_bytes().to_vec(),
+        "/multi-shared.mpd" => MULTI_SHARED_INIT_MPD.as_bytes().to_vec(),
+        "/multi-no-init.mpd" => MULTI_NO_INIT_MPD.as_bytes().to_vec(),
+        "/multi-different-init.mpd" => MULTI_DIFFERENT_INIT_MPD.as_bytes().to_vec(),
+        "/multi-init-a.mp4" => b"INIT-A".to_vec(),
+        "/multi-init-b.mp4" => b"INIT-B".to_vec(),
+        "/p1-1.m4s" => b"A1".to_vec(),
+        "/p1-2.m4s" => b"A2".to_vec(),
+        "/p2-1.m4s" => b"B1".to_vec(),
+        "/p2-2.m4s" => b"B2".to_vec(),
         "/init-720p.mp4" => b"INIT-720".to_vec(),
         "/init-1080p.mp4" => b"INIT-1080".to_vec(),
         "/seg-720p-00001.m4s" => b"L1".to_vec(),
@@ -625,6 +677,52 @@ async fn downloads_a_segment_timeline() {
 }
 
 #[tokio::test]
+async fn downloads_a_multi_period_manifest_with_a_shared_init() {
+    let server = DashServer::spawn(None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = download(
+        &engine,
+        &config,
+        server.url("/multi-shared.mpd"),
+        TaskOptions::default(),
+    )
+    .await;
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("multi-shared.mp4"))
+            .await
+            .unwrap(),
+        b"INIT-AA1A2B1B2".to_vec()
+    );
+}
+
+#[tokio::test]
+async fn downloads_a_multi_period_manifest_without_initialization() {
+    let server = DashServer::spawn(None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = download(
+        &engine,
+        &config,
+        server.url("/multi-no-init.mpd"),
+        TaskOptions::default(),
+    )
+    .await;
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("multi-no-init.mp4"))
+            .await
+            .unwrap(),
+        b"A1A2B1B2".to_vec()
+    );
+}
+
+#[tokio::test]
 async fn downloads_a_segment_list_with_byte_ranges() {
     let server = DashServer::spawn(None).await;
     let dir = tempfile::tempdir().unwrap();
@@ -730,7 +828,7 @@ async fn rejects_unsupported_manifests() {
     let config = test_config(dir.path());
     let engine = engine(&config);
 
-    for path in ["/drm.mpd", "/no-timeline.mpd", "/multi.mpd"] {
+    for path in ["/drm.mpd", "/no-timeline.mpd", "/multi-different-init.mpd"] {
         let result = engine
             .add(
                 Link::new(server.url(path)).unwrap(),

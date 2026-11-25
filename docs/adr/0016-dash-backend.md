@@ -55,8 +55,9 @@ BaseURL 继承、SegmentTemplate/SegmentList/SegmentBase 三种寻址方式和
 ## Out of scope (phase 1)
 
 - live/dynamic MPD（后续由 [ADR 0018](0018-dash-live.md) 以 SegmentTimeline
-  有界录制方式加入）、多 Period、DRM/CENC、`ContentProtection`、
-  `xlink:href`；
+  有界录制方式加入）、多 Period（后续由
+  [ADR 0020](0020-dash-multi-period.md) 以兼容子集加入）、DRM/CENC、
+  `ContentProtection`、`xlink:href`；
 - 交替音轨/多音轨混流、字幕、缩略图、trick-mode；
 - 解析 `sidx`、分片内字节级续传、ffmpeg 转封装；
 - `--mirror`、内容寻址缓存、DASH 输出的解压/校验自动化。

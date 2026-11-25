@@ -7,12 +7,14 @@
 //! are an internal detail: the task still produces one
 //! [`shaul_core::FileOutcome`].
 //!
-//! Supports static single-period VOD manifests with SegmentTemplate,
-//! SegmentList or SegmentBase/BaseURL addressing and segment-level resume, and
-//! bounded dynamic (live) captures with SegmentTemplate + SegmentTimeline or a
-//! constant-duration SegmentTemplate. Dynamic captures are not resumable.
-//! Multiple periods, DRM, low-latency `availabilityTimeOffset`, subtitles,
-//! alternate audio and remuxing are not supported.
+//! Supports static VOD manifests with one or more Periods, SegmentTemplate,
+//! SegmentList or SegmentBase/BaseURL addressing and segment-level resume.
+//! Static multi-Period lists concatenate only when MIME/codecs match and every
+//! Period has no init or the same init. Bounded dynamic (live) captures use
+//! SegmentTemplate + SegmentTimeline or a constant-duration SegmentTemplate;
+//! dynamic captures are not resumable. Dynamic multi-Period manifests, DRM,
+//! low-latency `availabilityTimeOffset`, subtitles, alternate audio and
+//! remuxing are not supported.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -28,7 +30,10 @@ pub mod parser;
 
 pub use backend::DashBackend;
 pub use client::DashClient;
-pub use mpd::{DashManifest, DynamicTemplate, SegmentRef, SegmentTiming, SelectedRepresentation};
+pub use mpd::{
+    DashManifest, DynamicTemplate, RepresentationPart, SegmentRef, SegmentTiming,
+    SelectedRepresentation,
+};
 pub use parser::{DASH_PROTOCOL, DashParser};
 
 use std::sync::Arc;

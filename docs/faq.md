@@ -215,9 +215,23 @@ instead of producing a silent gap.
 
 Dynamic captures are not resumable and always start from a fresh temp directory
 and the current window. `shaul clean --orphans` removes temp files from failed
-dynamic captures as well as completed/cancelled tasks. Multiple Periods, DRM,
-subtitles, alternate audio muxing and low-latency `availabilityTimeOffset` are
-not supported yet.
+dynamic captures as well as completed/cancelled tasks. Dynamic multi-period
+manifests, DRM, subtitles, alternate audio muxing and low-latency
+`availabilityTimeOffset` are not supported yet.
+
+## Does shaul support multi-period DASH?
+
+Yes for static manifests, with a safe subset. shaul selects a representation in
+each Period (preferring the first Period's representation `id` when available),
+then concatenates the Periods in order. Every Period must have the same default
+extension and compatible MIME type/codecs, and either no initialization segment
+in all Periods or exactly the same initialization segment in every Period. The
+common init is written once.
+
+If the Periods use different init segments or codecs, shaul fails with an
+explicit error because byte-concatenating them would produce an invalid file;
+remux the media with an external tool first. Dynamic multi-period manifests and
+selection of a single Period are not supported yet.
 
 ## Does shaul support DASH?
 
@@ -237,9 +251,11 @@ DASH resumes VOD at segment granularity using a manifest SHA-256, the
 representation id and the segment count. Dynamic (`type="dynamic"`) manifests
 can also be recorded as bounded live captures with SegmentTemplate +
 SegmentTimeline or constant-duration SegmentTemplate + `availabilityStartTime`;
-see the live questions below. DRM (`ContentProtection`), multiple periods,
-subtitles, alternate audio muxing, `sidx` parsing, low-latency
-`availabilityTimeOffset` and ffmpeg remuxing are not supported yet. `--mirror` and the final-output content cache do not apply. Completed
+see the live questions below. Static multi-period manifests are supported when
+all periods use compatible representations (see below). DRM
+(`ContentProtection`), dynamic multi-period manifests, subtitles, alternate
+audio muxing, `sidx` parsing, low-latency `availabilityTimeOffset` and ffmpeg
+remuxing are not supported yet. `--mirror` and the final-output content cache do not apply. Completed
 segments live in `<output>.shaul.dash.parts/`; `shaul clean --orphans` removes
 that directory for completed or cancelled tasks, along with the concatenation
 `.part`.

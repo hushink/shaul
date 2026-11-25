@@ -80,6 +80,19 @@ pub struct SelectedRepresentation {
     pub initialization: Option<SegmentRef>,
     /// Media segments in presentation order.
     pub segments: Vec<SegmentRef>,
+    /// Per-Period initialization and media segments. Single-Period
+    /// representations have one part.
+    pub parts: Vec<RepresentationPart>,
+}
+
+/// One Period's initialization and media segments within a selected
+/// representation.
+#[derive(Clone, Debug)]
+pub struct RepresentationPart {
+    /// Initialization segment for this Period, when present.
+    pub initialization: Option<SegmentRef>,
+    /// Media segments for this Period in presentation order.
+    pub segments: Vec<SegmentRef>,
 }
 
 /// A constant-duration `SegmentTemplate` on a dynamic manifest. The backend
@@ -317,93 +330,47 @@ impl DashManifest {
         let has_base = root.child("BaseURL").is_some();
 
         let period_nodes: Vec<&Node> = root.children("Period").collect();
-        if period_nodes.len() != 1 {
-            return Err(Error::Backend(format!(
-                "DASH manifests must contain exactly one Period (found {})",
-                period_nodes.len()
-            )));
-        }
-        let period_node = period_nodes[0];
-        if period_node.attributes.contains_key("href") {
+        if period_nodes.is_empty() {
             return Err(Error::Backend(
-                "DASH xlink:href is not supported".to_string(),
+                "DASH manifest contains no Period".to_string(),
             ));
         }
-        let period_start = period_node
-            .attr("start")
-            .map(parse_iso_duration)
-            .transpose()?;
-        let period_duration = period_node
-            .attr("duration")
-            .map(parse_iso_duration)
-            .transpose()?;
-        let period_base = resolve_base(&base_url, period_node)?;
-        let period_has_base = has_base || period_node.child("BaseURL").is_some();
-
-        let mut adaptation_sets = Vec::new();
-        for set_node in period_node.children("AdaptationSet") {
-            if set_node.attributes.contains_key("href") {
+        if dynamic && period_nodes.len() > 1 {
+            return Err(Error::Backend(
+                "dynamic multi-period DASH is not supported".to_string(),
+            ));
+        }
+        let mut periods = Vec::new();
+        for period_node in period_nodes {
+            if period_node.attributes.contains_key("href") {
                 return Err(Error::Backend(
                     "DASH xlink:href is not supported".to_string(),
                 ));
             }
-            if set_node.child("ContentProtection").is_some() {
+            let period_start = period_node
+                .attr("start")
+                .map(parse_iso_duration)
+                .transpose()?;
+            let period_duration = period_node
+                .attr("duration")
+                .map(parse_iso_duration)
+                .transpose()?;
+            let period_base = resolve_base(&base_url, period_node)?;
+            let period_has_base = has_base || period_node.child("BaseURL").is_some();
+            let adaptation_sets = period_node
+                .children("AdaptationSet")
+                .map(|set_node| parse_adaptation_set(set_node, &period_base, period_has_base))
+                .collect::<Result<Vec<_>>>()?;
+            if adaptation_sets.is_empty() {
                 return Err(Error::Backend(
-                    "DASH ContentProtection (DRM) is not supported".to_string(),
+                    "DASH Period contains no AdaptationSet".to_string(),
                 ));
             }
-            let set_base = resolve_base(&period_base, set_node)?;
-            let set_has_base = period_has_base || set_node.child("BaseURL").is_some();
-            let template = parse_template(set_node)?;
-            let list = parse_segment_list(set_node)?;
-
-            let mut representations = Vec::new();
-            for rep_node in set_node.children("Representation") {
-                if rep_node.attributes.contains_key("href") {
-                    return Err(Error::Backend(
-                        "DASH xlink:href is not supported".to_string(),
-                    ));
-                }
-                if rep_node.child("ContentProtection").is_some() {
-                    return Err(Error::Backend(
-                        "DASH ContentProtection (DRM) is not supported".to_string(),
-                    ));
-                }
-                let id = rep_node.attr("id").ok_or_else(|| {
-                    Error::Backend("DASH Representation is missing required id".to_string())
-                })?;
-                let rep_base = resolve_base(&set_base, rep_node)?;
-                representations.push(Representation {
-                    id: id.to_string(),
-                    bandwidth: parse_u64_attr(rep_node, "bandwidth")?,
-                    mime_type: rep_node.attr("mimeType").map(str::to_string),
-                    codecs: rep_node.attr("codecs").map(str::to_string),
-                    lang: rep_node.attr("lang").map(str::to_string),
-                    width: parse_u64_attr(rep_node, "width")?,
-                    height: parse_u64_attr(rep_node, "height")?,
-                    base_url: rep_base,
-                    has_base: set_has_base || rep_node.child("BaseURL").is_some(),
-                    template: parse_template(rep_node)?,
-                    list: parse_segment_list(rep_node)?,
-                });
-            }
-            adaptation_sets.push(AdaptationSet {
-                id: set_node.attr("id").map(str::to_string),
-                content_type: set_node.attr("contentType").map(str::to_string),
-                mime_type: set_node.attr("mimeType").map(str::to_string),
-                codecs: set_node.attr("codecs").map(str::to_string),
-                lang: set_node.attr("lang").map(str::to_string),
-                width: parse_u64_attr(set_node, "width")?,
-                height: parse_u64_attr(set_node, "height")?,
-                template,
-                list,
-                representations,
+            periods.push(Period {
+                start: period_start,
+                duration: period_duration,
+                adaptation_sets,
             });
-        }
-        if adaptation_sets.is_empty() {
-            return Err(Error::Backend(
-                "DASH manifest contains no AdaptationSet".to_string(),
-            ));
         }
 
         Ok(Self {
@@ -414,50 +381,105 @@ impl DashManifest {
             publish_time,
             suggested_presentation_delay,
             time_shift_buffer_depth,
-            periods: vec![Period {
-                start: period_start,
-                duration: period_duration,
-                adaptation_sets,
-            }],
+            periods,
         })
     }
 
     /// Select the best audio/video representation that matches `include` and
     /// does not match `exclude`. Video is preferred over audio; higher
     /// bandwidth wins within the same category.
+    ///
+    /// Static multi-Period manifests select one representation per Period,
+    /// prefer the first Period's representation id when it is available, and
+    /// require compatible MIME/codecs and identical initialization segments.
     pub fn select(&self, include: &[String], exclude: &[String]) -> Result<SelectedRepresentation> {
         let include = glob_set(include)?;
         let exclude = glob_set(exclude)?;
-        let period = &self.periods[0];
-        let total_duration = period.duration.or(self.media_duration);
-        let mut best: Option<(&AdaptationSet, &Representation, u8, u64)> = None;
-        for set in &period.adaptation_sets {
-            for representation in &set.representations {
-                let Some(category) = media_category(set, representation) else {
-                    continue;
-                };
-                if matches_any(&exclude, set, representation) {
-                    continue;
-                }
-                if !include.is_empty() && !matches_any(&include, set, representation) {
-                    continue;
-                }
-                let bandwidth = representation.bandwidth.unwrap_or(0);
-                let better = best.is_none_or(|(_, _, best_category, best_bandwidth)| {
-                    category < best_category
-                        || (category == best_category && bandwidth > best_bandwidth)
-                });
-                if better {
-                    best = Some((set, representation, category, bandwidth));
-                }
-            }
+        if self.dynamic {
+            let period = &self.periods[0];
+            let (set, representation) = best_representation(period, &include, &exclude, None)?;
+            return resolve_selected(
+                self,
+                period,
+                set,
+                representation,
+                self.period_total_duration(0),
+            );
         }
-        let Some((set, representation, _, _)) = best else {
-            return Err(Error::InvalidLink(
-                "no DASH representation matched --include/--exclude".to_string(),
-            ));
-        };
-        resolve_selected(self, set, representation, total_duration)
+
+        let mut parts = Vec::new();
+        let mut segments = Vec::new();
+        let mut ids = Vec::new();
+        let mut initialization: Option<SegmentRef> = None;
+        let mut first: Option<SelectedRepresentation> = None;
+        let mut selected_id: Option<String> = None;
+        for (index, period) in self.periods.iter().enumerate() {
+            let (set, representation) =
+                best_representation(period, &include, &exclude, selected_id.as_deref())?;
+            let resolved = resolve_selected(
+                self,
+                period,
+                set,
+                representation,
+                self.period_total_duration(index),
+            )?;
+            if let Some(first) = &first {
+                if first.extension != resolved.extension {
+                    return Err(Error::Backend(
+                        "multi-period DASH MIME types differ between Periods".to_string(),
+                    ));
+                }
+                if let (Some(first), Some(next)) = (&first.mime_type, &resolved.mime_type)
+                    && first != next
+                {
+                    return Err(Error::Backend(
+                        "multi-period DASH MIME types differ between Periods".to_string(),
+                    ));
+                }
+                if let (Some(first), Some(next)) = (&first.codecs, &resolved.codecs)
+                    && first != next
+                {
+                    return Err(Error::Backend(
+                        "multi-period DASH codecs differ between Periods".to_string(),
+                    ));
+                }
+                match (&initialization, &resolved.initialization) {
+                    (None, None) => {}
+                    (Some(first), Some(next)) if first == next => {}
+                    _ => {
+                        return Err(Error::Backend(
+                            "multi-period DASH requires identical initialization segments \
+                             across Periods; different init segments require remuxing"
+                                .to_string(),
+                        ));
+                    }
+                }
+            } else {
+                initialization = resolved.initialization.clone();
+                selected_id = Some(resolved.id.clone());
+                first = Some(resolved.clone());
+            }
+            parts.push(RepresentationPart {
+                initialization: resolved.initialization.clone(),
+                segments: resolved.segments.clone(),
+            });
+            segments.extend(resolved.segments.iter().cloned());
+            ids.push(resolved.id.clone());
+        }
+        let first = first.expect("a manifest always has at least one Period");
+        Ok(SelectedRepresentation {
+            id: ids.join("|"),
+            bandwidth: first.bandwidth,
+            mime_type: first.mime_type,
+            codecs: first.codecs,
+            extension: first.extension,
+            live: false,
+            minimum_update_period_secs: None,
+            dynamic: None,
+            initialization,
+            segments,
+            parts,
+        })
     }
 
     /// Resolve a previously selected representation by its stable `id`.
@@ -465,11 +487,11 @@ impl DashManifest {
     /// representation does not change the recording mid-stream.
     pub fn select_representation(&self, id: &str) -> Result<SelectedRepresentation> {
         let period = &self.periods[0];
-        let total_duration = period.duration.or(self.media_duration);
+        let total_duration = self.period_total_duration(0);
         for set in &period.adaptation_sets {
             for representation in &set.representations {
                 if representation.id == id {
-                    return resolve_selected(self, set, representation, total_duration);
+                    return resolve_selected(self, period, set, representation, total_duration);
                 }
             }
         }
@@ -478,10 +500,87 @@ impl DashManifest {
         )))
     }
 
+    fn period_start_seconds(&self, index: usize) -> Option<f64> {
+        let mut start = 0.0;
+        for current in 0..=index {
+            let period = &self.periods[current];
+            if let Some(explicit) = period.start {
+                start = explicit;
+            }
+            if current == index {
+                return Some(start);
+            }
+            if self.periods[current + 1].start.is_none() {
+                start += period.duration?;
+            }
+        }
+        None
+    }
+
+    fn period_total_duration(&self, index: usize) -> Option<f64> {
+        let period = &self.periods[index];
+        if let Some(duration) = period.duration {
+            return Some(duration);
+        }
+        let start = self.period_start_seconds(index)?;
+        if index + 1 < self.periods.len() {
+            let next_start = self.period_start_seconds(index + 1)?;
+            return Some((next_start - start).max(0.0));
+        }
+        self.media_duration.map(|total| (total - start).max(0.0))
+    }
+
     /// Whether the manifest was declared with `type="dynamic"`.
     pub fn is_dynamic(&self) -> bool {
         self.dynamic
     }
+}
+
+fn best_representation<'a>(
+    period: &'a Period,
+    include: &GlobSet,
+    exclude: &GlobSet,
+    preferred_id: Option<&str>,
+) -> Result<(&'a AdaptationSet, &'a Representation)> {
+    if let Some(id) = preferred_id {
+        for set in &period.adaptation_sets {
+            for representation in &set.representations {
+                if representation.id == id
+                    && media_category(set, representation).is_some()
+                    && !matches_any(exclude, set, representation)
+                    && (include.is_empty() || matches_any(include, set, representation))
+                {
+                    return Ok((set, representation));
+                }
+            }
+        }
+    }
+    let mut best: Option<(&AdaptationSet, &Representation, u8, u64)> = None;
+    for set in &period.adaptation_sets {
+        for representation in &set.representations {
+            let Some(category) = media_category(set, representation) else {
+                continue;
+            };
+            if matches_any(exclude, set, representation) {
+                continue;
+            }
+            if !include.is_empty() && !matches_any(include, set, representation) {
+                continue;
+            }
+            let bandwidth = representation.bandwidth.unwrap_or(0);
+            let better = best.is_none_or(|(_, _, best_category, best_bandwidth)| {
+                category < best_category
+                    || (category == best_category && bandwidth > best_bandwidth)
+            });
+            if better {
+                best = Some((set, representation, category, bandwidth));
+            }
+        }
+    }
+    best.map(|(set, representation, _, _)| (set, representation))
+        .ok_or_else(|| {
+            Error::InvalidLink("no DASH representation matched --include/--exclude".to_string())
+        })
 }
 
 /// Return a stable SHA-256 fingerprint for an MPD body.
@@ -491,6 +590,7 @@ pub fn fingerprint(text: &str) -> String {
 
 fn resolve_selected(
     manifest: &DashManifest,
+    period: &Period,
     set: &AdaptationSet,
     representation: &Representation,
     total_duration: Option<f64>,
@@ -546,7 +646,6 @@ fn resolve_selected(
                 .get("media")
                 .expect("template media was checked")
                 .clone();
-            let period = &manifest.periods[0];
             let period_start_secs = period.start.unwrap_or(0.0);
             let period_duration_secs = period.duration.or_else(|| {
                 manifest
@@ -626,6 +725,10 @@ fn resolve_selected(
     } else {
         "mp4"
     };
+    let parts = vec![RepresentationPart {
+        initialization: initialization.clone(),
+        segments: segments.clone(),
+    }];
     Ok(SelectedRepresentation {
         id: representation.id.clone(),
         bandwidth: representation.bandwidth,
@@ -637,6 +740,7 @@ fn resolve_selected(
         dynamic: dynamic_template,
         initialization,
         segments,
+        parts,
     })
 }
 
@@ -1316,6 +1420,70 @@ fn parse_duration_number(number: &str, original: &str) -> Result<f64> {
         .map_err(|_| Error::Backend(format!("invalid ISO 8601 duration: {original}")))
 }
 
+fn parse_adaptation_set(
+    set_node: &Node,
+    period_base: &Url,
+    period_has_base: bool,
+) -> Result<AdaptationSet> {
+    if set_node.attributes.contains_key("href") {
+        return Err(Error::Backend(
+            "DASH xlink:href is not supported".to_string(),
+        ));
+    }
+    if set_node.child("ContentProtection").is_some() {
+        return Err(Error::Backend(
+            "DASH ContentProtection (DRM) is not supported".to_string(),
+        ));
+    }
+    let set_base = resolve_base(period_base, set_node)?;
+    let set_has_base = period_has_base || set_node.child("BaseURL").is_some();
+    let template = parse_template(set_node)?;
+    let list = parse_segment_list(set_node)?;
+
+    let mut representations = Vec::new();
+    for rep_node in set_node.children("Representation") {
+        if rep_node.attributes.contains_key("href") {
+            return Err(Error::Backend(
+                "DASH xlink:href is not supported".to_string(),
+            ));
+        }
+        if rep_node.child("ContentProtection").is_some() {
+            return Err(Error::Backend(
+                "DASH ContentProtection (DRM) is not supported".to_string(),
+            ));
+        }
+        let id = rep_node.attr("id").ok_or_else(|| {
+            Error::Backend("DASH Representation is missing required id".to_string())
+        })?;
+        let rep_base = resolve_base(&set_base, rep_node)?;
+        representations.push(Representation {
+            id: id.to_string(),
+            bandwidth: parse_u64_attr(rep_node, "bandwidth")?,
+            mime_type: rep_node.attr("mimeType").map(str::to_string),
+            codecs: rep_node.attr("codecs").map(str::to_string),
+            lang: rep_node.attr("lang").map(str::to_string),
+            width: parse_u64_attr(rep_node, "width")?,
+            height: parse_u64_attr(rep_node, "height")?,
+            base_url: rep_base,
+            has_base: set_has_base || rep_node.child("BaseURL").is_some(),
+            template: parse_template(rep_node)?,
+            list: parse_segment_list(rep_node)?,
+        });
+    }
+    Ok(AdaptationSet {
+        id: set_node.attr("id").map(str::to_string),
+        content_type: set_node.attr("contentType").map(str::to_string),
+        mime_type: set_node.attr("mimeType").map(str::to_string),
+        codecs: set_node.attr("codecs").map(str::to_string),
+        lang: set_node.attr("lang").map(str::to_string),
+        width: parse_u64_attr(set_node, "width")?,
+        height: parse_u64_attr(set_node, "height")?,
+        template,
+        list,
+        representations,
+    })
+}
+
 fn parse_template(node: &Node) -> Result<Option<Template>> {
     let Some(template) = node.child("SegmentTemplate") else {
         return Ok(None);
@@ -1663,6 +1831,111 @@ mod tests {
             selected.segments[2].url.as_str(),
             "https://example.com/media/s-5.m4s"
         );
+    }
+
+    #[test]
+    fn selects_period_parts_for_static_multi_period_manifests() {
+        let text = r#"<MPD type="static"><Period id="p1">
+          <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+            <SegmentTemplate media="p1-$Number$.m4s" initialization="init.mp4"
+                timescale="1000" startNumber="1">
+              <SegmentTimeline><S t="0" d="2000" r="1"/></SegmentTimeline>
+            </SegmentTemplate>
+          </Representation></AdaptationSet>
+        </Period><Period id="p2">
+          <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+            <SegmentTemplate media="p2-$Number$.m4s" initialization="init.mp4"
+                timescale="1000" startNumber="1">
+              <SegmentTimeline><S t="0" d="2000" r="1"/></SegmentTimeline>
+            </SegmentTemplate>
+          </Representation></AdaptationSet>
+        </Period></MPD>"#;
+        let manifest = DashManifest::parse(&base(), text).unwrap();
+        let selected = manifest.select(&[], &[]).unwrap();
+        assert_eq!(selected.parts.len(), 2);
+        assert_eq!(selected.segments.len(), 4);
+        assert_eq!(selected.parts[0].segments.len(), 2);
+        assert_eq!(selected.parts[1].segments.len(), 2);
+        assert!(selected.initialization.is_some());
+        assert_eq!(
+            selected.parts[0].initialization,
+            selected.parts[1].initialization
+        );
+    }
+
+    #[test]
+    fn selects_constant_duration_multi_period_parts() {
+        let text = r#"<MPD type="static">
+          <Period id="p1" start="PT0S" duration="PT4S">
+            <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+              <SegmentTemplate media="p1-$Number$.m4s" initialization="init.mp4"
+                  timescale="1000" duration="2000" startNumber="1"/>
+            </Representation></AdaptationSet>
+          </Period>
+          <Period id="p2" start="PT4S" duration="PT4S">
+            <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+              <SegmentTemplate media="p2-$Number$.m4s" initialization="init.mp4"
+                  timescale="1000" duration="2000" startNumber="1"/>
+            </Representation></AdaptationSet>
+          </Period>
+        </MPD>"#;
+        let manifest = DashManifest::parse(&base(), text).unwrap();
+        let selected = manifest.select(&[], &[]).unwrap();
+        assert_eq!(selected.parts.len(), 2);
+        assert_eq!(selected.parts[0].segments.len(), 2);
+        assert_eq!(selected.parts[1].segments.len(), 2);
+        assert_eq!(selected.segments.len(), 4);
+        assert_eq!(
+            selected.parts[0].segments[1].url.as_str(),
+            "https://example.com/media/p1-2.m4s"
+        );
+        assert_eq!(
+            selected.parts[1].segments[1].url.as_str(),
+            "https://example.com/media/p2-2.m4s"
+        );
+    }
+
+    #[test]
+    fn rejects_multi_period_manifests_with_incompatible_segments() {
+        let different_init = r#"<MPD type="static"><Period id="p1">
+          <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+            <SegmentTemplate media="p1-$Number$.m4s" initialization="a.mp4"
+                timescale="1000" startNumber="1">
+              <SegmentTimeline><S t="0" d="2000"/></SegmentTimeline>
+            </SegmentTemplate>
+          </Representation></AdaptationSet>
+        </Period><Period id="p2">
+          <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1">
+            <SegmentTemplate media="p2-$Number$.m4s" initialization="b.mp4"
+                timescale="1000" startNumber="1">
+              <SegmentTimeline><S t="0" d="2000"/></SegmentTimeline>
+            </SegmentTemplate>
+          </Representation></AdaptationSet>
+        </Period></MPD>"#;
+        let manifest = DashManifest::parse(&base(), different_init).unwrap();
+        assert!(manifest.select(&[], &[]).is_err());
+
+        let different_codecs = r#"<MPD type="static"><Period id="p1">
+          <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1" codecs="avc1">
+            <SegmentTemplate media="p1-$Number$.m4s" timescale="1000" startNumber="1">
+              <SegmentTimeline><S t="0" d="2000"/></SegmentTimeline>
+            </SegmentTemplate>
+          </Representation></AdaptationSet>
+        </Period><Period id="p2">
+          <AdaptationSet mimeType="video/mp4"><Representation id="v" bandwidth="1" codecs="hev1">
+            <SegmentTemplate media="p2-$Number$.m4s" timescale="1000" startNumber="1">
+              <SegmentTimeline><S t="0" d="2000"/></SegmentTimeline>
+            </SegmentTemplate>
+          </Representation></AdaptationSet>
+        </Period></MPD>"#;
+        let manifest = DashManifest::parse(&base(), different_codecs).unwrap();
+        assert!(manifest.select(&[], &[]).is_err());
+    }
+
+    #[test]
+    fn rejects_dynamic_multi_period_manifests() {
+        let text = r#"<MPD type="dynamic"><Period/><Period/></MPD>"#;
+        assert!(DashManifest::parse(&base(), text).is_err());
     }
 
     #[test]

@@ -100,12 +100,14 @@ cancel 默认选择 pending/running/paused，对 resume 默认选择 paused/fail
 的 fMP4、AES-128 加密分片、`#EXT-X-BYTERANGE` 和分片级续传。直播 HLS 可用
 `--live-duration` 和/或 `--live-segments` 录制；后端按 playlist 的 target
 duration 轮询，达到上限或出现 `#EXT-X-ENDLIST` 时停止，且直播录制不支持
-续传。DASH 支持静态单 Period 清单、SegmentTemplate/SegmentList/SegmentBase
-寻址和分片级续传，也支持使用 SegmentTemplate + SegmentTimeline 或带
-`availabilityStartTime` 的 constant-duration SegmentTemplate 的动态单 Period
-清单；动态录制使用同样的 `--live-duration` / `--live-segments` 限制，按
-`minimumUpdatePeriod` 轮询，清单变为静态或 Period 结束时停止。暂不支持
-SAMPLE-AES、DRM、多 Period DASH 和低延迟 `availabilityTimeOffset`。
+续传。DASH 支持静态多 Period 清单、SegmentTemplate/SegmentList/SegmentBase
+寻址和分片级续传；静态多 Period 仅在 MIME/codecs 一致、且所有 Period 都没有
+init 或使用同一 init 时拼接。动态单 Period 清单使用 SegmentTemplate +
+SegmentTimeline 或带 `availabilityStartTime` 的 constant-duration
+SegmentTemplate；动态录制使用同样的 `--live-duration` / `--live-segments`
+限制，按 `minimumUpdatePeriod` 轮询，清单变为静态或 Period 结束时停止。
+暂不支持 SAMPLE-AES、DRM、动态多 Period、init 不兼容的多 Period 和低延迟
+`availabilityTimeOffset`。
 
 `--method`、`--data`、`--data-file` 只适用于直接 HTTP(S) 链接。未指定
 `--method` 时，`--data` 隐含 `POST`。这类请求是单请求语义：不分片、不续传、
