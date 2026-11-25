@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0](https://github.com/hushink/shaul/compare/shaul-v1.2.2...shaul-v1.3.0) - 2026-11-25
+
+### Added
+
+- *(dash)* concatenate compatible static multi-period manifests
+- *(dash,cli)* record constant-duration dynamic DASH manifests
+- *(dash,cli)* record bounded dynamic DASH manifests
+- *(hls,cli)* record live HLS streams with bounded limits
+- *(dash)* add optional static VOD DASH backend
+- *(http,hls)* support exact byte-range downloads and EXT-X-BYTERANGE
+- *(hls)* add AES-128 decryption with key rotation
+- add non-GET HTTP downloads, HLS support and batch queue commands
+- *(cli)* clean HLS temp directories with clean --orphans
+
+### Other
+
+- *(dash)* track remaining work in the crate README
+
 ### Added
 
 - *(http,cli)* support non-GET direct downloads with an optional request body
