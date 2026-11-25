@@ -3548,6 +3548,7 @@ dependencies = [
  "sha2",
  "shaul-bt",
  "shaul-core",
+ "shaul-dash",
  "shaul-ftp",
  "shaul-hls",
  "shaul-http",
@@ -3629,6 +3630,30 @@ dependencies = [
  "url",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "shaul-dash"
+version = "1.2.2"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "futures-util",
+ "globset",
+ "hex",
+ "percent-encoding",
+ "quick-xml",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shaul-core",
+ "shaul-http",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
 ]
 
 [[package]]

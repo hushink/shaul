@@ -144,3 +144,17 @@ _Avoid_: Segment, chunk (unqualified)
 AES-128 密钥，由 `#EXT-X-KEY` 指定并作用于其后的分片；运行时从 URI 获取，
 只驻留内存，不写入 sidecar。
 _Avoid_: Encryption key, DRM key
+
+**DASH**:
+基于 MPD（XML）的流媒体协议；DASH 任务与 HLS 一样只产生一个最终文件。
+首期只支持静态、单 Period 的点播清单。
+_Avoid_: mpd (as the domain term), stream
+
+**DASH representation**:
+MPD 中一组同编码参数的分片集合；默认选择最高 `bandwidth` 的视频
+Representation。
+_Avoid_: Variant (unqualified)
+
+**DASH segment**:
+MPD 描述的 init 或媒体分片，由 DashBackend 内部管理，不是 `FileItem`。
+_Avoid_: Segment, chunk (unqualified)

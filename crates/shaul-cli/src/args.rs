@@ -13,7 +13,7 @@ use crate::support::{
 #[command(
     name = "shaul",
     version,
-    about = "A unified, resumable download engine for HTTP, HLS, BitTorrent and model hubs",
+    about = "A unified, resumable download engine for HTTP, HLS/DASH, FTP, BitTorrent and model hubs",
     disable_help_subcommand = true
 )]
 pub struct Cli {
@@ -126,7 +126,7 @@ pub struct DownloadArgs {
     #[arg(long, short = 'd', value_name = "DIR")]
     pub dir: Option<PathBuf>,
 
-    /// Output file or directory (direct HTTP/FTP links only)
+    /// Output file or directory (HTTP/FTP/HLS/DASH links)
     #[arg(long, short = 'o', value_name = "PATH")]
     pub output: Option<PathBuf>,
 
@@ -226,11 +226,11 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub revision: Option<String>,
 
-    /// Include glob for Hub, BitTorrent or HLS selection (repeatable)
+    /// Include glob for Hub, BitTorrent, HLS or DASH selection (repeatable)
     #[arg(long)]
     pub include: Vec<String>,
 
-    /// Exclude glob for Hub, BitTorrent or HLS selection (repeatable)
+    /// Exclude glob for Hub, BitTorrent, HLS or DASH selection (repeatable)
     #[arg(long)]
     pub exclude: Vec<String>,
 
@@ -264,11 +264,11 @@ pub struct InfoArgs {
     #[arg(long)]
     pub revision: Option<String>,
 
-    /// Include glob for Hub or HLS selection (repeatable)
+    /// Include glob for Hub, HLS or DASH selection (repeatable)
     #[arg(long)]
     pub include: Vec<String>,
 
-    /// Exclude glob for Hub or HLS selection (repeatable)
+    /// Exclude glob for Hub, HLS or DASH selection (repeatable)
     #[arg(long)]
     pub exclude: Vec<String>,
 

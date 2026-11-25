@@ -49,7 +49,7 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 
 - SAMPLE-AES 加密
 - 直播列表
-- DASH（`mpd`）
+- DASH（请使用独立的 `shaul-dash` crate）
 - 交替音轨和多音轨选择
 - ffmpeg 转封装
 - 最终输出的内容寻址缓存

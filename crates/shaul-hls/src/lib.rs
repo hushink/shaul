@@ -6,9 +6,10 @@
 //! file. Segments are an internal detail: the task still produces one
 //! [`shaul_core::FileOutcome`].
 //!
-//! Phase 1 supports VOD TS playlists and fMP4 playlists with a single
-//! `#EXT-X-MAP`, plus segment-level resume. AES-128, DASH, live playlists and
-//! `#EXT-X-BYTERANGE` are not supported yet.
+//! Supported: VOD TS playlists and fMP4 playlists with a single
+//! `#EXT-X-MAP`, AES-128 encryption (including key rotation), and
+//! `#EXT-X-BYTERANGE` segments and init maps, plus segment-level resume.
+//! Live playlists, SAMPLE-AES and DASH are not supported.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

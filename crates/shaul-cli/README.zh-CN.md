@@ -5,7 +5,8 @@
 [English](README.md) | **简体中文**
 
 [shaul](https://github.com/hushink/shaul) 的命令行界面。shaul 是统一的下载
-引擎，支持 HTTP、Hugging Face、ModelScope、BitTorrent、FTP 与可选 Xet。
+引擎，支持 HTTP、HLS、DASH、Hugging Face、ModelScope、BitTorrent、FTP 与
+可选 Xet。
 
 该 crate 安装名为 `shaul` 的可执行文件。
 
@@ -41,6 +42,10 @@ $ shaul download ftp://user:password@example.com/pub/file.bin
 # HLS：最高码率变体，拼接成一个文件
 $ shaul download https://example.com/video/master.m3u8 --connections 8
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
+
+# DASH：从静态点播清单选择最高码率视频 Representation
+$ shaul download https://example.com/video/manifest.mpd --connections 8
+$ shaul download https://example.com/video/manifest.mpd --include '*1080*'
 
 # 代理与带宽限制
 $ shaul download https://example.com/file.bin \
@@ -82,9 +87,11 @@ cancel 默认选择 pending/running/paused，对 resume 默认选择 paused/fail
 `--status` 可覆盖默认过滤。`list --status` 可重复指定状态。
 
 `--include` / `--exclude` 也可用于按 `NAME`、`RESOLUTION`、`BANDWIDTH`、
-`CODECS` 或 URI 选择 HLS 变体。HLS 支持点播 TS、单 init map 的 fMP4、
-AES-128 加密分片、`#EXT-X-BYTERANGE` 和分片级续传；暂不支持 SAMPLE-AES、
-直播列表和 DASH。
+`CODECS` 或 URI 选择 HLS 变体，或按 `id`、`mimeType`、`codecs`、`lang`、
+分辨率和 `bandwidth` 选择 DASH Representation。HLS 支持点播 TS、单 init map
+的 fMP4、AES-128 加密分片、`#EXT-X-BYTERANGE` 和分片级续传。DASH 支持静态
+单 Period 清单、SegmentTemplate/SegmentList/SegmentBase 寻址和分片级续传；
+暂不支持 SAMPLE-AES、直播列表、DRM 和多 Period DASH。
 
 `--method`、`--data`、`--data-file` 只适用于直接 HTTP(S) 链接。未指定
 `--method` 时，`--data` 隐含 `POST`。这类请求是单请求语义：不分片、不续传、
@@ -112,9 +119,9 @@ provider token 永不持久化。`--json` 输出会对敏感请求头做脱敏�
 `shaul config set` 原地编辑 TOML 文档，保留已有注释与格式。`shaul doctor`
 还会检查 Hugging Face 与 ModelScope 的官方凭据文件。校验失败的文件会被重命名
 为 `<name>.shaul.failed`，`clean --orphans` 会忽略 sidecar 中记录的不安全路径。
-它还会清理已完成/已取消任务遗留的 `.shaul.part` 文件和 HLS
-`.shaul.hls.parts/` 目录；统计目录大小时不跟随符号链接，并且永远不会删除
-目标文件。
+它还会清理已完成/已取消任务遗留的 `.shaul.part` 文件，以及 HLS
+`.shaul.hls.parts/` 和 DASH `.shaul.dash.parts/` 目录；统计目录大小时不跟随
+符号链接，并且永远不会删除目标文件。
 
 ## 文档
 

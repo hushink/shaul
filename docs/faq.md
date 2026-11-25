@@ -108,9 +108,9 @@ downloads are not cached. `shaul stats` reports entries/bytes and
   content cache.
 - `clean --finished` removes completed/cancelled/failed sidecars;
   `--completed`, `--cancelled` and `--failed` select individual states;
-  `--orphans` removes destination-relative `.shaul.part` files and HLS
-  `.shaul.hls.parts/` directories left by completed/cancelled tasks (unsafe
-  paths in a sidecar are ignored);
+  `--orphans` removes destination-relative `.shaul.part` files plus HLS
+  `.shaul.hls.parts/` and DASH `.shaul.dash.parts/` directories left by
+  completed/cancelled tasks (unsafe paths in a sidecar are ignored);
   `--cache` removes content-cache entries (it refuses a directory whose top
   level does not look like a content cache). With `--cache`, add
   `--cache-older-than 30d` and/or `--cache-max-size 50GiB` to prune instead of
@@ -169,11 +169,32 @@ persisted. Encrypted segments are staged as `.enc` and decrypted to the `.bin`
 files used for resume and concatenation. `#EXT-X-BYTERANGE` segments and init
 maps are supported, including implicit offsets; a server that ignores `Range`
 is handled by reading the full object and discarding the prefix. SAMPLE-AES,
-live playlists, DASH and alternate audio renditions are not supported yet.
+live playlists and alternate audio renditions are not supported yet.
 `--mirror` and the final-output content cache do not apply to HLS tasks.
 Completed segments live in `<output>.shaul.hls.parts/`; `shaul clean --orphans`
 removes that directory for completed or cancelled tasks, along with the
 concatenation `.part`.
+
+## Does shaul support DASH?
+
+Yes, through the optional `dash` feature (the CLI enables it). Point shaul at
+an HTTP(S) `.mpd` URL. Phase 1 accepts static (`type="static"`), single-period
+VOD manifests and selects the highest-bandwidth video representation; audio-only
+manifests fall back to the best audio representation. `--include`/`--exclude`
+globs match `id`, `mimeType`, `codecs`, `lang`, resolution or `bandwidth`.
+SegmentTemplate (constant duration, `endNumber` or SegmentTimeline),
+SegmentList and SegmentBase/BaseURL single-object representations are
+supported, including BaseURL inheritance and byte ranges. Initialization and media segments
+download concurrently through the shared HTTP stack and are concatenated into
+one `.mp4` or `.webm` file.
+
+DASH resumes at segment granularity using a manifest SHA-256, the
+representation id and the segment count. DRM (`ContentProtection`), live
+manifests, multiple periods, subtitles, alternate audio muxing, `sidx` parsing
+and ffmpeg remuxing are not supported yet. `--mirror` and the final-output
+content cache do not apply. Completed segments live in
+`<output>.shaul.dash.parts/`; `shaul clean --orphans` removes that directory
+for completed or cancelled tasks, along with the concatenation `.part`.
 
 ## Does BitTorrent seed after completion?
 

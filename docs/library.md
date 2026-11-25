@@ -2,8 +2,8 @@
 
 `shaul` embeds the same engine the CLI uses. You get segmented HTTP
 transfers, resume, verification/extraction finalizers, Hugging Face and
-ModelScope snapshots, HLS playlists, and (with the `bt` feature) BitTorrent,
-without going through the command line.
+ModelScope snapshots, HLS playlists, static DASH manifests, and (with the `bt`
+feature) BitTorrent, without going through the command line.
 
 The examples below are complete programs under
 [`crates/shaul/examples`](../crates/shaul/examples):
@@ -25,8 +25,8 @@ The examples below are complete programs under
 shaul = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
-# Optional: BitTorrent, FTP, HLS and Hugging Face Xet support.
-# shaul = { version = "1.2", features = ["bt", "ftp", "hls", "xet"] }
+# Optional: BitTorrent, FTP, HLS, DASH and Hugging Face Xet support.
+# shaul = { version = "1.2", features = ["bt", "dash", "ftp", "hls", "xet"] }
 ```
 
 The async API needs a Tokio runtime. The blocking facade
@@ -42,6 +42,8 @@ opens the sidecar task store:
   the tree API reports a `xetHash`)
 - FTP (only with the `ftp` feature; single-stream, no FTPS yet)
 - HLS (only with the `hls` feature; VOD playlists, one concatenated output)
+- DASH (only with the `dash` feature; static single-period manifests, one
+  concatenated output)
 - direct links as the fallback
 
 ```rust

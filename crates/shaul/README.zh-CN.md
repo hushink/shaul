@@ -6,16 +6,17 @@
 
 [English](README.md) | **简体中文**
 
-统一、可续传的下载引擎，支持 HTTP(S) 直链、HLS、Hugging Face、ModelScope、
-BitTorrent、FTP，以及可选的 Hugging Face Xet。
+统一、可续传的下载引擎，支持 HTTP(S) 直链、HLS、DASH、Hugging Face、
+ModelScope、BitTorrent、FTP，以及可选的 Hugging Face Xet。
 
 `shaul` 是门面 crate。它把 `parser → router → backend` 流水线组装起来：
 默认包含 [`shaul-core`](https://crates.io/crates/shaul-core)、
 [`shaul-http`](https://crates.io/crates/shaul-http)、
 [`shaul-hub`](https://crates.io/crates/shaul-hub)，并按 feature 组合
 [`shaul-bt`](https://crates.io/crates/shaul-bt)、
-[`shaul-ftp`](https://crates.io/crates/shaul-ftp) 和
-[`shaul-hls`](https://crates.io/crates/shaul-hls)。
+[`shaul-ftp`](https://crates.io/crates/shaul-ftp)、
+[`shaul-hls`](https://crates.io/crates/shaul-hls) 和
+[`shaul-dash`](https://crates.io/crates/shaul-dash)。
 
 ## 安装
 
@@ -25,18 +26,21 @@ shaul = "1.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 # 可选协议支持：
-# shaul = { version = "1.2", features = ["bt", "ftp", "hls", "xet"] }
+# shaul = { version = "1.2", features = ["bt", "dash", "ftp", "hls", "xet"] }
 ```
 
 | Feature | 增加的协议 |
 | --- | --- |
 | `bt` | BitTorrent、magnet 链接和 `.torrent` 文件 |
+| `dash` | 静态点播 DASH（`.mpd`）Representation，拼接成一个输出文件 |
 | `ftp` | 单流、可续传的 `ftp://` 下载 |
 | `hls` | 点播 HLS（`.m3u8`），拼接成一个输出文件 |
 | `xet` | Hugging Face Xet 下载，失败时回退 HTTP |
 
 HLS 支持 TS、单 init map 的 fMP4、AES-128 加密、`#EXT-X-BYTERANGE`、
-分片级续传与分片并发下载；暂不支持 SAMPLE-AES、直播列表和 DASH。
+分片级续传与分片并发下载；暂不支持 SAMPLE-AES 和直播列表。DASH 支持静态
+单 Period 清单、SegmentTemplate/SegmentList/SegmentBase 寻址和分片级续传；
+暂不支持 DRM、直播和多 Period 清单。
 
 ## 快速开始
 
@@ -628,6 +632,7 @@ fn attach(mut engine: shaul::DownloadEngine) -> shaul::DownloadEngine {
 - 校验后解压，解压器可插拔
 - Hugging Face 与 ModelScope 仓库，可选 provider 缓存
 - 对带 `xetHash` 的 Hugging Face 文件可选启用 Xet
+- 通过 `hls` feature 支持 HLS，通过 `dash` feature 支持静态 DASH 清单
 - 通过 `bt` feature 支持 BitTorrent、magnet 与 `.torrent`
 - 通过 `ftp` feature 支持单流 `ftp://` 下载，使用 `SIZE`/`MDTM`/`REST` 续传
 - 多文件并发下载

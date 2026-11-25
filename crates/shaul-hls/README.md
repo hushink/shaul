@@ -52,7 +52,7 @@ Not supported yet:
 
 - SAMPLE-AES encryption
 - Live playlists
-- DASH (`mpd`)
+- DASH (use the separate `shaul-dash` crate)
 - Alternate audio renditions and multi-track selection
 - ffmpeg remuxing
 - Content-addressed cache for the final output

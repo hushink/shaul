@@ -23,6 +23,8 @@ use std::sync::Arc;
 #[cfg(feature = "bt")]
 pub use shaul_bt::{BtBackend, TorrentParser};
 pub use shaul_core::*;
+#[cfg(feature = "dash")]
+pub use shaul_dash::{DashBackend, DashClient, DashParser};
 #[cfg(feature = "ftp")]
 pub use shaul_ftp::{FtpBackend, FtpParser};
 #[cfg(feature = "hls")]
@@ -34,12 +36,14 @@ pub use shaul_hub::{
 };
 
 /// Build the default router. BitTorrent (when the `bt` feature is enabled) is
-/// registered first, then Hub parsers/backends, then FTP and HLS (when
+/// registered first, then Hub parsers/backends, then FTP, HLS and DASH (when
 /// enabled), then the direct HTTP fallback.
 pub fn default_router(config: &Config) -> Result<Router> {
     let client = Arc::new(HubClient::new(config)?);
     #[cfg(feature = "hls")]
     let hls_client = Arc::new(HlsClient::new(config)?);
+    #[cfg(feature = "dash")]
+    let dash_client = Arc::new(DashClient::new(config)?);
     let mut parsers = ParserRegistry::new();
     #[cfg(feature = "bt")]
     parsers.register(Arc::new(TorrentParser));
@@ -49,6 +53,8 @@ pub fn default_router(config: &Config) -> Result<Router> {
     parsers.register(Arc::new(FtpParser));
     #[cfg(feature = "hls")]
     parsers.register(Arc::new(HlsParser::new(hls_client.clone())));
+    #[cfg(feature = "dash")]
+    parsers.register(Arc::new(DashParser::new(dash_client.clone())));
     parsers.register(shaul_core::parser_arc(DirectLinkParser));
 
     #[cfg(feature = "bt")]
@@ -66,10 +72,16 @@ pub fn default_router(config: &Config) -> Result<Router> {
         Some(Arc::new(HlsBackend::new(hls_client, http.clone())) as Arc<dyn DownloadBackend>);
     #[cfg(not(feature = "hls"))]
     let hls_backend: Option<Arc<dyn DownloadBackend>> = None;
+    #[cfg(feature = "dash")]
+    let dash_backend: Option<Arc<dyn DownloadBackend>> =
+        Some(Arc::new(DashBackend::new(dash_client, http.clone())) as Arc<dyn DownloadBackend>);
+    #[cfg(not(feature = "dash"))]
+    let dash_backend: Option<Arc<dyn DownloadBackend>> = None;
     let backends: Vec<Arc<dyn DownloadBackend>> = bt_backend
         .into_iter()
         .chain(ftp_backend)
         .chain(hls_backend)
+        .chain(dash_backend)
         .chain([
             Arc::new(HubBackend::with_http_and_xet(client, http.clone()))
                 as Arc<dyn DownloadBackend>,

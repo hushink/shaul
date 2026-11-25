@@ -6,16 +6,17 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A unified, resumable download engine for direct HTTP links, HLS, Hugging Face,
-ModelScope, BitTorrent, FTP and optional Hugging Face Xet.
+A unified, resumable download engine for direct HTTP links, HLS, DASH,
+Hugging Face, ModelScope, BitTorrent, FTP and optional Hugging Face Xet.
 
 `shaul` is the facade crate. It assembles the parser → router → backend
 pipeline from [`shaul-core`](https://crates.io/crates/shaul-core),
 [`shaul-http`](https://crates.io/crates/shaul-http),
 [`shaul-hub`](https://crates.io/crates/shaul-hub) and, when enabled,
 [`shaul-bt`](https://crates.io/crates/shaul-bt),
-[`shaul-ftp`](https://crates.io/crates/shaul-ftp) and
-[`shaul-hls`](https://crates.io/crates/shaul-hls).
+[`shaul-ftp`](https://crates.io/crates/shaul-ftp),
+[`shaul-hls`](https://crates.io/crates/shaul-hls) and
+[`shaul-dash`](https://crates.io/crates/shaul-dash).
 
 ## Install
 
@@ -25,19 +26,23 @@ shaul = "1.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 # Optional protocol support:
-# shaul = { version = "1.2", features = ["bt", "ftp", "hls", "xet"] }
+# shaul = { version = "1.2", features = ["bt", "dash", "ftp", "hls", "xet"] }
 ```
 
 | Feature | Adds |
 | --- | --- |
 | `bt` | BitTorrent, magnet links and `.torrent` files |
+| `dash` | Static VOD DASH (`.mpd`) representations, concatenated into one file |
 | `ftp` | Single-stream resumable `ftp://` downloads |
 | `hls` | VOD HLS (`.m3u8`) playlists, concatenated into one file |
 | `xet` | Hugging Face Xet downloads with HTTP fallback |
 
 HLS supports TS and single-init-map fMP4 playlists, AES-128 encryption,
 `#EXT-X-BYTERANGE`, segment-level resume and concurrent segment downloads.
-SAMPLE-AES, live playlists and DASH are not supported yet.
+SAMPLE-AES and live playlists are not supported yet. DASH supports static
+single-period manifests with SegmentTemplate, SegmentList or SegmentBase
+addressing and segment-level resume; DRM, live and multi-period manifests are
+not supported yet.
 
 ## Quick start
 
@@ -633,6 +638,8 @@ fn attach(mut engine: shaul::DownloadEngine) -> shaul::DownloadEngine {
 - Archive extraction after verification, with a pluggable extractor API
 - Hugging Face and ModelScope repositories with optional provider caches
 - Optional Xet downloads for Hugging Face files with `xetHash`
+- HLS playlists through the `hls` feature and static DASH manifests through
+  the `dash` feature
 - BitTorrent, magnet and `.torrent` support through the `bt` feature
 - Single-stream `ftp://` downloads with `SIZE`/`MDTM`/`REST` resume
 - Concurrent multi-file downloads

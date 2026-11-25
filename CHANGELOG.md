@@ -20,9 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(http,hls)* add exact byte-range downloads (`HttpBackend::download_range`)
   and support `#EXT-X-BYTERANGE` segments and init maps, including implicit
   offsets and a full-object fallback
+- *(dash)* add the optional `shaul-dash` crate and `dash` feature: static
+  single-period VOD `.mpd` manifests, highest-bandwidth representation
+  selection, SegmentTemplate/SegmentList/SegmentBase addressing, byte ranges,
+  concurrent segment downloads and segment-level resume
 - *(cli)* batch `pause`/`resume`/`cancel` with multiple ids or `--all`, plus
   `list --status` state filters
-- *(cli)* `clean --orphans` removes HLS segment temp directories for
+- *(cli)* `clean --orphans` removes HLS/DASH segment temp directories for
   completed/cancelled tasks, reporting their recursive size and skipping
   symlinked or unsafe paths
 

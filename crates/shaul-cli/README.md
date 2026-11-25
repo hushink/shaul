@@ -5,8 +5,8 @@
 **English** | [简体中文](README.zh-CN.md)
 
 Command-line interface for [shaul](https://github.com/hushink/shaul), a
-unified download engine for HTTP, Hugging Face, ModelScope, BitTorrent, FTP
-and optional Xet.
+unified download engine for HTTP, HLS, DASH, Hugging Face, ModelScope,
+BitTorrent, FTP and optional Xet.
 
 The crate installs a binary named `shaul`.
 
@@ -42,6 +42,10 @@ $ shaul download ftp://user:password@example.com/pub/file.bin
 # HLS: highest-bandwidth variant, concatenated into one file
 $ shaul download https://example.com/video/master.m3u8 --connections 8
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
+
+# DASH: highest-bandwidth video representation from a static VOD manifest
+$ shaul download https://example.com/video/manifest.mpd --connections 8
+$ shaul download https://example.com/video/manifest.mpd --include '*1080*'
 
 # Proxy and bandwidth limits
 $ shaul download https://example.com/file.bin \
@@ -84,9 +88,13 @@ tasks for resume; `--status` overrides the default.
 `list --status` accepts repeated state names.
 
 `--include` / `--exclude` also choose an HLS variant by `NAME`, `RESOLUTION`,
-`BANDWIDTH`, `CODECS` or URI. HLS supports VOD TS and single-init-map fMP4
-playlists, AES-128 encrypted segments, `#EXT-X-BYTERANGE` and segment-level
-resume. SAMPLE-AES, live playlists and DASH are not supported yet.
+`BANDWIDTH`, `CODECS` or URI, and a DASH Representation by `id`, `mimeType`,
+`codecs`, `lang`, resolution or `bandwidth`. HLS supports VOD TS and
+single-init-map fMP4 playlists, AES-128 encrypted segments,
+`#EXT-X-BYTERANGE` and segment-level resume. DASH supports static
+single-period manifests with SegmentTemplate, SegmentList or SegmentBase
+addressing and segment-level resume. SAMPLE-AES, live playlists, DRM and
+multi-period DASH are not supported yet.
 
 `--method`, `--data` and `--data-file` apply to direct HTTP(S) links only.
 `--data` implies `POST` when `--method` is not given. These requests are
@@ -116,9 +124,10 @@ being ignored. `shaul config set` edits the TOML document in place and keeps
 existing comments and formatting. `shaul doctor` also checks the official
 Hugging Face and ModelScope credential files. Verification failures are renamed
 to `<name>.shaul.failed`, and `clean --orphans` ignores unsafe paths recorded in
-a sidecar. It removes leftover `.shaul.part` files and HLS
-`.shaul.hls.parts/` directories for completed or cancelled tasks, does not
-follow symlinks while sizing them, and never deletes destination files.
+a sidecar. It removes leftover `.shaul.part` files plus HLS
+`.shaul.hls.parts/` and DASH `.shaul.dash.parts/` directories for completed or
+cancelled tasks, does not follow symlinks while sizing them, and never deletes
+destination files.
 
 ## Documentation
 

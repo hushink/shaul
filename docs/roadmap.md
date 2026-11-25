@@ -1,8 +1,8 @@
 # shaul 1.x 路线图
 
-- 更新日期：2026-11-19
-- 基线：1.2.1（运维闭环、通用内容缓存与可选 Xet 已发布）
-- 下一开发线：1.5 HLS 增量（DASH）；1.3 仍有本地 Xet CAS fixture。
+- 更新日期：2026-11-26
+- 基线：1.2.2（运维闭环、通用内容缓存与可选 Xet 已发布）
+- 下一开发线：1.5 流媒体加固（直播/交替音轨）；1.3 仍有本地 Xet CAS fixture。
 - 目标：在不破坏 1.0 兼容性的前提下，把 shaul 从“能下载”推进到“可长期运行、可嵌入、可扩展”的生产级下载引擎。
 
 ## 原则
@@ -24,7 +24,7 @@
 | **1.3** | Hub 差异化 | 可选 Xet 后端、缓存维护、CAS 增量维护 | Xet 已实现，fixture 待补 |
 | **1.3+** | HTTP 方法与队列 | 非 GET 请求、单请求语义、CLI 批量 pause/resume/cancel/list 过滤 | 已实现，待发布 |
 | **1.4** | 运维与观测 | OpenTelemetry / Prometheus 适配、残留 `.part` 扫描、磁盘预检 | 已实现（适配文档为主） |
-| **1.5** | 流媒体 | 可选 HLS 后端（点播 TS/fMP4、AES-128、BYTERANGE、分片续传） | 已实现；DASH 待后续 |
+| **1.5** | 流媒体 | 可选 HLS 与 DASH 后端（点播 TS/fMP4、AES-128、BYTERANGE、分片续传） | 已实现；直播/交替音轨待后续 |
 
 ---
 
@@ -253,7 +253,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ---
 
-## 1.5 HLS（AES-128/BYTERANGE 已实现）
+## 1.5 流媒体（HLS 与 DASH 已实现）
 
 - [x] 可选 crate `shaul-hls` + facade `hls` feature；CLI 默认启用。
 - [x] HTTP(S) `.m3u8`、master/media playlist、最高码率变体。
@@ -268,11 +268,16 @@ pub struct ExtractorFinalizer { /* registry */ }
       内存，加密分片先保存为 `.enc` 再解密为 `.bin`。
 - [x] `EXT-X-BYTERANGE` 分片和 init map，包括隐式偏移；HTTP 层新增
       `HttpBackend::download_range`，服务器忽略 `Range` 时回退完整对象。
-- [x] `clean --orphans` 清理已完成/已取消任务的 HLS 分片临时目录。
-- [ ] DASH、直播、交替音轨、ffmpeg 转封装。
+- [x] `clean --orphans` 清理已完成/已取消任务的 HLS/DASH 分片临时目录。
+- [x] 可选 crate `shaul-dash` + facade `dash` feature；CLI 默认启用。
+- [x] 静态单 Period 点播 MPD、最高码率视频 Representation、include/exclude
+      选择、SegmentTemplate/SegmentList/SegmentBase 寻址、BaseURL 继承、
+      字节范围与分片级续传。
+- [ ] 直播、交替音轨混流、ffmpeg 转封装；DASH 多 Period 和 DRM。
 - 设计记录见 [ADR 0013](adr/0013-hls-backend.md)、
-  [ADR 0014](adr/0014-hls-aes128.md) 和
-  [ADR 0015](adr/0015-hls-byterange.md)。
+  [ADR 0014](adr/0014-hls-aes128.md)、
+  [ADR 0015](adr/0015-hls-byterange.md) 和
+  [ADR 0016](adr/0016-dash-backend.md)。
 
 ## 扩展边界
 

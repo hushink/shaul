@@ -8,15 +8,16 @@
 
 [English](README.md) | **简体中文**
 
-可续传、可插拔的 Rust 下载引擎 —— 用一套 API 处理 HTTP(S)、HLS、
+可续传、可插拔的 Rust 下载引擎 —— 用一套 API 处理 HTTP(S)、HLS、DASH、
 Hugging Face、ModelScope、BitTorrent、FTP 与可选 Xet。
 
 shaul 把分片传输、安全续传、校验、解压、持久队列和可选内容寻址缓存组合在
 一组可替换组件之后。你可以把它作为库嵌入应用，也可以直接使用 `shaul` 命令。
 
 > [!NOTE]
-> CLI 默认启用 BitTorrent、FTP、HLS 与 Xet。库用户从默认 feature 开始，按需启用
-> `features = ["bt"]`、`["ftp"]`、`["hls"]` 和/或 `["xet"]`。
+> CLI 默认启用 BitTorrent、FTP、HLS、DASH 与 Xet。库用户从默认 feature 开始，
+> 按需启用 `features = ["bt"]`、`["ftp"]`、`["hls"]`、`["dash"]` 和/或
+> `["xet"]`。
 
 ## 为什么选择 shaul
 
@@ -71,10 +72,10 @@ shaul = "1.2"
 
 ```toml
 [dependencies]
-shaul = { version = "1.2", features = ["bt", "ftp", "hls", "xet"] }
+shaul = { version = "1.2", features = ["bt", "dash", "ftp", "hls", "xet"] }
 ```
 
-`shaul` 默认不启用任何可选协议；`bt`、`ftp` 与 `xet` 都需显式开启。
+`shaul` 默认不启用任何可选协议；所有协议 feature 都需显式开启。
 
 ## 快速开始
 
@@ -93,6 +94,10 @@ $ shaul download https://example.com/api/export \
 # HLS：默认最高码率，分片拼接成一个文件
 $ shaul download https://example.com/video/master.m3u8 --connections 8
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
+
+# DASH：从静态点播 MPD 中选择最高码率视频 Representation
+$ shaul download https://example.com/video/manifest.mpd --connections 8
+$ shaul download https://example.com/video/manifest.mpd --include '*1080*'
 
 # Hugging Face 仓库快照
 $ export HF_TOKEN=hf_...
@@ -171,6 +176,7 @@ async fn main() -> shaul::Result<()> {
 | --- | --- |
 | HTTP(S) 直链 | `https://example.com/file.bin` |
 | HLS | `https://example.com/video/master.m3u8` |
+| DASH | `https://example.com/video/manifest.mpd` |
 | Hugging Face | `hf://org/repo`、`hf://datasets/org/repo`、仓库 URL |
 | ModelScope | `ms://org/repo`、`ms://datasets/org/repo`、仓库 URL |
 | BitTorrent | 磁力链、40 位 v1 info hash、本地 `.torrent` |
@@ -179,8 +185,8 @@ async fn main() -> shaul::Result<()> {
 
 Hugging Face / ModelScope 链接支持 `--revision`、`--include` 与
 `--exclude`；`--revision` 会覆盖 URL 中携带的 revision。仓库 HTTPS URL 也接受
-`/tree/<rev>`、`/blob/<rev>/<path>` 和 `/resolve/<rev>/<path>` 形式。HLS 链接
-用 `--include`/`--exclude` 选择变体。
+`/tree/<rev>`、`/blob/<rev>/<path>` 和 `/resolve/<rev>/<path>` 形式。HLS 与
+DASH 链接用 `--include`/`--exclude` 选择变体或 Representation。
 
 ## 核心能力
 
@@ -207,8 +213,22 @@ Hugging Face / ModelScope 链接支持 `--revision`、`--include` 与
 - 支持 `#EXT-X-BYTERANGE` 分片和 init map，包括隐式偏移。
 - 分片级续传：用 playlist 的 SHA-256 校验 `<output>.shaul.hls.parts/` 中已完成
   的分片。
-- 支持 TS，以及带单个 `#EXT-X-MAP` 的 fMP4。暂不支持 SAMPLE-AES、直播列表
-  和 DASH。
+- 支持 TS，以及带单个 `#EXT-X-MAP` 的 fMP4。暂不支持 SAMPLE-AES 和直播列表。
+
+### DASH
+
+- HTTP(S) `.mpd` 静态（`type="static"`）单 Period 清单。默认选择最高码率的
+  视频 Representation；可用 `--include`/`--exclude` glob 匹配 `id`、
+  `mimeType`、`codecs`、`lang`、分辨率和 `bandwidth`。
+- 支持 `SegmentTemplate`（`$Number$`、`$Time$`、`$RepresentationID$`、
+  `$Bandwidth$`、constant duration、`endNumber` 或 `SegmentTimeline`）、
+  `SegmentList`，以及 `SegmentBase`/BaseURL 单对象 Representation。
+- BaseURL 沿 MPD → Period → AdaptationSet → Representation 继承；字节范围复用
+  精确 `Range` HTTP 路径。
+- init 与媒体分片通过共享 HTTP 栈并发下载，拼接为一个 `.mp4` 或 `.webm`
+  文件。分片级续传由 MPD SHA-256、Representation id 和分片数量共同保护。
+- 暂不支持 DRM（`ContentProtection`）、直播/动态清单、多 Period、字幕、
+  交替音轨混流和转封装。
 
 ### 校验与后处理
 
@@ -328,9 +348,10 @@ provider token 在运行时解析，不会写入任务 sidecar。Unix 上 sideca
   占位符，`--json` 输出会对请求体脱敏。
 - 续传默认开启。后端通过 `BackendCapabilities` 声明能力；不支持续传时，
   引擎丢弃旧 manifest 并从零开始。FTP 服务器拒绝 `REST` 时会自动从零重试。
-- HLS 任务只产生一个输出文件。分片写入 `<output>.shaul.hls.parts/`，通过
-  `<output>.shaul.part` 拼接，成功后删除临时目录。续传是分片级的；playlist
-  指纹变化会从零开始。`--mirror` 和最终输出的内容寻址缓存不适用于 HLS。
+- HLS 和 DASH 任务只产生一个输出文件。分片写入 `<output>.shaul.hls.parts/`
+  或 `<output>.shaul.dash.parts/`，通过 `<output>.shaul.part` 拼接，成功后
+  删除临时目录。续传是分片级的；playlist 或清单指纹变化会从零开始。
+  `--mirror` 和最终输出的内容寻址缓存不适用于 HLS/DASH。
   跨源 playlist/密钥/分片 URL 默认剥离敏感请求头，除非开启
   `allow_cross_origin_auth`。AES-128 密钥在运行时获取且不落盘；加密分片
   先保存为 `.enc`，解密后的 `.bin` 用于续传和拼接。BYTERANGE 分片使用精确
@@ -340,8 +361,8 @@ provider token 在运行时解析，不会写入任务 sidecar。Unix 上 sideca
 - 解压默认关闭。先校验压缩包，再解压到临时目录，最后原子 rename。
   `--rename` 会为已存在的解压目标加后缀；`--no-delete-archive` 可覆盖配置中的
   删除行为。
-- `--output` 用于单文件 HTTP/FTP/HLS 直链；Hub 仓库和 BitTorrent 请用 `--dir`，
-  这两个后端会拒绝 `--output`。
+- `--output` 用于单文件 HTTP/FTP/HLS/DASH 直链；Hub 仓库和 BitTorrent 请用
+  `--dir`，这两个后端会拒绝 `--output`。
 - BitTorrent 只做 leech：下载期间响应上传，完成后暂停，不常驻做种。目标位置
   已有文件时默认拒绝覆盖，需显式 `--force`；正常情况下续传由 librqbit 的
   持久化状态负责。

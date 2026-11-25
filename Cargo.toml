@@ -8,6 +8,7 @@ async-trait = "0.1"
 shaul = { version = "1.2.2", path = "crates/shaul" }
 shaul-bt = { version = "1.2.2", path = "crates/shaul-bt" }
 shaul-core = { version = "1.2.2", path = "crates/shaul-core" }
+shaul-dash = { version = "1.2.2", path = "crates/shaul-dash" }
 shaul-ftp = { version = "1.2.2", path = "crates/shaul-ftp" }
 shaul-hls = { version = "1.2.2", path = "crates/shaul-hls" }
 shaul-hub = { version = "1.2.2", path = "crates/shaul-hub" }
@@ -32,6 +33,7 @@ indicatif = "0.18"
 librqbit = { version = "9.1", default-features = false, features = ["rust-tls"] }
 md-5 = "0.11"
 percent-encoding = "2"
+quick-xml = "0.41"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "socks"] }
 ruzstd = { version = "0.9", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }

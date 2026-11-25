@@ -9,7 +9,7 @@
 **English** | [简体中文](README.zh-CN.md)
 
 A resumable, pluggable download engine for Rust — one API for HTTP(S), HLS,
-Hugging Face, ModelScope, BitTorrent, FTP and optional Xet.
+DASH, Hugging Face, ModelScope, BitTorrent, FTP and optional Xet.
 
 shaul combines segmented transfers, safe resume, checksum verification,
 archive extraction, a persistent queue and an optional content-addressed cache
@@ -17,16 +17,16 @@ behind a small set of replaceable components. Use it as a library or through
 the `shaul` command.
 
 > [!NOTE]
-> The CLI enables BitTorrent, FTP, HLS and Xet. Library users start with the
-> default feature set and opt in with `features = ["bt"]`, `["ftp"]`, `["hls"]`
-> and/or `["xet"]`.
+> The CLI enables BitTorrent, FTP, HLS, DASH and Xet. Library users start with
+> the default feature set and opt in with `features = ["bt"]`, `["ftp"]`,
+> `["hls"]`, `["dash"]` and/or `["xet"]`.
 
 ## Why shaul
 
 - **One download model for many protocols.** A `LinkParser` turns input into a
   protocol-agnostic `Resource`; a `Router` selects the first backend that can
-  handle it; a `DownloadEngine` manages tasks and persistence. HLS segments
-  stay inside the backend, so the task still produces one output file.
+  handle it; a `DownloadEngine` manages tasks and persistence. HLS and DASH
+  segments stay inside the backend, so the task still produces one output file.
 - **Resume that checks its assumptions.** Sidecar checkpoints record byte
   ranges, checksums and validators. A changed `ETag`, `Last-Modified` or size
   restarts the file safely; servers that ignore `Range` fall back to one stream.
@@ -77,10 +77,10 @@ Optional protocol support:
 
 ```toml
 [dependencies]
-shaul = { version = "1.2", features = ["bt", "ftp", "hls", "xet"] }
+shaul = { version = "1.2", features = ["bt", "dash", "ftp", "hls", "xet"] }
 ```
 
-`shaul` has an empty default feature set. `bt`, `ftp` and `xet` are opt-in.
+`shaul` has an empty default feature set; every protocol feature is opt-in.
 
 ## Quick start
 
@@ -99,6 +99,10 @@ $ shaul download https://example.com/api/export \
 # HLS: highest-bandwidth variant, segments concatenated into one file
 $ shaul download https://example.com/video/master.m3u8 --connections 8
 $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
+
+# DASH: highest-bandwidth video representation from a static VOD manifest
+$ shaul download https://example.com/video/manifest.mpd --connections 8
+$ shaul download https://example.com/video/manifest.mpd --include '*1080*'
 
 # Hugging Face repository snapshot
 $ export HF_TOKEN=hf_...
@@ -178,6 +182,7 @@ runtime.
 | --- | --- |
 | Direct HTTP(S) | `https://example.com/file.bin` |
 | HLS | `https://example.com/video/master.m3u8` |
+| DASH | `https://example.com/video/manifest.mpd` |
 | Hugging Face | `hf://org/repo`, `hf://datasets/org/repo`, repository URLs |
 | ModelScope | `ms://org/repo`, `ms://datasets/org/repo`, repository URLs |
 | BitTorrent | magnet links, 40-character v1 info hashes, local `.torrent` files |
@@ -187,8 +192,8 @@ runtime.
 Hugging Face and ModelScope links accept `--revision`, `--include` and
 `--exclude`; `--revision` overrides a revision embedded in the URL. Repository
 HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
-`/resolve/<rev>/<path>` path styles. HLS links use `--include`/`--exclude` to
-select a variant.
+`/resolve/<rev>/<path>` path styles. HLS and DASH links use
+`--include`/`--exclude` to select a variant or representation.
 
 ## Features
 
@@ -220,8 +225,26 @@ select a variant.
 - `#EXT-X-BYTERANGE` segments and init maps, including implicit offsets.
 - Segment-level resume: a playlist SHA-256 guards the completed segment files
   in `<output>.shaul.hls.parts/`.
-- TS output and fMP4 playlists with a single `#EXT-X-MAP`. SAMPLE-AES, live
-  playlists and DASH are not supported yet.
+- TS output and fMP4 playlists with a single `#EXT-X-MAP`. SAMPLE-AES and live
+  playlists are not supported yet.
+
+### DASH
+
+- HTTP(S) `.mpd` manifests with `type="static"` and a single Period. The
+  highest-bandwidth video Representation is selected by default; repeat
+  `--include`/`--exclude` with globs matching `id`, `mimeType`, `codecs`,
+  `lang`, resolution or `bandwidth` to choose another.
+- `SegmentTemplate` (`$Number$`, `$Time$`, `$RepresentationID$`,
+  `$Bandwidth$`, constant duration, `endNumber` or `SegmentTimeline`),
+  `SegmentList`, and `SegmentBase`/BaseURL single-object representations.
+- BaseURL inheritance across MPD, Period, AdaptationSet and Representation;
+  byte ranges reuse the exact `Range` HTTP path.
+- Initialization and media segments download concurrently through the shared
+  HTTP stack and are concatenated into one `.mp4` or `.webm` file.
+  Segment-level resume is guarded by an MPD SHA-256, the representation id and
+  the segment count.
+- DRM (`ContentProtection`), live/dynamic manifests, multiple Periods,
+  subtitles, alternate audio muxing and remuxing are not supported yet.
 
 ### Integrity and post-processing
 
@@ -353,12 +376,13 @@ redacts sensitive headers and removes query strings from HTTP task views.
   `BackendCapabilities`; when it cannot resume, the engine discards the saved
   manifest and starts from zero. FTP restarts from zero when the server
   rejects `REST`.
-- HLS tasks produce one output file. Segments are written under
-  `<output>.shaul.hls.parts/`, concatenated through `<output>.shaul.part`, and
-  the temporary directory is removed on success. Resume is segment-level; a
-  changed playlist fingerprint restarts. `--mirror` and the final-output
-  content cache do not apply. Cross-origin playlist/key/segment URLs strip
-  sensitive headers unless `allow_cross_origin_auth` is set. AES-128 keys are
+- HLS and DASH tasks produce one output file. Segments are written under
+  `<output>.shaul.hls.parts/` or `<output>.shaul.dash.parts/`, concatenated
+  through `<output>.shaul.part`, and the temporary directory is removed on
+  success. Resume is segment-level; a changed playlist or manifest fingerprint
+  restarts. `--mirror` and the final-output content cache do not apply.
+  Cross-origin playlist/key/segment URLs strip sensitive headers unless
+  `allow_cross_origin_auth` is set. HLS AES-128 keys are
   fetched at run time and are never persisted; encrypted segments are staged
   as `.enc` and decrypted to `.bin` files used for resume and concatenation.
   Byte-range segments use exact `Range` requests, with a full-object fallback
@@ -370,8 +394,8 @@ redacts sensitive headers and removes query strings from HTTP task views.
   a temporary directory and renamed into place. `--rename` suffixes an
   existing extraction target; `--no-delete-archive` keeps the archive even when
   the config deletes archives.
-- `--output` is for single-file direct HTTP/FTP/HLS links. Use `--dir` for Hub
-  repositories and BitTorrent; those backends reject `--output`.
+- `--output` is for single-file direct HTTP/FTP/HLS/DASH links. Use `--dir`
+  for Hub repositories and BitTorrent; those backends reject `--output`.
 - BitTorrent is leech-only: uploads are served while downloading, then the
   torrent is paused after completion. Existing destination files are refused
   unless `--force` is passed; librqbit's persisted state normally handles

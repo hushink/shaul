@@ -10,8 +10,8 @@ use shaul::{
 
 use crate::args::CleanArgs;
 
-const HLS_TEMP_DIR_KEY: &str = "hls.temp_dir";
-const HLS_TEMP_SUFFIX: &str = ".shaul.hls.parts";
+const STREAM_TEMP_DIR_KEYS: [&str; 2] = ["hls.temp_dir", "dash.temp_dir"];
+const STREAM_TEMP_SUFFIXES: [&str; 2] = [".shaul.hls.parts", ".shaul.dash.parts"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -276,10 +276,12 @@ pub async fn command_clean(config: &Config, args: CleanArgs, json: bool) -> Resu
                     if let Some(path) = safe_resume_part(&task.destination, &file.part_path) {
                         orphan_parts.insert(path);
                     }
-                    if let Some(relative) = file.metadata.get(HLS_TEMP_DIR_KEY)
-                        && let Some(path) = safe_hls_temp_dir(&task.destination, relative)
-                    {
-                        orphan_dirs.insert(path);
+                    for key in STREAM_TEMP_DIR_KEYS {
+                        if let Some(relative) = file.metadata.get(key)
+                            && let Some(path) = safe_stream_temp_dir(&task.destination, relative)
+                        {
+                            orphan_dirs.insert(path);
+                        }
                     }
                 }
             }
@@ -592,11 +594,14 @@ fn safe_resume_part(destination: &Path, relative: &str) -> Option<PathBuf> {
     name.ends_with(".shaul.part").then_some(path)
 }
 
-fn safe_hls_temp_dir(destination: &Path, relative: &str) -> Option<PathBuf> {
+fn safe_stream_temp_dir(destination: &Path, relative: &str) -> Option<PathBuf> {
     validate_relative_path(relative).ok()?;
     let path = destination.join(relative);
     let name = path.file_name()?.to_str()?;
-    name.ends_with(HLS_TEMP_SUFFIX).then_some(path)
+    STREAM_TEMP_SUFFIXES
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+        .then_some(path)
 }
 
 async fn directory_size(root: &Path) -> u64 {
@@ -642,12 +647,13 @@ mod tests {
     }
 
     #[test]
-    fn hls_temp_dirs_must_be_relative_markers() {
+    fn stream_temp_dirs_must_be_relative_markers() {
         let destination = Path::new("task");
-        assert!(safe_hls_temp_dir(destination, "video.ts.shaul.hls.parts").is_some());
-        assert!(safe_hls_temp_dir(destination, "nested/video.ts.shaul.hls.parts").is_some());
-        assert!(safe_hls_temp_dir(destination, "../video.ts.shaul.hls.parts").is_none());
-        assert!(safe_hls_temp_dir(destination, "C:/video.ts.shaul.hls.parts").is_none());
-        assert!(safe_hls_temp_dir(destination, "video.ts").is_none());
+        assert!(safe_stream_temp_dir(destination, "video.ts.shaul.hls.parts").is_some());
+        assert!(safe_stream_temp_dir(destination, "video.mp4.shaul.dash.parts").is_some());
+        assert!(safe_stream_temp_dir(destination, "nested/video.ts.shaul.hls.parts").is_some());
+        assert!(safe_stream_temp_dir(destination, "../video.ts.shaul.hls.parts").is_none());
+        assert!(safe_stream_temp_dir(destination, "C:/video.ts.shaul.hls.parts").is_none());
+        assert!(safe_stream_temp_dir(destination, "video.ts").is_none());
     }
 }
