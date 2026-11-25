@@ -17,6 +17,8 @@ multi-protocol download engine.
 - `If-Range`, `416` and `200 + Content-Range` handling
 - Single-stream fallback when a server ignores `Range`
 - Manual redirect handling with cross-origin credential stripping
+- Non-GET requests (`POST`/`PUT`/`PATCH`, ...) with an optional body; sent once
+  without segmentation, resume or mirrors
 - Custom headers and bearer, basic or header authentication
 - HTTP/HTTPS/SOCKS5 proxy, global/per-host/per-task bandwidth limits and
   active request budgets

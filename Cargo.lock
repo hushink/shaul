@@ -3471,6 +3471,7 @@ dependencies = [
  "shaul-bt",
  "shaul-core",
  "shaul-ftp",
+ "shaul-hls",
  "shaul-http",
  "shaul-hub",
  "tar",
@@ -3560,6 +3561,29 @@ dependencies = [
  "percent-encoding",
  "shaul-core",
  "suppaftp",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "shaul-hls"
+version = "1.2.2"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "futures-util",
+ "globset",
+ "hex",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shaul-core",
+ "shaul-http",
  "tempfile",
  "tokio",
  "tokio-util",

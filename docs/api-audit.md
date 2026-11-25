@@ -4,7 +4,8 @@
 - 基线：`0.3.0`（commit `9e7226f`）
 - 目标：`1.0.0` 的公开 API 稳定性契约
 - 状态：`1.0.0` 于 2026-11-18 发布，`1.1.0`、`1.2.0` 于 2026-11-19 发布，`1.2.1` 于 2026-11-21 发布到 crates.io；后续按本文的 semver 规则维护
-- 范围：`shaul-core`、`shaul-http`、`shaul-hub`、`shaul-bt`、`shaul-ftp`、`shaul`、`shaul-cli`
+- 范围：`shaul-core`、`shaul-http`、`shaul-hub`、`shaul-bt`、`shaul-ftp`、
+  `shaul-hls`、`shaul`、`shaul-cli`
 
 本文只记录**对外承诺**和**已知风险**，不重复 README 的功能说明。CLI 参数与
 `config.toml` 的兼容性也在承诺范围内，但以行为兼容为主，不承诺内部字段顺序。
@@ -18,6 +19,7 @@
 | `shaul-hub` | `HubBackend`、`HubClient`、`HubEntry`、两个 parser、默认 router | `cache` 已改为私有 |
 | `shaul-bt` | `BtBackend`、`TorrentParser`、默认 router | 不泄漏 `librqbit` 类型 |
 | `shaul-ftp` | `FtpBackend`、`FtpParser`、默认 router | 不泄漏 `suppaftp` 类型 |
+| `shaul-hls` | `HlsBackend`、`HlsClient`、`HlsParser`、playlist 类型 | 不泄漏 `reqwest` 类型；可选 feature |
 | `shaul` | 重新导出上述稳定项 + `default_engine`/`default_blocking_engine`/`default_router`/`BlockingEngine`/`CancellationToken` | `bt`、`ftp` 为可选 feature |
 | `shaul-cli` | `shaul` 二进制、命令、配置键、JSON 事件输出 | 进程边界，不是 Rust API |
 
@@ -95,8 +97,8 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      避免把内部 helper 变成 1.0 承诺。
 6. **feature 边界**
    - `shaul` 的默认 features 为空；`bt` 才引入 `shaul-bt`，`ftp` 才引入
-     `shaul-ftp`，`xet` 才引入 `shaul-hub/xet` 与 `hf-xet`。增加 feature
-     是 minor 变更，删除或改变默认值是 major 变更。
+     `shaul-ftp`，`hls` 才引入 `shaul-hls`，`xet` 才引入 `shaul-hub/xet`
+     与 `hf-xet`。增加 feature 是 minor 变更，删除或改变默认值是 major 变更。
 7. **跨平台 CI**
    - `.github/workflows/ci.yml` 覆盖 Linux/Windows/macOS 测试、rustfmt、
      clippy、rustdoc、feature 组合、release build 与 MSRV 1.92。
@@ -133,6 +135,13 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      提供兼容镜像回退。默认均为关闭/未设置，保持 1.0 行为。
      `BlockingEngine` 同步补齐
      `status`/`pause`/`resume`/`cancel`/`run_pending`/`requeue_stale`。
+   - `RequestOptions.method` / `RequestOptions.body` 为直接 HTTP(S) 下载提供
+     非 GET 方法和请求体；这类任务按单请求执行（不分段、不续传、不使用镜像，
+     `POST`/`PATCH` 不自动重试）。Hub、FTP、BitTorrent 拒绝这两个字段。
+   - CLI `pause`/`resume`/`cancel` 接受多个 id 或 `--all`；`--all` 对
+     pause/cancel 默认选择 pending/running/paused，对 resume 默认选择
+     paused/failed，`--status` 可覆盖。`list --status` 可重复按状态过滤。
+     单 id 的旧用法保持兼容。
    - 本能力遵循“库与 CLI 尽量对齐”：库通过公开配置/任务字段获得同等能力，
      CLI 额外负责从用户配置、环境变量和 flags 填充这些字段。
    - `shaul-ftp` 是可选 crate：`FtpParser`/`FtpBackend` 通过 `ftp` feature
@@ -141,6 +150,10 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
    - `shaul` 的 `xet` feature 启用 `shaul-hub/xet`，由 Hub 后端在树 API
      返回 `xetHash` 时使用 `hf-xet`（Apache-2.0）下载；失败回退 HTTP。
      `hf-xet` 类型不泄漏到 `shaul-core`，默认 feature 仍为空。
+   - `shaul` 的 `hls` feature 启用 `shaul-hls`：`HlsParser` 解析 HTTP(S)
+     `.m3u8`，`HlsBackend` 下载分片并拼接为一个文件。首期只支持点播 TS 和单
+     init map 的 fMP4；AES-128、`EXT-X-BYTERANGE`、直播和 DASH 暂不支持，
+     后续作为增量。`reqwest` 类型不泄漏到 `shaul-core`。
    - `Task.priority` / `TaskOptions.priority` 控制队列顺序：`run_pending`
      按高优先级、创建时间、任务 id 依次排序；默认优先级为 0。
    - `EventKind::Retry` 和 `metrics::RETRIES` 暴露重试尝试；指数 backoff

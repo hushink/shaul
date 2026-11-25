@@ -26,6 +26,8 @@ Linux（x86_64/aarch64）、macOS（x86_64/aarch64）与 Windows（x86_64）的�
 $ shaul download https://example.com/file.tar.gz
 $ shaul download https://example.com/file.bin --connections 8 \
       --checksum sha256:<hex>
+$ shaul download https://example.com/api/export --method POST \
+      --data '{"id":42}' -H 'Content-Type: application/json'
 
 # Hugging Face 与 ModelScope
 $ shaul download hf://org/repo --revision main --include '*.safetensors' --cache
@@ -36,6 +38,10 @@ $ shaul download 'magnet:?xt=urn:btih:<info-hash>'
 $ shaul download ./example.torrent --include '*.mkv' --dir ./media
 $ shaul download ftp://user:password@example.com/pub/file.bin
 
+# HLS：最高码率变体，拼接成一个文件
+$ shaul download https://example.com/video/master.m3u8 --connections 8
+$ shaul download https://example.com/video/master.m3u8 --include '*1080*'
+
 # 代理与带宽限制
 $ shaul download https://example.com/file.bin \
       --proxy socks5://127.0.0.1:1080 \
@@ -44,11 +50,13 @@ $ shaul download https://example.com/file.bin \
 # 持久队列
 $ shaul add --input-file links.txt
 $ shaul run --limit 50MiB
-$ shaul list
+$ shaul list --status pending
 $ shaul status <id-or-suffix>
-$ shaul pause <id>     # 运行中的 worker 约 500ms 内感知
-$ shaul resume <id>
-$ shaul cancel <id>
+$ shaul pause <id> <id>     # 一个或多个 id
+$ shaul pause --all         # pending、running、paused
+$ shaul resume --all        # paused、failed
+$ shaul cancel --all        # pending、running、paused
+$ shaul resume <id>         # 运行中的 worker 约 500ms 内感知
 
 # 诊断与维护
 $ shaul info <link>
@@ -62,11 +70,26 @@ $ shaul completions bash
 常用参数：`--dir`、`--output`、`--checksum`、`--verify/--no-verify`、
 `--extract/--no-extract`、`--extract-dir`、`--delete-archive`、
 `--no-delete-archive`、`--header`、
-`--header-file`、`--bearer-token`、`--basic`、`--revision`、`--include`、
+`--header-file`、`--bearer-token`、`--basic`、`--method`、`--data`、
+`--data-file`、`--revision`、`--include`、
 `--exclude`、`--cache/--no-cache`、`--content-cache/--no-content-cache`、
 `--file-jobs`、`--mirror`、`--priority`、`--global-connections`、
 `--per-host-active`、`--per-host-limit`、`--json`、`--force`、`--overwrite`
 与 `--rename`。
+
+`pause` / `resume` / `cancel` 支持多个 id 或 `--all`。`--all` 对 pause 和
+cancel 默认选择 pending/running/paused，对 resume 默认选择 paused/failed；
+`--status` 可覆盖默认过滤。`list --status` 可重复指定状态。
+
+`--include` / `--exclude` 也可用于按 `NAME`、`RESOLUTION`、`BANDWIDTH`、
+`CODECS` 或 URI 选择 HLS 变体。HLS 首期支持点播 TS 与单 init map 的 fMP4；
+暂不支持 AES-128、`#EXT-X-BYTERANGE`、直播列表和 DASH。
+
+`--method`、`--data`、`--data-file` 只适用于直接 HTTP(S) 链接。未指定
+`--method` 时，`--data` 隐含 `POST`。这类请求是单请求语义：不分片、不续传、
+不使用镜像，`POST`/`PATCH` 不会自动重试。请求体支持 `${env:NAME}` 占位符，
+并且不会出现在 `--json` 输出中。`--data-file` 在命令执行时读取，内容会像
+`--data` 一样写入任务 sidecar。
 
 `shaul run --jobs N` 会并发处理任务。`shaul download --limit` 与
 `shaul add --limit` 限制单个任务；`shaul run --limit` 限制 worker 的全局

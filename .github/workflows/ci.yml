@@ -95,6 +95,7 @@ jobs:
       - run: cargo test -p shaul --no-default-features --locked
       - run: cargo check -p shaul --features bt --locked
       - run: cargo check -p shaul --features ftp --locked
+      - run: cargo check -p shaul --features hls --locked
       - run: cargo check -p shaul --features xet --locked
       - run: cargo check -p shaul --all-features --locked
 

@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -404,6 +405,83 @@ fn add_list_status_and_cancel_roundtrip() {
 }
 
 #[test]
+fn batch_pause_resume_cancel_and_list_filters() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let config = path.to_str().unwrap();
+
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "add",
+        "https://example.com/a.bin",
+        "https://example.com/b.bin",
+        "https://example.com/c.bin",
+    ]));
+    let tasks = json_stdout(&output);
+    let ids: Vec<String> = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids.len(), 3);
+
+    let output = run(shaul().args(["--config", config, "--json", "list", "--status", "pending"]));
+    assert_eq!(json_stdout(&output).as_array().unwrap().len(), 3);
+
+    run(shaul().args(["--config", config, "pause", &ids[0], &ids[1]]));
+    let output = run(shaul().args(["--config", config, "--json", "list", "--status", "paused"]));
+    assert_eq!(json_stdout(&output).as_array().unwrap().len(), 2);
+
+    run(shaul().args(["--config", config, "pause", "--all", "--status", "pending"]));
+    let output = run(shaul().args(["--config", config, "--json", "list", "--status", "paused"]));
+    assert_eq!(json_stdout(&output).as_array().unwrap().len(), 3);
+
+    run(shaul().args(["--config", config, "resume", "--all", "--status", "paused"]));
+    let output = run(shaul().args(["--config", config, "--json", "list", "--status", "pending"]));
+    assert_eq!(json_stdout(&output).as_array().unwrap().len(), 3);
+
+    run(shaul().args(["--config", config, "cancel", "--all"]));
+    let output = run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "list",
+        "--status",
+        "cancelled",
+        "--status",
+        "pending",
+    ]));
+    assert_eq!(json_stdout(&output).as_array().unwrap().len(), 3);
+
+    let output = run(shaul().args(["--config", config, "cancel", "--all"]));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("no matching tasks"),
+        "stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let output = shaul()
+        .args(["--config", config, "list", "--status", "bogus"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown task state"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = shaul()
+        .args(["--config", config, "pause", "--all", &ids[0]])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+}
+
+#[test]
 fn json_output_redacts_auth_and_query_strings() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(&dir, "");
@@ -750,6 +828,194 @@ fn download_runs_through_the_cli() {
 }
 
 #[test]
+fn hls_download_runs_through_the_cli() {
+    let (url, _server) = spawn_hls_server();
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let output_path = dir.path().join("downloads").join("master.ts");
+
+    run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "download",
+        &url,
+        "--connections",
+        "2",
+    ]));
+
+    assert_eq!(fs::read(&output_path).unwrap(), b"AAAABBBB".to_vec());
+}
+
+#[test]
+fn post_download_sends_method_and_body() {
+    let data: Vec<u8> = (0..32 * 1024).map(|index| (index % 251) as u8).collect();
+    let (url, requests) = spawn_method_server(data.clone());
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let output_path = dir.path().join("posted.bin");
+
+    run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "download",
+        &url,
+        "--method",
+        "POST",
+        "--data",
+        "{\"id\":42}",
+        "--header",
+        "Content-Type: application/json",
+        "--output",
+        output_path.to_str().unwrap(),
+    ]));
+
+    assert_eq!(fs::read(&output_path).unwrap(), data);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, "POST");
+    assert_eq!(requests[0].1, b"{\"id\":42}");
+}
+
+#[test]
+fn data_implies_post() {
+    let data: Vec<u8> = (0..16 * 1024).map(|index| (index % 239) as u8).collect();
+    let (url, requests) = spawn_method_server(data.clone());
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let output_path = dir.path().join("posted.bin");
+
+    run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "download",
+        &url,
+        "--data",
+        "payload",
+        "--output",
+        output_path.to_str().unwrap(),
+    ]));
+
+    assert_eq!(fs::read(&output_path).unwrap(), data);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, "POST");
+    assert_eq!(requests[0].1, b"payload");
+}
+
+#[test]
+fn data_file_sends_post_body() {
+    let data: Vec<u8> = (0..16 * 1024).map(|index| (index % 227) as u8).collect();
+    let (url, requests) = spawn_method_server(data.clone());
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let body_path = dir.path().join("body.json");
+    fs::write(&body_path, "{\"from\":\"file\"}").unwrap();
+    let output_path = dir.path().join("posted.bin");
+
+    run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "download",
+        &url,
+        "--method",
+        "PATCH",
+        "--data-file",
+        body_path.to_str().unwrap(),
+        "--output",
+        output_path.to_str().unwrap(),
+    ]));
+
+    assert_eq!(fs::read(&output_path).unwrap(), data);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, "PATCH");
+    assert_eq!(requests[0].1, b"{\"from\":\"file\"}");
+}
+
+#[test]
+fn queued_post_task_keeps_method_and_body() {
+    let data: Vec<u8> = (0..16 * 1024).map(|index| (index % 223) as u8).collect();
+    let (url, requests) = spawn_method_server(data.clone());
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+    let output_path = dir.path().join("queued-post.bin");
+    let config = path.to_str().unwrap();
+
+    run(shaul().args([
+        "--config",
+        config,
+        "--json",
+        "add",
+        &url,
+        "--method",
+        "POST",
+        "--data",
+        "queued-body",
+        "--output",
+        output_path.to_str().unwrap(),
+    ]));
+    run(shaul().args(["--config", config, "run", "--once"]));
+
+    assert_eq!(fs::read(&output_path).unwrap(), data);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, "POST");
+    assert_eq!(requests[0].1, b"queued-body");
+}
+
+#[test]
+fn json_output_redacts_request_body() {
+    let data: Vec<u8> = (0..8 * 1024).map(|index| (index % 233) as u8).collect();
+    let (url, _requests) = spawn_method_server(data);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+
+    let output = run(shaul().args([
+        "--config",
+        path.to_str().unwrap(),
+        "--json",
+        "add",
+        &url,
+        "--method",
+        "POST",
+        "--data",
+        "body-secret",
+    ]));
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(!text.contains("body-secret"), "body leaked: {text}");
+    assert!(text.contains("<redacted>"), "{text}");
+}
+
+#[test]
+fn http_method_is_rejected_for_non_http_links() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, "");
+
+    let output = shaul()
+        .args([
+            "--config",
+            path.to_str().unwrap(),
+            "add",
+            "--method",
+            "POST",
+            "ftp://example.com/file.bin",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("direct HTTP"), "stderr: {stderr}");
+}
+
+#[test]
 fn run_worker_processes_a_queued_task() {
     let data: Vec<u8> = (0..48 * 1024).map(|index| (index % 239) as u8).collect();
     let (url, _server) = spawn_file_server(data.clone());
@@ -865,6 +1131,132 @@ fn spawn_file_server(data: Vec<u8>) -> (String, thread::JoinHandle<()>) {
         }
     });
     (format!("http://{address}/file.bin"), handle)
+}
+
+type RecordedRequests = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+
+/// Records the request method and body, then serves `data`.
+fn spawn_method_server(data: Vec<u8>) -> (String, RecordedRequests) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let seen = requests.clone();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            let mut buffer = vec![0u8; 32 * 1024];
+            let mut read = 0;
+            while let Ok(count) = stream.read(&mut buffer[read..]) {
+                if count == 0 {
+                    break;
+                }
+                read += count;
+                if buffer[..read]
+                    .windows(4)
+                    .any(|window| window == b"\r\n\r\n")
+                {
+                    break;
+                }
+                if read == buffer.len() {
+                    break;
+                }
+            }
+            let Some(header_end) = buffer[..read]
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|index| index + 4)
+            else {
+                continue;
+            };
+            let request = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+            let mut lines = request.lines();
+            let request_line = lines.next().unwrap_or_default();
+            let mut parts = request_line.split_whitespace();
+            let method = parts.next().unwrap_or_default().to_string();
+            let mut headers = HashMap::new();
+            for line in lines {
+                if let Some((name, value)) = line.split_once(':') {
+                    headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+                }
+            }
+            let content_length = headers
+                .get("content-length")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut body = buffer[header_end..read].to_vec();
+            while body.len() < content_length {
+                let mut chunk = vec![0u8; content_length - body.len()];
+                let Ok(count) = stream.read(&mut chunk) else {
+                    break;
+                };
+                if count == 0 {
+                    break;
+                }
+                body.extend_from_slice(&chunk[..count]);
+            }
+            body.truncate(content_length);
+            seen.lock().unwrap().push((method, body));
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Length: {}\r\n\
+                 Content-Disposition: attachment; filename=\"posted.bin\"\r\n\
+                 Connection: close\r\n\
+                 \r\n",
+                data.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(&data);
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://{address}/api/download"), requests)
+}
+
+/// Serves a tiny HLS master/media playlist and two segments.
+fn spawn_hls_server() -> (String, thread::JoinHandle<()>) {
+    const MASTER: &[u8] = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nvideo.m3u8\n";
+    const MEDIA: &[u8] =
+        b"#EXTM3U\n#EXTINF:4.0,\nseg-0.ts\n#EXTINF:4.0,\nseg-1.ts\n#EXT-X-ENDLIST\n";
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            thread::spawn(move || {
+                let mut request = [0_u8; 16 * 1024];
+                let _ = stream.read(&mut request);
+                let text = String::from_utf8_lossy(&request);
+                let path = text
+                    .lines()
+                    .next()
+                    .and_then(|line| line.split_whitespace().nth(1))
+                    .unwrap_or("/")
+                    .split('?')
+                    .next()
+                    .unwrap_or("/");
+                let (body, content_type) = match path {
+                    "/master.m3u8" => (MASTER, "application/vnd.apple.mpegurl"),
+                    "/video.m3u8" => (MEDIA, "application/vnd.apple.mpegurl"),
+                    "/seg-0.ts" => (&b"AAAA"[..], "video/mp2t"),
+                    "/seg-1.ts" => (&b"BBBB"[..], "video/mp2t"),
+                    _ => (&b""[..], "application/octet-stream"),
+                };
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(headers.as_bytes());
+                let _ = stream.write_all(body);
+                let _ = stream.flush();
+            });
+        }
+    });
+    (format!("http://{address}/master.m3u8"), handle)
 }
 
 /// Serves the body in chunks with a delay between writes so a non-terminal

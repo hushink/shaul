@@ -9,9 +9,9 @@ use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
 use shaul::{
     ByteRange, CancellationToken, Checksum, ChecksumAlgorithm, Config, DownloadBackend,
-    DownloadOutcome, DownloadRequest, EventSink, FileResume, Header, HttpBackend, Link, Resource,
-    ResourceFile, ResourceKind, ResumeCheckpoint, TaskOptions, TaskResume, TaskState, Telemetry,
-    Validator, metrics, part_path,
+    DownloadOutcome, DownloadRequest, EventSink, FileResume, Header, HttpBackend, Link,
+    RequestOptions, Resource, ResourceFile, ResourceKind, ResumeCheckpoint, TaskOptions,
+    TaskResume, TaskState, Telemetry, Validator, metrics, part_path,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -225,6 +225,188 @@ async fn handle_slow_range(mut socket: TcpStream, data: Arc<Vec<u8>>, transfers:
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
     let _ = socket.write_all(&body[split..]).await;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MethodMode {
+    Ok,
+    Redirect303,
+    Redirect307,
+    ServerError,
+    FailOnce,
+}
+
+#[derive(Clone, Debug)]
+struct RecordedRequest {
+    method: String,
+    path: String,
+    body: Vec<u8>,
+}
+
+struct MethodServer {
+    addr: SocketAddr,
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
+}
+
+impl MethodServer {
+    async fn spawn(data: Vec<u8>, mode: MethodMode, filename: &str) -> Self {
+        Self::spawn_with_redirect(data, mode, filename, None).await
+    }
+
+    async fn spawn_with_redirect(
+        data: Vec<u8>,
+        mode: MethodMode,
+        filename: &str,
+        redirect_to: Option<String>,
+    ) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let data = Arc::new(data);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let server_requests = requests.clone();
+        let filename = filename.to_string();
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let data = data.clone();
+                let requests = server_requests.clone();
+                let filename = filename.clone();
+                let redirect_to = redirect_to.clone();
+                tokio::spawn(async move {
+                    handle_method(socket, data, mode, filename, redirect_to, requests).await;
+                });
+            }
+        });
+        Self { addr, requests }
+    }
+
+    fn file_url(&self) -> String {
+        format!("http://{}/file", self.addr)
+    }
+
+    fn redirect_url(&self) -> String {
+        format!("http://{}/redirect", self.addr)
+    }
+
+    fn requests(&self) -> Vec<RecordedRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+async fn handle_method(
+    mut socket: TcpStream,
+    data: Arc<Vec<u8>>,
+    mode: MethodMode,
+    filename: String,
+    redirect_to: Option<String>,
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
+) {
+    let mut buffer = vec![0u8; 32 * 1024];
+    let mut read = 0;
+    loop {
+        let Ok(count) = socket.read(&mut buffer[read..]).await else {
+            return;
+        };
+        if count == 0 {
+            return;
+        }
+        read += count;
+        if buffer[..read]
+            .windows(4)
+            .any(|window| window == b"\r\n\r\n")
+        {
+            break;
+        }
+        if read == buffer.len() {
+            return;
+        }
+    }
+    let Some(header_end) = buffer[..read]
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|index| index + 4)
+    else {
+        return;
+    };
+    let request = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+    let mut lines = request.lines();
+    let request_line = lines.next().unwrap_or_default();
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or_default().to_string();
+    let path = parts.next().unwrap_or("/").to_string();
+    let mut headers = HashMap::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+        }
+    }
+    let content_length = headers
+        .get("content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut body = buffer[header_end..read].to_vec();
+    while body.len() < content_length {
+        let mut chunk = vec![0u8; content_length - body.len()];
+        let Ok(count) = socket.read(&mut chunk).await else {
+            return;
+        };
+        if count == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..count]);
+    }
+    body.truncate(content_length);
+    requests.lock().unwrap().push(RecordedRequest {
+        method,
+        path: path.clone(),
+        body,
+    });
+
+    if path == "/redirect" {
+        let status = match mode {
+            MethodMode::Redirect303 => "303 See Other",
+            MethodMode::Redirect307 => "307 Temporary Redirect",
+            _ => "302 Found",
+        };
+        let location = redirect_to.as_deref().unwrap_or("/file");
+        let response = format!(
+            "HTTP/1.1 {status}\r\nConnection: close\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n"
+        );
+        let _ = socket.write_all(response.as_bytes()).await;
+        let _ = socket.shutdown().await;
+        return;
+    }
+    if path != "/file" {
+        respond(&mut socket, "404 Not Found", vec![], b"not found").await;
+        return;
+    }
+    if mode == MethodMode::ServerError {
+        respond(&mut socket, "500 Internal Server Error", vec![], b"failed").await;
+        return;
+    }
+    if mode == MethodMode::FailOnce
+        && requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.path == "/file")
+            .count()
+            == 1
+    {
+        respond(&mut socket, "500 Internal Server Error", vec![], b"failed").await;
+        return;
+    }
+    let response_headers = vec![
+        ("ETag".to_string(), format!("\"{}\"", sha256_hex(&data))),
+        (
+            "Content-Disposition".to_string(),
+            format!("attachment; filename=\"{filename}\""),
+        ),
+        ("Content-Length".to_string(), data.len().to_string()),
+    ];
+    respond(&mut socket, "200 OK", response_headers, &data).await;
 }
 
 struct ActiveGuard {
@@ -562,6 +744,314 @@ async fn downloads_with_segments_and_verifies() {
     let output = config.download.dir.join(&server.filename);
     assert_eq!(tokio::fs::read(&output).await.unwrap(), data);
     assert!(!tokio::fs::try_exists(part_path(&output)).await.unwrap());
+}
+
+fn method_options(method: &str, body: Option<&str>) -> TaskOptions {
+    TaskOptions {
+        request: RequestOptions {
+            method: Some(method.to_string()),
+            body: body.map(str::to_string),
+            ..RequestOptions::default()
+        },
+        connections: Some(4),
+        ..TaskOptions::default()
+    }
+}
+
+#[tokio::test]
+async fn post_download_sends_one_request_with_body() {
+    let data = test_data(256 * 1024);
+    let server = MethodServer::spawn(data.clone(), MethodMode::Ok, "posted.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            method_options("POST", Some("{\"id\":42}")),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("posted.bin"))
+            .await
+            .unwrap(),
+        data
+    );
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/file");
+    assert_eq!(requests[0].body, b"{\"id\":42}");
+}
+
+#[tokio::test]
+async fn get_with_body_is_single_shot() {
+    let data = test_data(64 * 1024);
+    let server = MethodServer::spawn(data.clone(), MethodMode::Ok, "get-body.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            method_options("GET", Some("query-body")),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("get-body.bin"))
+            .await
+            .unwrap(),
+        data
+    );
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(requests[0].body, b"query-body");
+}
+
+#[tokio::test]
+async fn body_without_method_defaults_to_post() {
+    let data = test_data(32 * 1024);
+    let server = MethodServer::spawn(data.clone(), MethodMode::Ok, "default-post.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let mut options = method_options("GET", Some("payload"));
+    options.request.method = None;
+
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            options,
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("default-post.bin"))
+            .await
+            .unwrap(),
+        data
+    );
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].body, b"payload");
+}
+
+#[tokio::test]
+async fn post_303_switches_to_get_and_drops_body() {
+    let data = test_data(128 * 1024);
+    let server = MethodServer::spawn(data.clone(), MethodMode::Redirect303, "redirected.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let task = engine
+        .add(
+            Link::new(server.redirect_url()).unwrap(),
+            config.download.dir.clone(),
+            method_options("POST", Some("payload")),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("redirected.bin"))
+            .await
+            .unwrap(),
+        data
+    );
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/redirect");
+    assert_eq!(requests[0].body, b"payload");
+    assert_eq!(requests[1].method, "GET");
+    assert_eq!(requests[1].path, "/file");
+    assert!(requests[1].body.is_empty());
+}
+
+#[tokio::test]
+async fn post_307_preserves_method_and_body() {
+    let data = test_data(128 * 1024);
+    let server = MethodServer::spawn(data.clone(), MethodMode::Redirect307, "redirected.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let task = engine
+        .add(
+            Link::new(server.redirect_url()).unwrap(),
+            config.download.dir.clone(),
+            method_options("POST", Some("payload")),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path, "/redirect");
+    assert_eq!(requests[0].body, b"payload");
+    assert_eq!(requests[1].method, "POST");
+    assert_eq!(requests[1].path, "/file");
+    assert_eq!(requests[1].body, b"payload");
+}
+
+#[tokio::test]
+async fn cross_origin_307_with_body_is_refused() {
+    let target = MethodServer::spawn(test_data(8 * 1024), MethodMode::Ok, "target.bin").await;
+    let source = MethodServer::spawn_with_redirect(
+        test_data(8 * 1024),
+        MethodMode::Redirect307,
+        "source.bin",
+        Some(target.file_url()),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let task = engine
+        .add(
+            Link::new(source.redirect_url()).unwrap(),
+            config.download.dir.clone(),
+            method_options("POST", Some("secret-body")),
+        )
+        .await
+        .unwrap();
+    let result = engine.run_task(task.id).await;
+    assert!(result.is_err());
+
+    let task = engine.status(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+    assert!(
+        task.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("refusing to forward"),
+        "unexpected error: {:?}",
+        task.error
+    );
+    assert_eq!(source.requests().len(), 1);
+    assert!(target.requests().is_empty());
+}
+
+#[tokio::test]
+async fn cross_origin_307_with_body_can_be_allowed() {
+    let data = test_data(8 * 1024);
+    let target = MethodServer::spawn(data.clone(), MethodMode::Ok, "target.bin").await;
+    let source = MethodServer::spawn_with_redirect(
+        test_data(8 * 1024),
+        MethodMode::Redirect307,
+        "source.bin",
+        Some(target.file_url()),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+    let mut options = method_options("POST", Some("shared-body"));
+    options.request.allow_cross_origin_auth = true;
+
+    let task = engine
+        .add(
+            Link::new(source.redirect_url()).unwrap(),
+            config.download.dir.clone(),
+            options,
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("target.bin"))
+            .await
+            .unwrap(),
+        data
+    );
+
+    let requests = target.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].body, b"shared-body");
+}
+
+#[tokio::test]
+async fn post_is_not_retried_on_server_error() {
+    let data = test_data(16 * 1024);
+    let server = MethodServer::spawn(data, MethodMode::ServerError, "failed.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            method_options("POST", Some("payload")),
+        )
+        .await
+        .unwrap();
+    let result = engine.run_task(task.id).await;
+    assert!(result.is_err());
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    let task = engine.status(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Failed);
+}
+
+#[tokio::test]
+async fn put_is_retried_on_server_error() {
+    let data = test_data(64 * 1024);
+    let server = MethodServer::spawn(data.clone(), MethodMode::FailOnce, "put.bin").await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let (engine, _) = shaul::default_engine(config.clone()).unwrap();
+
+    let task = engine
+        .add(
+            Link::new(server.file_url()).unwrap(),
+            config.download.dir.clone(),
+            method_options("PUT", Some("payload")),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("put.bin"))
+            .await
+            .unwrap(),
+        data
+    );
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request.method == "PUT"));
+    assert!(requests.iter().all(|request| request.body == b"payload"));
 }
 
 #[tokio::test]

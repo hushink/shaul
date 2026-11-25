@@ -143,7 +143,9 @@ impl Auth {
     }
 }
 
-/// Per-task request overrides applied by every backend.
+/// Per-task request overrides. Headers, authentication and the cross-origin
+/// policy are applied by every backend; `method` and `body` only by the direct
+/// HTTP backend.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestOptions {
     /// Additional headers applied to every request of the task.
@@ -156,13 +158,33 @@ pub struct RequestOptions {
     /// Defaults to `false`, which strips them on cross-origin redirects.
     #[serde(default)]
     pub allow_cross_origin_auth: bool,
+    /// HTTP method for direct HTTP(S) downloads. `None` means `GET`.
+    ///
+    /// Non-GET methods are handled by the direct HTTP backend only. The Hub,
+    /// BitTorrent and FTP backends reject tasks that set a method or body. A
+    /// request with a non-GET method or a body is sent as a single request:
+    /// it is not segmented, does not resume and does not use mirror fallback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// Optional request body for direct HTTP(S) downloads.
+    ///
+    /// A body without an explicit `method` is sent as `POST`. The body may
+    /// contain `${env:NAME}` placeholders, which are expanded when the request
+    /// is built. Like headers, it is persisted in the task sidecar (mode 0600
+    /// on Unix) and redacted from `--json` output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 impl RequestOptions {
-    /// Whether there is nothing to apply: no headers, no auth, and
-    /// cross-origin auth not enabled.
+    /// Whether there is nothing to apply: no headers, auth, cross-origin
+    /// policy, HTTP method or body.
     pub fn is_empty(&self) -> bool {
-        self.headers.is_empty() && self.auth.is_none() && !self.allow_cross_origin_auth
+        self.headers.is_empty()
+            && self.auth.is_none()
+            && !self.allow_cross_origin_auth
+            && self.method.is_none()
+            && self.body.is_none()
     }
 
     /// Merge global defaults with task overrides. Task headers win on name
@@ -195,6 +217,8 @@ impl RequestOptions {
             headers,
             auth,
             allow_cross_origin_auth: self.allow_cross_origin_auth,
+            method: self.method.clone(),
+            body: self.body.clone(),
         }
     }
 
@@ -276,5 +300,45 @@ mod tests {
         assert_eq!(merged.auth, None);
         assert_eq!(merged.headers.len(), 1);
         assert_eq!(merged.headers[0].value, "Bearer config");
+    }
+
+    #[test]
+    fn merging_defaults_preserves_http_method_and_body() {
+        let request = RequestOptions {
+            method: Some("POST".to_string()),
+            body: Some("{\"key\":\"${env:VALUE}\"}".to_string()),
+            ..RequestOptions::default()
+        };
+        let merged = request.merged(&[Header::new("X-Test", "yes").unwrap()]);
+        assert_eq!(merged.method.as_deref(), Some("POST"));
+        assert_eq!(merged.body, request.body);
+    }
+
+    #[test]
+    fn missing_method_and_body_default_to_none() {
+        let options: RequestOptions = serde_json::from_str("{}").unwrap();
+        assert_eq!(options, RequestOptions::default());
+        let encoded = serde_json::to_string(&RequestOptions::default()).unwrap();
+        assert!(!encoded.contains("method"), "{encoded}");
+        assert!(!encoded.contains("body"), "{encoded}");
+    }
+
+    #[test]
+    fn empty_options_include_http_method_and_body() {
+        assert!(RequestOptions::default().is_empty());
+        assert!(
+            !RequestOptions {
+                method: Some("GET".to_string()),
+                ..RequestOptions::default()
+            }
+            .is_empty()
+        );
+        assert!(
+            !RequestOptions {
+                body: Some("payload".to_string()),
+                ..RequestOptions::default()
+            }
+            .is_empty()
+        );
     }
 }

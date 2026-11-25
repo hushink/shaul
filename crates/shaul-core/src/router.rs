@@ -52,6 +52,14 @@ impl Router {
             }
             let resource = parser.parse(link, options).await?;
             let backend = self.backend_for(&resource)?;
+            if (options.request.method.is_some() || options.request.body.is_some())
+                && backend.name() != "http"
+            {
+                return Err(Error::Config(format!(
+                    "HTTP method/body require a direct HTTP(S) link (selected backend: {})",
+                    backend.name()
+                )));
+            }
             return Ok(RoutedResource {
                 resource,
                 backend,

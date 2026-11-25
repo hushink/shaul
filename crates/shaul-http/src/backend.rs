@@ -11,7 +11,7 @@ use reqwest::header::{
     ACCEPT_ENCODING, AUTHORIZATION, COOKIE, HeaderMap, HeaderName, HeaderValue, LOCATION,
 };
 use reqwest::redirect::Policy;
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, Method, Response, StatusCode};
 use shaul_core::{
     BackendCapabilities, Checksum, ChecksumAlgorithm, Config, ContentCache, DownloadBackend,
     DownloadOutcome, DownloadRequest, Error, EventKind, EventSink, FileOutcome, FileResume, Header,
@@ -153,15 +153,32 @@ impl HttpBackend {
         file: &ResourceFile,
         task_resume: &mut TaskResume,
     ) -> Result<FileOutcome> {
+        let _ = configured_method(&request.options.request)?;
         let checksum = request
             .options
             .checksum
             .clone()
             .or_else(|| file.checksum.clone());
+        let single_shot = !is_plain_get(&request.options.request);
+        if single_shot
+            && let Some(outcome) = self.completed_outcome(request, file, task_resume).await?
+        {
+            // A finished non-GET task must not send its request again.
+            return Ok(outcome);
+        }
+        if single_shot && !request.options.mirrors.is_empty() {
+            warning(
+                request,
+                "mirror fallback is disabled for non-GET or body-bearing requests".to_string(),
+            );
+        }
         let mut reference: Option<Validator> = None;
         let mut last_error: Option<Error> = None;
         let mut urls = vec![file.url.clone()];
         for mirror in &request.options.mirrors {
+            if single_shot {
+                break;
+            }
             if !matches!(mirror.scheme(), "http" | "https") {
                 warning(
                     request,
@@ -308,6 +325,72 @@ impl HttpBackend {
         }
     }
 
+    async fn completed_outcome(
+        &self,
+        request: &DownloadRequest,
+        file: &ResourceFile,
+        task_resume: &TaskResume,
+    ) -> Result<Option<FileOutcome>> {
+        let key = file.url.as_str();
+        let Some(stored) = task_resume.files.get(key) else {
+            return Ok(None);
+        };
+        if !stored.is_complete() {
+            return Ok(None);
+        }
+        let final_path = manifest_path(&request.destination, &stored.final_path);
+        let part = manifest_path(&request.destination, &stored.part_path);
+        if tokio::fs::try_exists(&final_path).await? {
+            let size = tokio::fs::metadata(&final_path).await?.len();
+            // A destination whose size no longer matches the completed
+            // manifest is not trusted; fall through to the normal conflict
+            // policy and resume logic.
+            if stored.total_size.is_none_or(|total| total == size) {
+                let relative = relative_path(&request.destination, &final_path);
+                request.events.emit(EventKind::FileStarted {
+                    task_id: request.task_id,
+                    file: relative.clone(),
+                    total_bytes: Some(size),
+                });
+                request.events.emit(EventKind::Progress {
+                    task_id: request.task_id,
+                    file: relative.clone(),
+                    downloaded_bytes: size,
+                    total_bytes: Some(size),
+                });
+                return Ok(Some(FileOutcome::new(
+                    final_path,
+                    relative,
+                    size,
+                    stored.checksum.clone().or(request.options.checksum.clone()),
+                    false,
+                )));
+            }
+        }
+        if tokio::fs::try_exists(&part).await? {
+            let size = tokio::fs::metadata(&part).await?.len();
+            if stored.total_size.is_none_or(|total| total == size) {
+                ensure_parent(&final_path).await?;
+                remove_if_exists(&final_path).await?;
+                tokio::fs::rename(&part, &final_path).await?;
+                let relative = relative_path(&request.destination, &final_path);
+                request.events.emit(EventKind::FileStarted {
+                    task_id: request.task_id,
+                    file: relative.clone(),
+                    total_bytes: Some(size),
+                });
+                return Ok(Some(FileOutcome::new(
+                    final_path,
+                    relative,
+                    size,
+                    stored.checksum.clone().or(request.options.checksum.clone()),
+                    false,
+                )));
+            }
+        }
+        Ok(None)
+    }
+
     #[tracing::instrument(
         name = "shaul.http.file",
         level = "debug",
@@ -319,63 +402,13 @@ impl HttpBackend {
         request: &DownloadRequest,
         file: &ResourceFile,
         task_resume: &mut TaskResume,
-        probe: Probe,
+        mut probe: Probe,
     ) -> Result<FileOutcome> {
         let key = file.url.as_str().to_string();
+        let single_shot = probe.response.is_some();
 
-        if let Some(stored) = task_resume.files.get(&key).cloned()
-            && stored.is_complete()
-        {
-            let final_path = manifest_path(&request.destination, &stored.final_path);
-            let part = manifest_path(&request.destination, &stored.part_path);
-            if tokio::fs::try_exists(&final_path).await? {
-                let size = tokio::fs::metadata(&final_path).await?.len();
-                // A destination whose size no longer matches the completed
-                // manifest is not trusted; fall through to the normal conflict
-                // policy and resume logic.
-                if stored.total_size.is_none_or(|total| total == size) {
-                    let relative = relative_path(&request.destination, &final_path);
-                    request.events.emit(EventKind::FileStarted {
-                        task_id: request.task_id,
-                        file: relative.clone(),
-                        total_bytes: Some(size),
-                    });
-                    request.events.emit(EventKind::Progress {
-                        task_id: request.task_id,
-                        file: relative.clone(),
-                        downloaded_bytes: size,
-                        total_bytes: Some(size),
-                    });
-                    return Ok(FileOutcome::new(
-                        final_path,
-                        relative,
-                        size,
-                        stored.checksum.or(request.options.checksum.clone()),
-                        false,
-                    ));
-                }
-            }
-            if tokio::fs::try_exists(&part).await? {
-                let size = tokio::fs::metadata(&part).await?.len();
-                if stored.total_size.is_none_or(|total| total == size) {
-                    ensure_parent(&final_path).await?;
-                    remove_if_exists(&final_path).await?;
-                    tokio::fs::rename(&part, &final_path).await?;
-                    let relative = relative_path(&request.destination, &final_path);
-                    request.events.emit(EventKind::FileStarted {
-                        task_id: request.task_id,
-                        file: relative.clone(),
-                        total_bytes: Some(size),
-                    });
-                    return Ok(FileOutcome::new(
-                        final_path,
-                        relative,
-                        size,
-                        stored.checksum.or(request.options.checksum.clone()),
-                        false,
-                    ));
-                }
-            }
+        if let Some(outcome) = self.completed_outcome(request, file, task_resume).await? {
+            return Ok(outcome);
         }
 
         let total = probe.total_size;
@@ -414,7 +447,8 @@ impl HttpBackend {
             .as_ref()
             .map(|stored| stored.final_path == final_for_manifest)
             .unwrap_or(false);
-        let resume_valid = request.options.resume
+        let resume_valid = !single_shot
+            && request.options.resume
             && stored
                 .as_ref()
                 .map(|stored| {
@@ -429,9 +463,15 @@ impl HttpBackend {
                 .unwrap_or(false);
 
         if stored.is_some() && !resume_valid {
+            let message = if single_shot {
+                "resume is not supported for non-GET or body-bearing requests; restarting this file"
+                    .to_string()
+            } else {
+                "resume state is no longer valid; restarting this file".to_string()
+            };
             request.events.emit(EventKind::Warning {
                 task_id: Some(request.task_id),
-                message: "resume state is no longer valid; restarting this file".to_string(),
+                message,
             });
         }
 
@@ -540,11 +580,29 @@ impl HttpBackend {
         );
 
         let rate = self.request_rate(request, file.url.host_str().unwrap_or_default());
+        let initial = probe
+            .response
+            .take()
+            .map(|response| (response, probe.permit.take()));
         let transfer_result = if let Some(0) = total {
             // Empty file: the pre-allocated part is already the final content.
             task_resume.files.insert(key.clone(), file_resume.clone());
             request.checkpoint.save(task_resume).await?;
             Ok(file_resume.clone())
+        } else if single_shot {
+            self.transfer_single(
+                request,
+                file,
+                &part_name,
+                &key,
+                file_resume.clone(),
+                task_resume.clone(),
+                progress.clone(),
+                false,
+                &rate,
+                initial,
+            )
+            .await
         } else if probe.range_supported
             && total.map(|total| total > 0).unwrap_or(false)
             && request.options.connections > 1
@@ -573,6 +631,7 @@ impl HttpBackend {
                 progress.clone(),
                 probe.range_supported,
                 &rate,
+                initial,
             )
             .await
         };
@@ -626,9 +685,17 @@ impl HttpBackend {
     }
 
     async fn probe(&self, request: &DownloadRequest, file: &ResourceFile) -> Result<Probe> {
+        let method = configured_method(&request.options.request)?;
+        let single_shot = method != Method::GET || request.options.request.body.is_some();
+        let retries = if method_is_idempotent(&method) {
+            request.options.retries
+        } else {
+            0
+        };
         let mut attempt = 0u32;
         loop {
-            let headers = build_headers(&request.options, &file.headers, Some("bytes=0-0"), None)?;
+            let range = (!single_shot).then_some("bytes=0-0");
+            let headers = build_headers(&request.options, &file.headers, range, None)?;
             let sent = self
                 .send_follow(
                     &file.url,
@@ -641,7 +708,7 @@ impl HttpBackend {
             match sent {
                 Err(Error::Cancelled) => return Err(Error::Cancelled),
                 Err(error) => {
-                    if attempt >= request.options.retries {
+                    if attempt >= retries {
                         return Err(error);
                     }
                     tracing::warn!(attempt, error = %error, "request failed; retrying");
@@ -649,7 +716,7 @@ impl HttpBackend {
                     sleep_or_cancel(backoff(attempt), &request.cancel).await?;
                     attempt += 1;
                 }
-                Ok((response, captured, final_url, _permit)) => {
+                Ok((response, captured, final_url, permit)) => {
                     let status = response.status();
                     let retry_after = retry_after(response.headers());
                     if status.is_server_error()
@@ -657,7 +724,7 @@ impl HttpBackend {
                         || status == StatusCode::TOO_MANY_REQUESTS
                     {
                         drop(response);
-                        if attempt >= request.options.retries {
+                        if attempt >= retries {
                             return Err(http_error(status, &captured));
                         }
                         tracing::warn!(
@@ -693,29 +760,41 @@ impl HttpBackend {
                     let content_length = captured
                         .get("content-length")
                         .and_then(|value| parse_u64(value));
-                    let (range_supported, total_size) = match status {
-                        StatusCode::PARTIAL_CONTENT => (
-                            true,
+                    let (range_supported, total_size) = if single_shot {
+                        if !status.is_success() {
+                            return Err(http_error(status, &captured));
+                        }
+                        (
+                            false,
                             content_range
                                 .and_then(|(_, _, total)| total)
-                                .or(linked_size),
-                        ),
-                        StatusCode::OK => match content_range {
-                            // Some servers answer a ranged request with 200 +
-                            // Content-Range (ModelScope does this). The body is
-                            // still a partial range, so use the total from
-                            // Content-Range rather than the range length in
-                            // Content-Length.
-                            Some((_, _, total)) => (true, total.or(linked_size)),
-                            None => (false, linked_size.or(content_length)),
-                        },
-                        StatusCode::RANGE_NOT_SATISFIABLE => {
-                            (true, content_range.and_then(|(_, _, total)| total))
-                        }
-                        _ => {
-                            return Err(Error::Backend(format!(
-                                "unexpected HTTP status during probe: {status}"
-                            )));
+                                .or(content_length),
+                        )
+                    } else {
+                        match status {
+                            StatusCode::PARTIAL_CONTENT => (
+                                true,
+                                content_range
+                                    .and_then(|(_, _, total)| total)
+                                    .or(linked_size),
+                            ),
+                            StatusCode::OK => match content_range {
+                                // Some servers answer a ranged request with 200 +
+                                // Content-Range (ModelScope does this). The body is
+                                // still a partial range, so use the total from
+                                // Content-Range rather than the range length in
+                                // Content-Length.
+                                Some((_, _, total)) => (true, total.or(linked_size)),
+                                None => (false, linked_size.or(content_length)),
+                            },
+                            StatusCode::RANGE_NOT_SATISFIABLE => {
+                                (true, content_range.and_then(|(_, _, total)| total))
+                            }
+                            _ => {
+                                return Err(Error::Backend(format!(
+                                    "unexpected HTTP status during probe: {status}"
+                                )));
+                            }
                         }
                     };
 
@@ -744,6 +823,8 @@ impl HttpBackend {
                         last_modified,
                         checksum,
                         headers,
+                        response: single_shot.then_some(response),
+                        permit: single_shot.then_some(permit),
                     });
                 }
             }
@@ -761,6 +842,11 @@ impl HttpBackend {
         let mut current = url.clone();
         let mut headers = headers.clone();
         let mut captured = BTreeMap::new();
+        let mut method = configured_method(&options.request)?;
+        let mut body = match options.request.body.as_deref() {
+            Some(body) => Some(shaul_core::expand_env(body)?),
+            None => None,
+        };
 
         for _ in 0..MAX_REDIRECTS {
             let permit = self
@@ -772,12 +858,16 @@ impl HttpBackend {
                 self.active_connections.clone(),
                 events.telemetry().clone(),
             );
+            let mut builder = self
+                .client
+                .request(method.clone(), current.clone())
+                .headers(headers.clone());
+            if let Some(body) = &body {
+                builder = builder.body(body.clone());
+            }
             let response = tokio::select! {
                 _ = cancel.cancelled() => return Err(Error::Cancelled),
-                result = tokio::time::timeout(
-                    options.timeout,
-                    self.client.get(current.clone()).headers(headers.clone()).send(),
-                ) => match result {
+                result = tokio::time::timeout(options.timeout, builder.send()) => match result {
                     Ok(response) => response.map_err(|error| {
                         Error::Backend(format!("request failed: {}", error.without_url()))
                     })?,
@@ -808,12 +898,26 @@ impl HttpBackend {
                 let next = current
                     .join(location)
                     .map_err(|error| Error::Backend(format!("invalid redirect URL: {error}")))?;
-                if !same_origin(&current, &next) && !options.request.allow_cross_origin_auth {
-                    for name in options.request.sensitive_header_names() {
-                        headers.remove(name.as_str());
+                let switch_to_get = should_switch_to_get(&method, status);
+                if !same_origin(&current, &next) {
+                    if body.is_some() && !switch_to_get && !options.request.allow_cross_origin_auth
+                    {
+                        return Err(Error::Backend(
+                            "refusing to forward a request body across origins; enable allow_cross_origin_auth"
+                                .to_string(),
+                        ));
                     }
-                    headers.remove(AUTHORIZATION);
-                    headers.remove(COOKIE);
+                    if !options.request.allow_cross_origin_auth {
+                        for name in options.request.sensitive_header_names() {
+                            headers.remove(name.as_str());
+                        }
+                        headers.remove(AUTHORIZATION);
+                        headers.remove(COOKIE);
+                    }
+                }
+                if switch_to_get {
+                    method = Method::GET;
+                    body = None;
                 }
                 current = next;
                 continue;
@@ -964,6 +1068,7 @@ impl HttpBackend {
                     progress,
                     false,
                     rate,
+                    None,
                 )
                 .await;
         }
@@ -1265,7 +1370,15 @@ impl HttpBackend {
         progress: Arc<AtomicU64>,
         range_supported: bool,
         rate: &RateLimiters,
+        initial: Option<(Response, Option<TrackedPermit>)>,
     ) -> Result<FileResume> {
+        let method = configured_method(&request.options.request)?;
+        let retries = if method_is_idempotent(&method) {
+            request.options.retries
+        } else {
+            0
+        };
+        let mut initial = initial;
         let mut offset = if request.options.resume && range_supported {
             contiguous_end(&file_resume.completed)
         } else {
@@ -1304,63 +1417,69 @@ impl HttpBackend {
                 .await?;
                 return Err(Error::Cancelled);
             }
-            let range = if offset > 0 && range_supported {
-                Some(format!("bytes={offset}-"))
+            let (response, captured, _permit) = if let Some((response, permit)) = initial.take() {
+                let mut captured = BTreeMap::new();
+                capture_headers(&response, &mut captured);
+                (response, captured, permit)
             } else {
-                None
-            };
-            let if_range = if offset > 0 {
-                strong_if_range(&file_resume.validator)
-            } else {
-                None
-            };
-            let headers = build_headers(
-                &request.options,
-                &file.headers,
-                range.as_deref(),
-                if_range.as_deref(),
-            )?;
-            let sent = self
-                .send_follow(
-                    &file.url,
-                    &headers,
+                let range = if offset > 0 && range_supported {
+                    Some(format!("bytes={offset}-"))
+                } else {
+                    None
+                };
+                let if_range = if offset > 0 {
+                    strong_if_range(&file_resume.validator)
+                } else {
+                    None
+                };
+                let headers = build_headers(
                     &request.options,
-                    &request.cancel,
-                    &request.events,
-                )
-                .await;
-            let (response, captured, _, _permit) = match sent {
-                Err(Error::Cancelled) => {
-                    checkpoint_single(
-                        request,
-                        &mut task_resume,
-                        key,
-                        &mut file_resume,
-                        offset,
-                        &mut part,
+                    &file.headers,
+                    range.as_deref(),
+                    if_range.as_deref(),
+                )?;
+                let sent = self
+                    .send_follow(
+                        &file.url,
+                        &headers,
+                        &request.options,
+                        &request.cancel,
+                        &request.events,
                     )
-                    .await?;
-                    return Err(Error::Cancelled);
-                }
-                Err(error) => {
-                    checkpoint_single(
-                        request,
-                        &mut task_resume,
-                        key,
-                        &mut file_resume,
-                        offset,
-                        &mut part,
-                    )
-                    .await?;
-                    if attempt >= request.options.retries {
-                        return Err(error);
+                    .await;
+                match sent {
+                    Err(Error::Cancelled) => {
+                        checkpoint_single(
+                            request,
+                            &mut task_resume,
+                            key,
+                            &mut file_resume,
+                            offset,
+                            &mut part,
+                        )
+                        .await?;
+                        return Err(Error::Cancelled);
                     }
-                    retry_event(request, file, attempt + 1, error.to_string());
-                    sleep_or_cancel(backoff(attempt), &request.cancel).await?;
-                    attempt += 1;
-                    continue;
+                    Err(error) => {
+                        checkpoint_single(
+                            request,
+                            &mut task_resume,
+                            key,
+                            &mut file_resume,
+                            offset,
+                            &mut part,
+                        )
+                        .await?;
+                        if attempt >= retries {
+                            return Err(error);
+                        }
+                        retry_event(request, file, attempt + 1, error.to_string());
+                        sleep_or_cancel(backoff(attempt), &request.cancel).await?;
+                        attempt += 1;
+                        continue;
+                    }
+                    Ok((response, captured, _, permit)) => (response, captured, Some(permit)),
                 }
-                Ok(response) => response,
             };
             let status = response.status();
             let retry_after = retry_after(response.headers());
@@ -1382,7 +1501,7 @@ impl HttpBackend {
                     &mut part,
                 )
                 .await?;
-                if attempt >= request.options.retries {
+                if attempt >= retries {
                     return Err(http_error(status, &captured));
                 }
                 retry_event(request, file, attempt + 1, format!("HTTP {status}"));
@@ -1509,7 +1628,7 @@ impl HttpBackend {
             )
             .await?;
             let message = retry_message.unwrap_or_else(|| "download failed".to_string());
-            if attempt >= request.options.retries {
+            if attempt >= retries {
                 return Err(Error::Backend(message));
             }
             retry_event(request, file, attempt + 1, message);
@@ -1698,6 +1817,11 @@ struct Probe {
     last_modified: Option<String>,
     checksum: Option<Checksum>,
     headers: BTreeMap<String, String>,
+    /// Response already opened for a non-GET method or a request with a body.
+    /// It is streamed directly instead of sending the request a second time.
+    response: Option<Response>,
+    /// Connection permit held for `response`.
+    permit: Option<TrackedPermit>,
 }
 
 impl Probe {
@@ -1707,6 +1831,67 @@ impl Probe {
             last_modified: self.last_modified.clone(),
             size: self.total_size,
         }
+    }
+}
+
+/// Standard methods are normalized to their canonical uppercase spelling.
+/// Custom method tokens are left untouched because HTTP methods are
+/// case-sensitive.
+fn normalized_method(raw: &str) -> String {
+    let upper = raw.to_ascii_uppercase();
+    if matches!(
+        upper.as_str(),
+        "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE" | "OPTIONS" | "TRACE" | "CONNECT"
+    ) {
+        upper
+    } else {
+        raw.to_string()
+    }
+}
+
+fn configured_method(request: &shaul_core::RequestOptions) -> Result<Method> {
+    let raw = match (request.method.as_deref(), request.body.as_deref()) {
+        (Some(method), _) => method,
+        (None, Some(_)) => "POST",
+        (None, None) => "GET",
+    };
+    let normalized = normalized_method(raw);
+    let method = Method::from_bytes(normalized.as_bytes())
+        .map_err(|_| Error::Config(format!("invalid HTTP method: {raw}")))?;
+    if method == Method::HEAD {
+        return Err(Error::Config(
+            "HEAD is not a download method; use GET or a method that returns a body".to_string(),
+        ));
+    }
+    Ok(method)
+}
+
+fn method_is_idempotent(method: &Method) -> bool {
+    matches!(
+        method.as_str(),
+        "GET" | "HEAD" | "PUT" | "DELETE" | "OPTIONS" | "TRACE"
+    )
+}
+
+/// A plain GET can be split into ranges and resumed. A non-GET method or a
+/// request body must be sent once as a single request, because replaying it
+/// for every range may duplicate server-side effects.
+fn is_plain_get(request: &shaul_core::RequestOptions) -> bool {
+    request.body.is_none()
+        && request
+            .method
+            .as_deref()
+            .is_none_or(|method| method.eq_ignore_ascii_case("GET"))
+}
+
+fn should_switch_to_get(method: &Method, status: StatusCode) -> bool {
+    if method == Method::HEAD {
+        return false;
+    }
+    match status {
+        StatusCode::SEE_OTHER => true,
+        StatusCode::MOVED_PERMANENTLY | StatusCode::FOUND => method == Method::POST,
+        _ => false,
     }
 }
 
@@ -2193,6 +2378,59 @@ mod tests {
             ProxySetting::Url(ref url) if url == "http://127.0.0.1:8080"
         ));
         assert!(proxy_from_config(&config).unwrap().is_some());
+    }
+
+    #[test]
+    fn normalizes_standard_methods_and_rejects_head() {
+        let post = shaul_core::RequestOptions {
+            method: Some("post".to_string()),
+            ..shaul_core::RequestOptions::default()
+        };
+        assert_eq!(configured_method(&post).unwrap(), Method::POST);
+
+        let head = shaul_core::RequestOptions {
+            method: Some("HEAD".to_string()),
+            ..shaul_core::RequestOptions::default()
+        };
+        assert!(configured_method(&head).is_err());
+
+        let body_only = shaul_core::RequestOptions {
+            body: Some("payload".to_string()),
+            ..shaul_core::RequestOptions::default()
+        };
+        assert_eq!(configured_method(&body_only).unwrap(), Method::POST);
+    }
+
+    #[test]
+    fn custom_methods_keep_their_case() {
+        let request = shaul_core::RequestOptions {
+            method: Some("Purge".to_string()),
+            ..shaul_core::RequestOptions::default()
+        };
+        assert_eq!(configured_method(&request).unwrap().as_str(), "Purge");
+    }
+
+    #[test]
+    fn redirect_method_rules() {
+        assert!(should_switch_to_get(&Method::POST, StatusCode::SEE_OTHER));
+        assert!(should_switch_to_get(&Method::PUT, StatusCode::SEE_OTHER));
+        assert!(!should_switch_to_get(&Method::HEAD, StatusCode::SEE_OTHER));
+        assert!(should_switch_to_get(
+            &Method::POST,
+            StatusCode::MOVED_PERMANENTLY
+        ));
+        assert!(!should_switch_to_get(
+            &Method::PUT,
+            StatusCode::MOVED_PERMANENTLY
+        ));
+        assert!(!should_switch_to_get(
+            &Method::POST,
+            StatusCode::TEMPORARY_REDIRECT
+        ));
+        assert!(!should_switch_to_get(
+            &Method::POST,
+            StatusCode::PERMANENT_REDIRECT
+        ));
     }
 
     fn validator(size: Option<u64>, etag: Option<&str>) -> Validator {

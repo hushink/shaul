@@ -115,3 +115,27 @@ _Avoid_: Credentials, token
 **Header override**:
 用户为 Task 指定的额外 HTTP 请求头，优先级高于后端默认值；跨域重定向默认不转发敏感头。
 _Avoid_: Custom headers
+
+**HTTP method**:
+直接 HTTP(S) 下载使用的请求方法；默认 GET。非 GET 或携带 Request body 的
+Task 按单请求执行，不分段、不续传、不使用镜像。
+_Avoid_: Verb, command
+
+**Request body**:
+非 GET 直接下载随请求发送的文本体；支持 `${env:NAME}` 占位符，持久化在
+sidecar 中，并在 JSON 视图中脱敏。
+_Avoid_: Payload, data
+
+**HLS**:
+HTTP Live Streaming；由 master/media playlist 和分片组成的点播媒体。HLS 任务
+仍然只产生一个最终文件。
+_Avoid_: m3u8 (as the domain term), stream
+
+**HLS variant**:
+master playlist 中的一个码率版本；默认选择最高 `BANDWIDTH` 的变体。
+_Avoid_: Quality, rendition (unqualified)
+
+**HLS segment**:
+media playlist 中的一个分片，由 HlsBackend 内部管理，不是 `FileItem`，也不是
+core 的 `Segment`（HTTP 字节区间）。
+_Avoid_: Segment, chunk (unqualified)

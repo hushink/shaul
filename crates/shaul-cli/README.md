@@ -27,6 +27,8 @@ Prebuilt archives and installers for Linux (x86_64/aarch64), macOS
 $ shaul download https://example.com/file.tar.gz
 $ shaul download https://example.com/file.bin --connections 8 \
       --checksum sha256:<hex>
+$ shaul download https://example.com/api/export --method POST \
+      --data '{"id":42}' -H 'Content-Type: application/json'
 
 # Hugging Face and ModelScope
 $ shaul download hf://org/repo --revision main --include '*.safetensors' --cache
@@ -37,6 +39,10 @@ $ shaul download 'magnet:?xt=urn:btih:<info-hash>'
 $ shaul download ./example.torrent --include '*.mkv' --dir ./media
 $ shaul download ftp://user:password@example.com/pub/file.bin
 
+# HLS: highest-bandwidth variant, concatenated into one file
+$ shaul download https://example.com/video/master.m3u8 --connections 8
+$ shaul download https://example.com/video/master.m3u8 --include '*1080*'
+
 # Proxy and bandwidth limits
 $ shaul download https://example.com/file.bin \
       --proxy socks5://127.0.0.1:1080 \
@@ -45,11 +51,13 @@ $ shaul download https://example.com/file.bin \
 # Persistent queue
 $ shaul add --input-file links.txt
 $ shaul run --limit 50MiB
-$ shaul list
+$ shaul list --status pending
 $ shaul status <id-or-suffix>
-$ shaul pause <id>     # a running worker notices within ~500 ms
-$ shaul resume <id>
-$ shaul cancel <id>
+$ shaul pause <id> <id>     # one or more ids
+$ shaul pause --all         # pending, running and paused tasks
+$ shaul resume --all        # paused and failed tasks
+$ shaul cancel --all        # pending, running and paused tasks
+$ shaul resume <id>         # a running worker notices within ~500 ms
 
 # Diagnostics and maintenance
 $ shaul info <link>
@@ -63,11 +71,29 @@ $ shaul completions bash
 Common flags: `--dir`, `--output`, `--checksum`, `--verify/--no-verify`,
 `--extract/--no-extract`, `--extract-dir`, `--delete-archive`,
 `--no-delete-archive`, `--header`,
-`--header-file`, `--bearer-token`, `--basic`, `--revision`, `--include`,
+`--header-file`, `--bearer-token`, `--basic`, `--method`, `--data`,
+`--data-file`, `--revision`, `--include`,
 `--exclude`, `--cache/--no-cache`, `--content-cache/--no-content-cache`,
 `--file-jobs`, `--mirror`, `--priority`, `--global-connections`,
 `--per-host-active`, `--per-host-limit`, `--json`, `--force`, `--overwrite`
 and `--rename`.
+
+`pause` / `resume` / `cancel` accept several ids, or `--all`. `--all` defaults
+to pending/running/paused tasks for pause and cancel, and to paused/failed
+tasks for resume; `--status` overrides the default.
+`list --status` accepts repeated state names.
+
+`--include` / `--exclude` also choose an HLS variant by `NAME`, `RESOLUTION`,
+`BANDWIDTH`, `CODECS` or URI. HLS phase 1 supports VOD TS and single-init-map
+fMP4 playlists; AES-128, `#EXT-X-BYTERANGE`, live playlists and DASH are not
+supported yet.
+
+`--method`, `--data` and `--data-file` apply to direct HTTP(S) links only.
+`--data` implies `POST` when `--method` is not given. These requests are
+single-shot: they do not segment, resume, use mirrors or retry `POST`/`PATCH`
+automatically. The body supports `${env:NAME}` placeholders and is redacted
+from `--json` output. `--data-file` is read when the command runs and its
+contents are persisted in the task sidecar like an inline `--data` body.
 
 `shaul run --jobs N` processes tasks concurrently. `shaul download --limit`
 and `shaul add --limit` cap one task; `shaul run --limit` caps the worker

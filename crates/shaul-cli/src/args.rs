@@ -5,13 +5,15 @@ use shaul::{
     Auth, Checksum, Error, Header, ParseOptions, RequestOptions, Result, TaskOptions, VerifyMode,
 };
 
-use crate::support::{parse_basic_auth, parse_checksum, parse_headers, read_header_file};
+use crate::support::{
+    parse_basic_auth, parse_checksum, parse_headers, read_header_file, validate_http_method,
+};
 
 #[derive(Parser, Debug)]
 #[command(
     name = "shaul",
     version,
-    about = "A unified, resumable download engine for HTTP, BitTorrent and model hubs",
+    about = "A unified, resumable download engine for HTTP, HLS, BitTorrent and model hubs",
     disable_help_subcommand = true
 )]
 pub struct Cli {
@@ -64,15 +66,15 @@ pub enum Commands {
     /// Run the queue worker
     Run(RunArgs),
     /// List known tasks
-    List,
+    List(ListArgs),
     /// Show a task
     Status(IdArgs),
-    /// Pause a task
-    Pause(IdArgs),
-    /// Requeue a paused or failed task
-    Resume(IdArgs),
-    /// Cancel a task
-    Cancel(IdArgs),
+    /// Pause one or more tasks
+    Pause(IdsArgs),
+    /// Requeue paused or failed tasks
+    Resume(IdsArgs),
+    /// Cancel one or more tasks
+    Cancel(IdsArgs),
     /// Resolve a link without downloading
     Info(InfoArgs),
     /// Manage configuration
@@ -224,13 +226,25 @@ pub struct DownloadArgs {
     #[arg(long)]
     pub revision: Option<String>,
 
-    /// Include glob for Hub or BitTorrent file selection (repeatable)
+    /// Include glob for Hub, BitTorrent or HLS selection (repeatable)
     #[arg(long)]
     pub include: Vec<String>,
 
-    /// Exclude glob for Hub or BitTorrent file selection (repeatable)
+    /// Exclude glob for Hub, BitTorrent or HLS selection (repeatable)
     #[arg(long)]
     pub exclude: Vec<String>,
+
+    /// HTTP method for direct HTTP(S) downloads (default GET)
+    #[arg(long, value_name = "METHOD")]
+    pub method: Option<String>,
+
+    /// Request body for direct HTTP(S) downloads; implies POST unless --method is set
+    #[arg(long, value_name = "DATA", conflicts_with = "data_file")]
+    pub data: Option<String>,
+
+    /// Read the direct-download request body from a UTF-8 file
+    #[arg(long, value_name = "PATH", conflicts_with = "data")]
+    pub data_file: Option<PathBuf>,
 
     #[command(flatten)]
     pub request: RequestArgs,
@@ -250,11 +264,11 @@ pub struct InfoArgs {
     #[arg(long)]
     pub revision: Option<String>,
 
-    /// Include glob for hub links (repeatable)
+    /// Include glob for Hub or HLS selection (repeatable)
     #[arg(long)]
     pub include: Vec<String>,
 
-    /// Exclude glob for hub links (repeatable)
+    /// Exclude glob for Hub or HLS selection (repeatable)
     #[arg(long)]
     pub exclude: Vec<String>,
 
@@ -321,6 +335,28 @@ pub struct IdArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct ListArgs {
+    /// Only include tasks in this state (repeatable)
+    #[arg(long, value_name = "STATE")]
+    pub status: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct IdsArgs {
+    /// Task ids (full UUID or unique prefix)
+    #[arg(value_name = "ID", required_unless_present = "all")]
+    pub ids: Vec<String>,
+
+    /// Apply to every task in a matching state
+    #[arg(long, conflicts_with = "ids")]
+    pub all: bool,
+
+    /// With --all, only include tasks in this state (repeatable)
+    #[arg(long, value_name = "STATE", requires = "all")]
+    pub status: Vec<String>,
+}
+
+#[derive(Args, Debug)]
 pub struct ConfigArgs {
     #[command(subcommand)]
     pub command: ConfigCmd,
@@ -365,6 +401,7 @@ impl RequestArgs {
             headers,
             auth,
             allow_cross_origin_auth: self.allow_cross_origin_auth,
+            ..RequestOptions::default()
         })
     }
 }
@@ -427,6 +464,23 @@ impl DownloadArgs {
                 Ok(url)
             })
             .collect::<Result<Vec<_>>>()?;
+        let mut request = self.request.to_settings()?;
+        if let Some(method) = &self.method {
+            request.method = Some(validate_http_method(method)?);
+        }
+        if let Some(data) = &self.data {
+            request.body = Some(data.clone());
+        } else if let Some(path) = &self.data_file {
+            request.body = Some(std::fs::read_to_string(path).map_err(|error| {
+                Error::Config(format!(
+                    "could not read request body from {}: {error}",
+                    path.display()
+                ))
+            })?);
+        }
+        if request.body.is_some() && request.method.is_none() {
+            request.method = Some("POST".to_string());
+        }
         Ok(TaskOptions {
             output: self.output.clone(),
             connections: self.connections,
@@ -446,7 +500,7 @@ impl DownloadArgs {
             },
             cache,
             content_cache,
-            request: self.request.to_settings()?,
+            request,
             revision: self.revision.clone(),
             include: self.include.clone(),
             exclude: self.exclude.clone(),

@@ -13,6 +13,7 @@ readme = "README.md"
 shaul-bt = { workspace = true, optional = true }
 shaul-core.workspace = true
 shaul-ftp = { workspace = true, optional = true }
+shaul-hls = { workspace = true, optional = true }
 shaul-hub.workspace = true
 shaul-http.workspace = true
 
@@ -20,6 +21,7 @@ shaul-http.workspace = true
 default = []
 bt = ["dep:shaul-bt"]
 ftp = ["dep:shaul-ftp"]
+hls = ["dep:shaul-hls"]
 xet = ["shaul-hub/xet"]
 
 [dev-dependencies]

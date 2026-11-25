@@ -92,7 +92,12 @@ impl HubClient {
     /// Global headers plus task overrides, without provider credentials.
     /// This is what gets persisted in a task sidecar.
     pub fn base_request_options(&self, request: &RequestOptions) -> Result<RequestOptions> {
-        Ok(request.merged(&self.global_headers))
+        let mut options = request.merged(&self.global_headers);
+        // Hub metadata calls and file transfers are always GET requests.
+        // Non-GET methods are a direct-HTTP-only feature.
+        options.method = None;
+        options.body = None;
+        Ok(options)
     }
 
     /// Merge config/task request overrides with provider credentials. User

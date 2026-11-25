@@ -2,7 +2,8 @@
 
 - 更新日期：2026-11-19
 - 基线：1.2.1（运维闭环、通用内容缓存与可选 Xet 已发布）
-- 下一开发线：1.3 后续加固（本地 Xet CAS fixture）
+- 下一开发线：1.5 HLS 增量（AES-128/DASH/临时目录清理）；1.3 仍有本地
+  Xet CAS fixture。
 - 目标：在不破坏 1.0 兼容性的前提下，把 shaul 从“能下载”推进到“可长期运行、可嵌入、可扩展”的生产级下载引擎。
 
 ## 原则
@@ -22,7 +23,9 @@
 | **1.2** | 吞吐与多源 | FTP 后端、多文件并发、全局/单主机连接预算、单主机限速、镜像回退、任务优先级 | 已随 1.1.0/1.2.0 交付 |
 | **1.2.0** | 运维闭环与缓存 | 内容寻址缓存、`doctor`/`stats`/`clean`、缓存/队列/连接指标、可选 Xet | 已发布；1.2.1 补 CLI 实时进度 |
 | **1.3** | Hub 差异化 | 可选 Xet 后端、缓存维护、CAS 增量维护 | Xet 已实现，fixture 待补 |
+| **1.3+** | HTTP 方法与队列 | 非 GET 请求、单请求语义、CLI 批量 pause/resume/cancel/list 过滤 | 已实现，待发布 |
 | **1.4** | 运维与观测 | OpenTelemetry / Prometheus 适配、残留 `.part` 扫描、磁盘预检 | 已实现（适配文档为主） |
+| **1.5** | 流媒体 | 可选 HLS 后端（点播 TS/fMP4、分片续传） | 首期已实现；AES-128/DASH 待后续 |
 
 ---
 
@@ -210,6 +213,27 @@ pub struct ExtractorFinalizer { /* registry */ }
   metadata/header 构造和 HTTP 回退。
 - 详见 [xet-spike.md](xet-spike.md)。
 
+### 非 GET HTTP 下载（已实现，待随 1.3 发布）
+
+- [x] `RequestOptions.method` / `RequestOptions.body`，默认 GET、无请求体。
+- [x] 单请求语义：非 GET 或携带请求体时不分段、不续传、不使用镜像；
+      `POST`/`PATCH` 不自动重试。
+- [x] 重定向：301/302 将 POST 改为 GET，303 将所有非 HEAD 方法改为 GET，
+      307/308 保留方法和请求体；跨域保留请求体需要
+      `allow_cross_origin_auth`。
+- [x] CLI `--method` / `--data` / `--data-file`，`--data` 隐含 POST。
+- [x] Hub、FTP、BitTorrent 拒绝 method/body；`--json` 脱敏请求体。
+- [x] 本地 mock e2e：POST 单次发送、303/307 语义、非幂等不重试、幂等重试。
+- [x] 设计记录见 [ADR 0012](adr/0012-http-request-methods.md)。
+
+### 队列批量操作（已实现，待发布）
+
+- [x] `pause` / `resume` / `cancel` 支持多个 id 和 `--all`。
+- [x] `--all` 默认过滤：pause/cancel = pending+running+paused；
+      resume = paused+failed。
+- [x] `--status` 覆盖默认过滤；`list --status` 可重复按状态过滤。
+- [x] 批量操作逐任务报告错误，任一失败时退出码非零。
+
 ### 通用 CAS 缓存（已随 1.2.0 实现）
 
 - [x] 仅对“已知 checksum + 已知 size”的下载启用。
@@ -229,6 +253,21 @@ pub struct ExtractorFinalizer { /* registry */ }
 - [x] 残留 `.part` 扫描与磁盘空间预检（已随 1.2.0 实现）。
 
 ---
+
+## 1.5 HLS（首期已实现）
+
+- [x] 可选 crate `shaul-hls` + facade `hls` feature；CLI 默认启用。
+- [x] HTTP(S) `.m3u8`、master/media playlist、最高码率变体。
+- [x] `--include`/`--exclude` 按 `NAME`/`RESOLUTION`/`BANDWIDTH`/`CODECS`/URI
+      选择变体。
+- [x] 分片通过共享 `HttpBackend` 并发下载，复用代理、认证、超时、重试、限速和
+      连接预算。
+- [x] TS 与单 `#EXT-X-MAP` fMP4 拼接；`--output` 优先。
+- [x] 分片级续传：playlist SHA-256 指纹 + 已完成分片文件复用。
+- [x] 跨源 playlist/分片默认剥离敏感头。
+- [ ] AES-128 解密、DASH、直播、`EXT-X-BYTERANGE`、交替音轨、ffmpeg 转封装。
+- [ ] `clean --orphans` 清理 HLS 分片临时目录。
+- 设计记录见 [ADR 0013](adr/0013-hls-backend.md)。
 
 ## 扩展边界
 

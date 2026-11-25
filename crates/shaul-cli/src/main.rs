@@ -14,14 +14,19 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use clap::{CommandFactory, Parser};
-use shaul::{Config, DownloadEngine, Error, Link, Result, TaskState, is_sensitive_header_name};
+use shaul::{
+    Config, DownloadEngine, Error, Link, Result, TaskId, TaskState, is_sensitive_header_name,
+};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
-use args::{Cli, Commands, ConfigArgs, ConfigCmd, DownloadArgs, IdArgs, InfoArgs, RunArgs};
+use args::{
+    Cli, Commands, ConfigArgs, ConfigCmd, DownloadArgs, IdArgs, IdsArgs, InfoArgs, ListArgs,
+    RunArgs,
+};
 use support::{
-    acquire_run_lock, collect_links, display_link, human_bytes, redact_message, redacted_resource,
-    redacted_task, resolve_task_id, short_id,
+    acquire_run_lock, collect_links, display_link, human_bytes, parse_task_state, redact_message,
+    redacted_resource, redacted_task, resolve_task_id, short_id,
 };
 
 #[tokio::main]
@@ -72,11 +77,11 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Download(args) => command_download(&mut config, args, json, quiet).await,
         Commands::Add(args) => command_add(&mut config, args, json).await,
         Commands::Run(args) => command_run(&mut config, args, json, quiet).await,
-        Commands::List => command_list(&config, json).await,
+        Commands::List(args) => command_list(&config, args, json).await,
         Commands::Status(args) => command_status(&config, args, json).await,
-        Commands::Pause(args) => command_pause(&config, args).await,
-        Commands::Resume(args) => command_resume(&config, args).await,
-        Commands::Cancel(args) => command_cancel(&config, args).await,
+        Commands::Pause(args) => command_batch(&config, args, BatchOp::Pause).await,
+        Commands::Resume(args) => command_batch(&config, args, BatchOp::Resume).await,
+        Commands::Cancel(args) => command_batch(&config, args, BatchOp::Cancel).await,
         Commands::Info(args) => command_info(&config, args, json).await,
         Commands::Config(args) => command_config(&config, &config_path, args, json),
         Commands::Doctor => maintenance::command_doctor(&config, &config_path, json).await,
@@ -287,9 +292,13 @@ async fn command_run(config: &mut Config, args: RunArgs, json: bool, quiet: bool
     Ok(())
 }
 
-async fn command_list(config: &Config, json: bool) -> Result<()> {
+async fn command_list(config: &Config, args: ListArgs, json: bool) -> Result<()> {
+    let states = parse_states(&args.status)?;
     let engine = build_engine(config)?;
-    let tasks = engine.list().await?;
+    let mut tasks = engine.list().await?;
+    if !states.is_empty() {
+        tasks.retain(|task| states.contains(&task.state));
+    }
     if json {
         let redacted: Vec<_> = tasks.iter().map(redacted_task).collect();
         println!("{}", serde_json::to_string_pretty(&redacted)?);
@@ -354,32 +363,98 @@ async fn command_status(config: &Config, args: IdArgs, json: bool) -> Result<()>
     Ok(())
 }
 
-async fn command_pause(config: &Config, args: IdArgs) -> Result<()> {
-    let engine = build_engine(config)?;
-    let id = resolve_task_id(&engine, &args.id).await?;
-    let task = engine.pause(id).await?;
-    println!("{}: {:?}", short_id(&task.id), task.state);
-    Ok(())
+#[derive(Clone, Copy)]
+enum BatchOp {
+    Pause,
+    Resume,
+    Cancel,
 }
 
-async fn command_resume(config: &Config, args: IdArgs) -> Result<()> {
-    let engine = build_engine(config)?;
-    let id = resolve_task_id(&engine, &args.id).await?;
-    let task = engine.resume(id).await?;
-    println!(
-        "{}: {:?} (the run worker will pick it up)",
-        short_id(&task.id),
-        task.state
-    );
-    Ok(())
+impl BatchOp {
+    fn default_states(self) -> &'static [TaskState] {
+        match self {
+            Self::Pause => &[TaskState::Pending, TaskState::Running, TaskState::Paused],
+            Self::Resume => &[TaskState::Paused, TaskState::Failed],
+            Self::Cancel => &[TaskState::Pending, TaskState::Running, TaskState::Paused],
+        }
+    }
 }
 
-async fn command_cancel(config: &Config, args: IdArgs) -> Result<()> {
+async fn command_batch(config: &Config, args: IdsArgs, op: BatchOp) -> Result<()> {
     let engine = build_engine(config)?;
-    let id = resolve_task_id(&engine, &args.id).await?;
-    let task = engine.cancel(id).await?;
-    println!("{}: {:?}", short_id(&task.id), task.state);
-    Ok(())
+    let ids = batch_ids(&engine, &args, op.default_states()).await?;
+    if ids.is_empty() {
+        println!("no matching tasks");
+        return Ok(());
+    }
+    let mut failures = 0usize;
+    for id in ids {
+        let result = match op {
+            BatchOp::Pause => engine.pause(id).await,
+            BatchOp::Resume => engine.resume(id).await,
+            BatchOp::Cancel => engine.cancel(id).await,
+        };
+        match result {
+            Ok(task) => {
+                if matches!(op, BatchOp::Resume) {
+                    println!(
+                        "{}: {:?} (the run worker will pick it up)",
+                        short_id(&task.id),
+                        task.state
+                    );
+                } else {
+                    println!("{}: {:?}", short_id(&task.id), task.state);
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "{}: error: {}",
+                    short_id(&id),
+                    redact_message(&error.to_string())
+                );
+                failures += 1;
+            }
+        }
+    }
+    if failures > 0 {
+        Err(Error::Other(format!("{failures} task(s) failed")))
+    } else {
+        Ok(())
+    }
+}
+
+async fn batch_ids(
+    engine: &DownloadEngine,
+    args: &IdsArgs,
+    default_states: &[TaskState],
+) -> Result<Vec<TaskId>> {
+    if args.all {
+        let states = if args.status.is_empty() {
+            default_states.to_vec()
+        } else {
+            parse_states(&args.status)?
+        };
+        Ok(engine
+            .list()
+            .await?
+            .into_iter()
+            .filter(|task| states.contains(&task.state))
+            .map(|task| task.id)
+            .collect())
+    } else {
+        let mut ids = Vec::new();
+        for raw in &args.ids {
+            let id = resolve_task_id(engine, raw).await?;
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
+    }
+}
+
+fn parse_states(values: &[String]) -> Result<Vec<TaskState>> {
+    values.iter().map(|value| parse_task_state(value)).collect()
 }
 
 async fn command_info(config: &Config, args: InfoArgs, json: bool) -> Result<()> {

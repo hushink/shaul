@@ -722,6 +722,7 @@ mod xet_tests {
             headers: vec![Header::new("X-Test", "yes").unwrap()],
             auth: Some(shaul_core::Auth::bearer("secret")),
             allow_cross_origin_auth: false,
+            ..RequestOptions::default()
         };
         let headers = xet_headers(&request).unwrap();
         assert_eq!(headers.get("authorization").unwrap(), "Bearer secret");

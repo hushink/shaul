@@ -34,6 +34,22 @@ declares that it cannot resume, the engine discards the saved manifest and
 starts from zero. FTP automatically restarts from zero when the server rejects
 `REST`. See [resume and hardening](resume.md).
 
+## Can I send a POST or another non-GET request?
+
+Yes, for direct HTTP(S) links. Use `--method POST` (or `PUT`, `PATCH`, ...)
+together with `--data '<body>'` or `--data-file PATH`; `--data` implies `POST`
+when `--method` is omitted. These requests are single-shot: shaul streams the
+probe response directly, so the request is sent exactly once, but resume and
+mirror fallback are disabled and `POST`/`PATCH` are not retried automatically.
+Redirects follow the usual browser/RFC rules: `301`/`302` switch `POST` to
+`GET`, `303` switches any non-`HEAD` method to `GET`, and `307`/`308` keep the
+method and body. A cross-origin `307`/`308` that would forward the body is
+refused unless `allow_cross_origin_auth` is enabled. Like headers, the body is
+stored in the task sidecar (mode
+0600 on Unix); use `${env:NAME}` placeholders for secrets, and note that
+`--json` output redacts the body. Hub, FTP and BitTorrent tasks reject
+method/body settings.
+
 ## How does verification work?
 
 - `--checksum sha256:<hex>` / `--checksum-file PATH` supplies an expected
@@ -136,6 +152,22 @@ single-stream; resume uses `REST` plus `SIZE`/`MDTM` when the server supports
 them. FTP authentication uses Basic credentials (`--basic` or URL userinfo).
 FTPS, FTP proxies and recursive directory downloads are not enabled yet.
 
+## Does shaul support HLS?
+
+Yes, through the optional `hls` feature (the CLI enables it). Point shaul at an
+HTTP(S) `.m3u8` URL. A master playlist selects the highest-bandwidth variant;
+`--include`/`--exclude` globs can pick a different `NAME`, `RESOLUTION`,
+`BANDWIDTH`, `CODECS` or URI. Segments download concurrently through the
+shared HTTP stack and are concatenated into one `.ts` file, or `.mp4` for fMP4
+playlists with a single `#EXT-X-MAP`.
+
+Phase 1 supports VOD playlists with `#EXT-X-ENDLIST` and resumes at segment
+granularity. AES-128/SAMPLE-AES, `#EXT-X-BYTERANGE`, live playlists, DASH and
+alternate audio renditions are not supported yet. `--mirror` and the
+final-output content cache do not apply to HLS tasks. Completed segments live
+in `<output>.shaul.hls.parts/`; `shaul clean --orphans` currently removes the
+concatenation `.part` but not that directory.
+
 ## Does BitTorrent seed after completion?
 
 No. shaul is leech-only: it responds to uploads while downloading, then pauses
@@ -149,7 +181,10 @@ librqbit's persisted state.
 `shaul add` persists a task and exits. `shaul run` is a long-running worker
 that processes pending tasks; it holds a state-directory lock so only one
 worker runs per state directory. `pause`/`resume`/`cancel` edit the sidecar,
-and a running worker notices within about 500 ms. Tasks are claimed atomically
+and a running worker notices within about 500 ms. They accept several ids or
+`--all`; `--all` defaults to pending/running/paused for pause and cancel and to
+paused/failed for resume, while `--status` overrides the filter.
+`list --status` accepts repeated state names. Tasks are claimed atomically
 and protected by a per-task OS lock, so a second `shaul download`/`shaul run`
 cannot execute the same task concurrently. If a runner process dies, the OS
 releases its lock and the next `run` recovers the task immediately.
@@ -222,8 +257,9 @@ slice. The library does not read environment variables unless the caller uses
 
 `--json` emits NDJSON for progress events and pretty JSON for `add`, `list`,
 `status`, `info`, `config show`, `doctor`, `stats` and `clean`. Sensitive
-headers are replaced with `<redacted>`, HTTP query strings are stripped from
-task views, and provider tokens are never included.
+headers and direct-download request bodies are replaced with `<redacted>`,
+HTTP query strings are stripped from task views, and provider tokens are never
+included.
 
 ## Why did a download fail with 416 or an HTML file?
 

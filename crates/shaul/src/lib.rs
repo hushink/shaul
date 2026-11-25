@@ -25,6 +25,8 @@ pub use shaul_bt::{BtBackend, TorrentParser};
 pub use shaul_core::*;
 #[cfg(feature = "ftp")]
 pub use shaul_ftp::{FtpBackend, FtpParser};
+#[cfg(feature = "hls")]
+pub use shaul_hls::{HlsBackend, HlsClient, HlsParser};
 pub use shaul_http::{DirectLinkParser, HttpBackend};
 pub use shaul_hub::{
     HubBackend, HubClient, HuggingFaceParser, ModelScopeParser, hf_token_available,
@@ -32,10 +34,12 @@ pub use shaul_hub::{
 };
 
 /// Build the default router. BitTorrent (when the `bt` feature is enabled) is
-/// registered first, then Hub parsers/backends, then FTP (when enabled), then
-/// the direct HTTP fallback.
+/// registered first, then Hub parsers/backends, then FTP and HLS (when
+/// enabled), then the direct HTTP fallback.
 pub fn default_router(config: &Config) -> Result<Router> {
     let client = Arc::new(HubClient::new(config)?);
+    #[cfg(feature = "hls")]
+    let hls_client = Arc::new(HlsClient::new(config)?);
     let mut parsers = ParserRegistry::new();
     #[cfg(feature = "bt")]
     parsers.register(Arc::new(TorrentParser));
@@ -43,6 +47,8 @@ pub fn default_router(config: &Config) -> Result<Router> {
     parsers.register(Arc::new(ModelScopeParser::new(client.clone())));
     #[cfg(feature = "ftp")]
     parsers.register(Arc::new(FtpParser));
+    #[cfg(feature = "hls")]
+    parsers.register(Arc::new(HlsParser::new(hls_client.clone())));
     parsers.register(shaul_core::parser_arc(DirectLinkParser));
 
     #[cfg(feature = "bt")]
@@ -55,9 +61,15 @@ pub fn default_router(config: &Config) -> Result<Router> {
         Some(Arc::new(FtpBackend::new()) as Arc<dyn DownloadBackend>);
     #[cfg(not(feature = "ftp"))]
     let ftp_backend: Option<Arc<dyn DownloadBackend>> = None;
+    #[cfg(feature = "hls")]
+    let hls_backend: Option<Arc<dyn DownloadBackend>> =
+        Some(Arc::new(HlsBackend::new(hls_client, http.clone())) as Arc<dyn DownloadBackend>);
+    #[cfg(not(feature = "hls"))]
+    let hls_backend: Option<Arc<dyn DownloadBackend>> = None;
     let backends: Vec<Arc<dyn DownloadBackend>> = bt_backend
         .into_iter()
         .chain(ftp_backend)
+        .chain(hls_backend)
         .chain([
             Arc::new(HubBackend::with_http_and_xet(client, http.clone()))
                 as Arc<dyn DownloadBackend>,
@@ -73,7 +85,7 @@ fn default_parts(config: &Config) -> Result<(Router, Arc<dyn TaskStore>)> {
     Ok((router, store))
 }
 
-/// Build the default engine (BT + Hub + direct-link backends + sidecar store).
+/// Build the default engine (enabled protocol backends + sidecar store).
 pub fn default_engine(config: Config) -> Result<(DownloadEngine, Arc<dyn TaskStore>)> {
     let (router, store) = default_parts(&config)?;
     let engine = DownloadEngine::new(Arc::new(router), store.clone(), config);

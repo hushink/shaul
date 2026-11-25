@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use fs2::FileExt;
-use shaul::{Auth, Checksum, DownloadEngine, Error, Header, Link, Result, TaskId};
+use shaul::{Auth, Checksum, DownloadEngine, Error, Header, Link, Result, TaskId, TaskState};
 use uuid::Uuid;
 
 pub fn parse_headers(values: &[String]) -> Result<Vec<Header>> {
@@ -35,6 +35,58 @@ pub fn read_header_file(path: &Path) -> Result<Vec<Header>> {
         headers.push(Header::new(name, value)?);
     }
     Ok(headers)
+}
+
+/// Parse a task state name used by `list` and batch commands.
+pub fn parse_task_state(value: &str) -> Result<TaskState> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "pending" => Ok(TaskState::Pending),
+        "running" => Ok(TaskState::Running),
+        "paused" => Ok(TaskState::Paused),
+        "completed" => Ok(TaskState::Completed),
+        "cancelled" | "canceled" => Ok(TaskState::Cancelled),
+        "failed" => Ok(TaskState::Failed),
+        _ => Err(Error::Config(format!(
+            "unknown task state: {value} (use pending, running, paused, completed, cancelled or failed)"
+        ))),
+    }
+}
+
+/// Validate an HTTP method token and reject methods that cannot return a
+/// downloadable body.
+pub fn validate_http_method(value: &str) -> Result<String> {
+    let method = value.trim();
+    if method.is_empty() {
+        return Err(Error::Config("HTTP method must not be empty".to_string()));
+    }
+    if !method.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+            )
+    }) {
+        return Err(Error::Config(format!("invalid HTTP method: {method}")));
+    }
+    if method.eq_ignore_ascii_case("HEAD") {
+        return Err(Error::Config(
+            "HEAD is not a download method; use GET or a method that returns a body".to_string(),
+        ));
+    }
+    Ok(method.to_string())
 }
 
 pub fn collect_links(links: &[String], input_file: Option<&Path>) -> Result<Vec<String>> {
@@ -293,6 +345,9 @@ fn redact_request(request: &mut shaul::RequestOptions) {
             header.value = "<redacted>".to_string();
         }
     }
+    if request.body.is_some() {
+        request.body = Some("<redacted>".to_string());
+    }
 }
 
 #[cfg(test)]
@@ -339,6 +394,8 @@ mod tests {
                 headers: vec![Header::new("Authorization", "Bearer request-secret").unwrap()],
                 auth: Some(shaul::Auth::bearer("auth-secret")),
                 allow_cross_origin_auth: false,
+                body: Some("body-secret".to_string()),
+                ..RequestOptions::default()
             },
             checksum: None,
             revision: None,
@@ -353,6 +410,7 @@ mod tests {
             "request-secret",
             "auth-secret",
             "meta-secret",
+            "body-secret",
         ] {
             assert!(!text.contains(secret), "{secret} leaked: {text}");
         }
@@ -389,5 +447,22 @@ mod tests {
         ] {
             assert!(!text.contains(secret), "{secret} leaked: {text}");
         }
+    }
+
+    #[test]
+    fn parses_task_states() {
+        assert_eq!(parse_task_state("paused").unwrap(), TaskState::Paused);
+        assert_eq!(parse_task_state("CANCELLED").unwrap(), TaskState::Cancelled);
+        assert_eq!(parse_task_state("canceled").unwrap(), TaskState::Cancelled);
+        assert!(parse_task_state("unknown").is_err());
+    }
+
+    #[test]
+    fn validates_http_methods() {
+        assert_eq!(validate_http_method(" post ").unwrap(), "post");
+        assert_eq!(validate_http_method("PURGE").unwrap(), "PURGE");
+        assert!(validate_http_method("").is_err());
+        assert!(validate_http_method("BAD METHOD").is_err());
+        assert!(validate_http_method("HEAD").is_err());
     }
 }

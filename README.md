@@ -8,7 +8,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A resumable, pluggable download engine for Rust — one API for HTTP(S),
+A resumable, pluggable download engine for Rust — one API for HTTP(S), HLS,
 Hugging Face, ModelScope, BitTorrent, FTP and optional Xet.
 
 shaul combines segmented transfers, safe resume, checksum verification,
@@ -17,14 +17,16 @@ behind a small set of replaceable components. Use it as a library or through
 the `shaul` command.
 
 > [!NOTE]
-> The CLI enables BitTorrent, FTP and Xet. Library users start with the default
-> feature set and opt in with `features = ["bt"]`, `["ftp"]` and/or `["xet"]`.
+> The CLI enables BitTorrent, FTP, HLS and Xet. Library users start with the
+> default feature set and opt in with `features = ["bt"]`, `["ftp"]`, `["hls"]`
+> and/or `["xet"]`.
 
 ## Why shaul
 
 - **One download model for many protocols.** A `LinkParser` turns input into a
   protocol-agnostic `Resource`; a `Router` selects the first backend that can
-  handle it; a `DownloadEngine` manages tasks and persistence.
+  handle it; a `DownloadEngine` manages tasks and persistence. HLS segments
+  stay inside the backend, so the task still produces one output file.
 - **Resume that checks its assumptions.** Sidecar checkpoints record byte
   ranges, checksums and validators. A changed `ETag`, `Last-Modified` or size
   restarts the file safely; servers that ignore `Range` fall back to one stream.
@@ -75,7 +77,7 @@ Optional protocol support:
 
 ```toml
 [dependencies]
-shaul = { version = "1.2", features = ["bt", "ftp", "xet"] }
+shaul = { version = "1.2", features = ["bt", "ftp", "hls", "xet"] }
 ```
 
 `shaul` has an empty default feature set. `bt`, `ftp` and `xet` are opt-in.
@@ -88,6 +90,15 @@ shaul = { version = "1.2", features = ["bt", "ftp", "xet"] }
 # Direct HTTP link with resume and verification
 $ shaul download https://example.com/model.bin \
       --checksum sha256:<hex> --connections 8
+
+# POST a request body to an API that returns a file
+$ shaul download https://example.com/api/export \
+      --method POST --data '{"id":42}' \
+      -H 'Content-Type: application/json'
+
+# HLS: highest-bandwidth variant, segments concatenated into one file
+$ shaul download https://example.com/video/master.m3u8 --connections 8
+$ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 
 # Hugging Face repository snapshot
 $ export HF_TOKEN=hf_...
@@ -113,10 +124,13 @@ $ shaul download https://example.com/file.bin \
 # Persistent queue
 $ shaul add --input-file links.txt
 $ shaul run --limit 50MiB
-$ shaul list
+$ shaul list --status pending
 $ shaul status <id-or-suffix>
-$ shaul pause <id>
-$ shaul resume <id>
+$ shaul pause <id> <id>     # one or more ids
+$ shaul pause --all         # pending, running and paused tasks
+$ shaul resume --all        # paused and failed tasks
+$ shaul cancel --all        # pending, running and paused tasks
+$ shaul resume <id>         # a running worker notices within ~500 ms
 
 # Health, statistics and cleanup
 $ shaul doctor
@@ -163,6 +177,7 @@ runtime.
 | Input | Examples |
 | --- | --- |
 | Direct HTTP(S) | `https://example.com/file.bin` |
+| HLS | `https://example.com/video/master.m3u8` |
 | Hugging Face | `hf://org/repo`, `hf://datasets/org/repo`, repository URLs |
 | ModelScope | `ms://org/repo`, `ms://datasets/org/repo`, repository URLs |
 | BitTorrent | magnet links, 40-character v1 info hashes, local `.torrent` files |
@@ -172,7 +187,8 @@ runtime.
 Hugging Face and ModelScope links accept `--revision`, `--include` and
 `--exclude`; `--revision` overrides a revision embedded in the URL. Repository
 HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
-`/resolve/<rev>/<path>` path styles.
+`/resolve/<rev>/<path>` path styles. HLS links use `--include`/`--exclude` to
+select a variant.
 
 ## Features
 
@@ -186,7 +202,22 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
   validator (or checksum) before they are used.
 - HTTP/HTTPS/SOCKS5 proxy with `NO_PROXY`; global, per-host and per-task
   bandwidth caps; active request budgets across tasks and hosts.
+- Non-GET HTTP requests (`POST`, `PUT`, `PATCH`, ...) with an optional body,
+  including a `--data-file` variant. These are sent as a single request and
+  do not segment, resume or use mirrors.
 - Multi-file tasks download files concurrently with `file_jobs`.
+
+### HLS
+
+- HTTP(S) `.m3u8` master and media playlists. The highest-bandwidth variant is
+  selected by default; repeat `--include`/`--exclude` with globs matching
+  `NAME`, `RESOLUTION`, `BANDWIDTH`, `CODECS` or the URI to choose another.
+- Segments download concurrently through the shared HTTP stack, so proxy,
+  authentication, timeouts, retries, rate limits and connection budgets apply.
+- Segment-level resume: a playlist SHA-256 guards the completed segment files
+  in `<output>.shaul.hls.parts/`.
+- TS output and fMP4 playlists with a single `#EXT-X-MAP`. AES-128,
+  `#EXT-X-BYTERANGE`, live playlists and DASH are not supported yet.
 
 ### Integrity and post-processing
 
@@ -209,6 +240,8 @@ HTTPS URLs also accept `/tree/<rev>`, `/blob/<rev>/<path>` and
 
 - Persistent sidecar task store with pause, resume and cancel across
   processes.
+- Batch queue control: `pause`/`resume`/`cancel` accept multiple ids or
+  `--all`, and `list --status` filters by state.
 - Priority scheduling and jittered retries with typed retry events.
 - NDJSON output, typed events, `tracing` spans and pluggable telemetry.
 - `doctor`, `stats` and `clean` commands for routine maintenance.
@@ -304,10 +337,24 @@ redacts sensitive headers and removes query strings from HTTP task views.
 
 - Segmented HTTP downloads write into one preallocated `.part` file at byte
   offsets; there is no per-segment file merge.
+- A non-GET method, or any request with a body, is a single-shot transfer: the
+  probe response is streamed directly, so the request is sent exactly once.
+  Resume and mirror fallback are disabled, and `POST`/`PATCH` are not retried
+  automatically. `301`/`302` switch `POST` to `GET`, `303` switches any
+  non-`HEAD` method to `GET`, and `307`/`308` preserve the method and body.
+  A cross-origin `307`/`308` that would forward a body requires
+  `allow_cross_origin_auth`. Bodies support `${env:NAME}` placeholders and are
+  redacted from `--json` output.
 - Resume is enabled by default. A backend advertises support through
   `BackendCapabilities`; when it cannot resume, the engine discards the saved
   manifest and starts from zero. FTP restarts from zero when the server
   rejects `REST`.
+- HLS tasks produce one output file. Segments are written under
+  `<output>.shaul.hls.parts/`, concatenated through `<output>.shaul.part`, and
+  the temporary directory is removed on success. Resume is segment-level; a
+  changed playlist fingerprint restarts. `--mirror` and the final-output
+  content cache do not apply. Cross-origin playlist/segment URLs strip
+  sensitive headers unless `allow_cross_origin_auth` is set.
 - `--verify` requires a checksum. `--no-verify` disables optional checksum
   verification. BitTorrent piece verification is internal and counts as
   verification.
@@ -315,7 +362,7 @@ redacts sensitive headers and removes query strings from HTTP task views.
   a temporary directory and renamed into place. `--rename` suffixes an
   existing extraction target; `--no-delete-archive` keeps the archive even when
   the config deletes archives.
-- `--output` is for single-file direct HTTP/FTP links. Use `--dir` for Hub
+- `--output` is for single-file direct HTTP/FTP/HLS links. Use `--dir` for Hub
   repositories and BitTorrent; those backends reject `--output`.
 - BitTorrent is leech-only: uploads are served while downloading, then the
   torrent is paused after completion. Existing destination files are refused

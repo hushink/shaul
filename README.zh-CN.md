@@ -8,15 +8,15 @@
 
 [English](README.md) | **简体中文**
 
-可续传、可插拔的 Rust 下载引擎 —— 用一套 API 处理 HTTP(S)、Hugging Face、
-ModelScope、BitTorrent、FTP 与可选 Xet。
+可续传、可插拔的 Rust 下载引擎 —— 用一套 API 处理 HTTP(S)、HLS、
+Hugging Face、ModelScope、BitTorrent、FTP 与可选 Xet。
 
 shaul 把分片传输、安全续传、校验、解压、持久队列和可选内容寻址缓存组合在
 一组可替换组件之后。你可以把它作为库嵌入应用，也可以直接使用 `shaul` 命令。
 
 > [!NOTE]
-> CLI 默认启用 BitTorrent、FTP 与 Xet。库用户从默认 feature 开始，按需启用
-> `features = ["bt"]`、`["ftp"]` 和/或 `["xet"]`。
+> CLI 默认启用 BitTorrent、FTP、HLS 与 Xet。库用户从默认 feature 开始，按需启用
+> `features = ["bt"]`、`["ftp"]`、`["hls"]` 和/或 `["xet"]`。
 
 ## 为什么选择 shaul
 
@@ -71,7 +71,7 @@ shaul = "1.2"
 
 ```toml
 [dependencies]
-shaul = { version = "1.2", features = ["bt", "ftp", "xet"] }
+shaul = { version = "1.2", features = ["bt", "ftp", "hls", "xet"] }
 ```
 
 `shaul` 默认不启用任何可选协议；`bt`、`ftp` 与 `xet` 都需显式开启。
@@ -84,6 +84,15 @@ shaul = { version = "1.2", features = ["bt", "ftp", "xet"] }
 # 直链：续传与校验
 $ shaul download https://example.com/model.bin \
       --checksum sha256:<hex> --connections 8
+
+# 向返回文件的 API 发送 POST 请求体
+$ shaul download https://example.com/api/export \
+      --method POST --data '{"id":42}' \
+      -H 'Content-Type: application/json'
+
+# HLS：默认最高码率，分片拼接成一个文件
+$ shaul download https://example.com/video/master.m3u8 --connections 8
+$ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 
 # Hugging Face 仓库快照
 $ export HF_TOKEN=hf_...
@@ -109,10 +118,13 @@ $ shaul download https://example.com/file.bin \
 # 持久队列
 $ shaul add --input-file links.txt
 $ shaul run --limit 50MiB
-$ shaul list
+$ shaul list --status pending
 $ shaul status <id 或后缀>
-$ shaul pause <id>
-$ shaul resume <id>
+$ shaul pause <id> <id>     # 一个或多个 id
+$ shaul pause --all         # pending、running、paused
+$ shaul resume --all        # paused、failed
+$ shaul cancel --all        # pending、running、paused
+$ shaul resume <id>         # 运行中的 worker 约 500ms 内感知
 
 # 诊断、统计与清理
 $ shaul doctor
@@ -158,6 +170,7 @@ async fn main() -> shaul::Result<()> {
 | 输入 | 示例 |
 | --- | --- |
 | HTTP(S) 直链 | `https://example.com/file.bin` |
+| HLS | `https://example.com/video/master.m3u8` |
 | Hugging Face | `hf://org/repo`、`hf://datasets/org/repo`、仓库 URL |
 | ModelScope | `ms://org/repo`、`ms://datasets/org/repo`、仓库 URL |
 | BitTorrent | 磁力链、40 位 v1 info hash、本地 `.torrent` |
@@ -166,7 +179,8 @@ async fn main() -> shaul::Result<()> {
 
 Hugging Face / ModelScope 链接支持 `--revision`、`--include` 与
 `--exclude`；`--revision` 会覆盖 URL 中携带的 revision。仓库 HTTPS URL 也接受
-`/tree/<rev>`、`/blob/<rev>/<path>` 和 `/resolve/<rev>/<path>` 形式。
+`/tree/<rev>`、`/blob/<rev>/<path>` 和 `/resolve/<rev>/<path>` 形式。HLS 链接
+用 `--include`/`--exclude` 选择变体。
 
 ## 核心能力
 
@@ -178,7 +192,20 @@ Hugging Face / ModelScope 链接支持 `--revision`、`--include` 与
 - 兼容镜像回退：镜像必须通过大小与 validator（或 checksum）检查才会使用。
 - HTTP/HTTPS/SOCKS5 代理与 `NO_PROXY`；全局、单主机和单任务限速；
   跨任务/单主机的活动请求预算。
+- 非 GET HTTP 请求（`POST`、`PUT`、`PATCH` 等）与可选请求体，支持
+  `--data-file`。这类请求按单请求发送，不分片、不续传、不使用镜像。
 - 多文件任务通过 `file_jobs` 并发下载。
+
+### HLS
+
+- HTTP(S) `.m3u8` master/media playlist。默认选择最高码率变体；可用
+  `--include`/`--exclude` glob 匹配 `NAME`、`RESOLUTION`、`BANDWIDTH`、
+  `CODECS` 或 URI 选择其他变体。
+- 分片通过共享 HTTP 栈并发下载，代理、认证、超时、重试、限速和连接预算都生效。
+- 分片级续传：用 playlist 的 SHA-256 校验 `<output>.shaul.hls.parts/` 中已完成
+  的分片。
+- 支持 TS，以及带单个 `#EXT-X-MAP` 的 fMP4。暂不支持 AES-128、
+  `#EXT-X-BYTERANGE`、直播列表和 DASH。
 
 ### 校验与后处理
 
@@ -199,6 +226,8 @@ Hugging Face / ModelScope 链接支持 `--revision`、`--include` 与
 ### 队列与自动化
 
 - 持久 sidecar 任务存储，支持跨进程 pause/resume/cancel。
+- 批量队列控制：`pause`/`resume`/`cancel` 支持多个 id 或 `--all`；
+  `list --status` 按状态过滤。
 - 优先级调度与带 jitter 的重试，重试可通过类型化事件观测。
 - NDJSON、类型化事件、`tracing` span 与可插拔 telemetry。
 - `doctor`、`stats`、`clean` 运维命令。
@@ -288,14 +317,25 @@ provider token 在运行时解析，不会写入任务 sidecar。Unix 上 sideca
 ## 关键语义
 
 - HTTP 分片写入同一个预分配 `.part` 文件的不同偏移，不做“每片一文件”的合并。
+- 非 GET 方法、或任何携带请求体的请求都按单请求处理：探测响应直接流式写入
+  文件，请求只发送一次。这类任务不续传、不使用镜像，`POST`/`PATCH` 不会
+  自动重试。`301`/`302` 会把 `POST` 改为 `GET`，`303` 会把所有非 `HEAD`
+  方法改为 `GET`，`307`/`308` 保留方法和请求体。跨源 `307`/`308` 如果要
+  转发请求体，需要开启 `allow_cross_origin_auth`。请求体支持 `${env:NAME}`
+  占位符，`--json` 输出会对请求体脱敏。
 - 续传默认开启。后端通过 `BackendCapabilities` 声明能力；不支持续传时，
   引擎丢弃旧 manifest 并从零开始。FTP 服务器拒绝 `REST` 时会自动从零重试。
+- HLS 任务只产生一个输出文件。分片写入 `<output>.shaul.hls.parts/`，通过
+  `<output>.shaul.part` 拼接，成功后删除临时目录。续传是分片级的；playlist
+  指纹变化会从零开始。`--mirror` 和最终输出的内容寻址缓存不适用于 HLS。
+  跨源 playlist/分片 URL 默认剥离敏感请求头，除非开启
+  `allow_cross_origin_auth`。
 - `--verify` 要求存在校验值；`--no-verify` 关闭可选校验。BitTorrent piece
   校验由协议内部完成，并视为已校验。
 - 解压默认关闭。先校验压缩包，再解压到临时目录，最后原子 rename。
   `--rename` 会为已存在的解压目标加后缀；`--no-delete-archive` 可覆盖配置中的
   删除行为。
-- `--output` 用于单文件 HTTP/FTP 直链；Hub 仓库和 BitTorrent 请用 `--dir`，
+- `--output` 用于单文件 HTTP/FTP/HLS 直链；Hub 仓库和 BitTorrent 请用 `--dir`，
   这两个后端会拒绝 `--output`。
 - BitTorrent 只做 leech：下载期间响应上传，完成后暂停，不常驻做种。目标位置
   已有文件时默认拒绝覆盖，需显式 `--force`；正常情况下续传由 librqbit 的

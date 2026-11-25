@@ -6,15 +6,16 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A unified, resumable download engine for direct HTTP links, Hugging Face,
+A unified, resumable download engine for direct HTTP links, HLS, Hugging Face,
 ModelScope, BitTorrent, FTP and optional Hugging Face Xet.
 
 `shaul` is the facade crate. It assembles the parser → router → backend
 pipeline from [`shaul-core`](https://crates.io/crates/shaul-core),
 [`shaul-http`](https://crates.io/crates/shaul-http),
 [`shaul-hub`](https://crates.io/crates/shaul-hub) and, when enabled,
-[`shaul-bt`](https://crates.io/crates/shaul-bt) and
-[`shaul-ftp`](https://crates.io/crates/shaul-ftp).
+[`shaul-bt`](https://crates.io/crates/shaul-bt),
+[`shaul-ftp`](https://crates.io/crates/shaul-ftp) and
+[`shaul-hls`](https://crates.io/crates/shaul-hls).
 
 ## Install
 
@@ -24,14 +25,19 @@ shaul = "1.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 # Optional protocol support:
-# shaul = { version = "1.2", features = ["bt", "ftp", "xet"] }
+# shaul = { version = "1.2", features = ["bt", "ftp", "hls", "xet"] }
 ```
 
 | Feature | Adds |
 | --- | --- |
 | `bt` | BitTorrent, magnet links and `.torrent` files |
 | `ftp` | Single-stream resumable `ftp://` downloads |
+| `hls` | VOD HLS (`.m3u8`) playlists, concatenated into one file |
 | `xet` | Hugging Face Xet downloads with HTTP fallback |
+
+HLS phase 1 supports TS and single-init-map fMP4 playlists, segment-level
+resume and concurrent segment downloads. AES-128, `#EXT-X-BYTERANGE`, live
+playlists and DASH are not supported yet.
 
 ## Quick start
 

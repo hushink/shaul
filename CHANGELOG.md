@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(http,cli)* support non-GET direct downloads with an optional request body
+  (`--method`, `--data`, `--data-file`), including single-shot semantics,
+  RFC-style redirect handling and `--json` body redaction
+- *(hls)* add the optional `shaul-hls` crate and `hls` feature: VOD `.m3u8`
+  master/media playlists, highest-bandwidth variant selection, concurrent
+  segment downloads, TS/fMP4 concatenation and segment-level resume
+- *(cli)* batch `pause`/`resume`/`cancel` with multiple ids or `--all`, plus
+  `list --status` state filters
+
 ## [1.2.2](https://github.com/hushink/shaul/compare/shaul-v1.2.1...shaul-v1.2.2) - 2026-11-24
 
 ### Fixed
