@@ -19,6 +19,8 @@ multi-protocol download engine.
 - Manual redirect handling with cross-origin credential stripping
 - Non-GET requests (`POST`/`PUT`/`PATCH`, ...) with an optional body; sent once
   without segmentation, resume or mirrors
+- Exact byte-range downloads via `HttpBackend::download_range`, with a
+  full-object fallback when a server ignores `Range`
 - Custom headers and bearer, basic or header authentication
 - HTTP/HTTPS/SOCKS5 proxy, global/per-host/per-task bandwidth limits and
   active request budgets

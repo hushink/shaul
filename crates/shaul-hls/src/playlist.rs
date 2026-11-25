@@ -50,8 +50,9 @@ pub struct MediaPlaylist {
     pub init_key: Option<Key>,
     /// Whether a later `#EXT-X-MAP` changed the initialization segment.
     pub init_changed: bool,
-    /// Whether `#EXT-X-MAP` carried a byte range.
-    pub init_byte_range: bool,
+    /// Byte range of the initialization segment, when `#EXT-X-MAP` carries
+    /// `BYTERANGE`.
+    pub init_byte_range: Option<ByteRange>,
     /// Whether `#EXT-X-ENDLIST` was present.
     pub end_list: bool,
     /// `#EXT-X-MEDIA-SEQUENCE`, when present.
@@ -213,16 +214,26 @@ impl Playlist {
                     return Err(Error::InvalidLink("#EXT-X-MAP is missing URI".to_string()));
                 };
                 let uri = resolve_uri(base, uri)?;
+                let init_range = attributes
+                    .get("BYTERANGE")
+                    .map(|value| parse_byte_range(value))
+                    .transpose()?
+                    .map(|mut range| {
+                        range.offset.get_or_insert(0);
+                        range
+                    });
                 let key_changed =
                     media.init.is_some() && media.init_key.as_ref() != media.current_key.as_ref();
-                if media.init.as_ref().is_some_and(|existing| *existing != uri) || key_changed {
+                let range_changed = media.init.is_some() && media.init_byte_range != init_range;
+                if media.init.as_ref().is_some_and(|existing| *existing != uri)
+                    || key_changed
+                    || range_changed
+                {
                     media.init_changed = true;
                 } else if media.init.is_none() {
                     media.init = Some(uri);
                     media.init_key = media.current_key.clone();
-                }
-                if attributes.contains_key("BYTERANGE") {
-                    media.init_byte_range = true;
+                    media.init_byte_range = init_range;
                 }
                 continue;
             }
@@ -273,6 +284,8 @@ impl Playlist {
             pending_discontinuity = false;
         }
 
+        resolve_segment_ranges(&mut media.segments)?;
+
         if !master.is_empty() {
             if !media.segments.is_empty() || media.init.is_some() {
                 return Err(Error::InvalidLink(
@@ -306,7 +319,7 @@ struct MediaState {
     init: Option<Url>,
     init_key: Option<Key>,
     init_changed: bool,
-    init_byte_range: bool,
+    init_byte_range: Option<ByteRange>,
     end_list: bool,
     media_sequence: u64,
     playlist_type: Option<String>,
@@ -412,7 +425,46 @@ fn parse_byte_range(value: &str) -> Result<ByteRange> {
     let length = length
         .parse::<u64>()
         .map_err(|_| Error::InvalidLink(format!("invalid #EXT-X-BYTERANGE length: {value}")))?;
+    if length == 0 {
+        return Err(Error::InvalidLink(
+            "HLS byte range length must be greater than zero".to_string(),
+        ));
+    }
     Ok(ByteRange { length, offset })
+}
+
+fn resolve_segment_ranges(segments: &mut [Segment]) -> Result<()> {
+    let mut previous: Option<(Url, ByteRange)> = None;
+    for segment in segments {
+        let Some(mut range) = segment.byte_range else {
+            previous = None;
+            continue;
+        };
+        let offset = match range.offset {
+            Some(offset) => offset,
+            None => previous
+                .as_ref()
+                .filter(|(url, _)| *url == segment.uri)
+                .map(|(_, previous)| {
+                    previous
+                        .offset
+                        .unwrap_or(0)
+                        .checked_add(previous.length)
+                        .ok_or_else(|| {
+                            Error::InvalidLink("HLS byte range overflows u64".to_string())
+                        })
+                })
+                .transpose()?
+                .unwrap_or(0),
+        };
+        offset
+            .checked_add(range.length)
+            .ok_or_else(|| Error::InvalidLink("HLS byte range overflows u64".to_string()))?;
+        range.offset = Some(offset);
+        previous = Some((segment.uri.clone(), range));
+        segment.byte_range = Some(range);
+    }
+    Ok(())
 }
 
 enum ParsedKey {
@@ -591,6 +643,74 @@ media.mp4
                 offset: Some(0)
             })
         );
+        assert!(media.init_byte_range.is_none());
+    }
+
+    #[test]
+    fn resolves_implicit_byte_range_offsets() {
+        let text = r#"#EXTM3U
+#EXT-X-BYTERANGE:100@10
+#EXTINF:4.0,
+media.mp4
+#EXT-X-BYTERANGE:200
+#EXTINF:4.0,
+media.mp4
+#EXT-X-BYTERANGE:50@500
+#EXTINF:4.0,
+media.mp4
+#EXT-X-ENDLIST
+"#;
+        let Playlist::Media(media) = Playlist::parse(&base(), text).unwrap() else {
+            panic!("expected a media playlist");
+        };
+        assert_eq!(
+            media.segments[0].byte_range,
+            Some(ByteRange {
+                length: 100,
+                offset: Some(10)
+            })
+        );
+        assert_eq!(
+            media.segments[1].byte_range,
+            Some(ByteRange {
+                length: 200,
+                offset: Some(110)
+            })
+        );
+        assert_eq!(
+            media.segments[2].byte_range,
+            Some(ByteRange {
+                length: 50,
+                offset: Some(500)
+            })
+        );
+    }
+
+    #[test]
+    fn parses_byte_ranges_on_init_maps() {
+        let text = r#"#EXTM3U
+#EXT-X-MAP:URI="init.mp4",BYTERANGE="720@100"
+#EXT-X-BYTERANGE:1000@0
+#EXTINF:4.0,
+media.mp4
+#EXT-X-ENDLIST
+"#;
+        let Playlist::Media(media) = Playlist::parse(&base(), text).unwrap() else {
+            panic!("expected a media playlist");
+        };
+        assert_eq!(
+            media.init_byte_range,
+            Some(ByteRange {
+                length: 720,
+                offset: Some(100)
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_zero_length_byte_ranges() {
+        let text = "#EXTM3U\n#EXT-X-BYTERANGE:0@0\n#EXTINF:4.0,\nmedia.mp4\n#EXT-X-ENDLIST\n";
+        assert!(Playlist::parse(&base(), text).is_err());
     }
 
     #[test]

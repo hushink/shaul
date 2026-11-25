@@ -25,7 +25,7 @@
 | **1.3** | Hub 差异化 | 可选 Xet 后端、缓存维护、CAS 增量维护 | Xet 已实现，fixture 待补 |
 | **1.3+** | HTTP 方法与队列 | 非 GET 请求、单请求语义、CLI 批量 pause/resume/cancel/list 过滤 | 已实现，待发布 |
 | **1.4** | 运维与观测 | OpenTelemetry / Prometheus 适配、残留 `.part` 扫描、磁盘预检 | 已实现（适配文档为主） |
-| **1.5** | 流媒体 | 可选 HLS 后端（点播 TS/fMP4、AES-128、分片续传） | 已实现；DASH 待后续 |
+| **1.5** | 流媒体 | 可选 HLS 后端（点播 TS/fMP4、AES-128、BYTERANGE、分片续传） | 已实现；DASH 待后续 |
 
 ---
 
@@ -254,7 +254,7 @@ pub struct ExtractorFinalizer { /* registry */ }
 
 ---
 
-## 1.5 HLS（AES-128 已实现）
+## 1.5 HLS（AES-128/BYTERANGE 已实现）
 
 - [x] 可选 crate `shaul-hls` + facade `hls` feature；CLI 默认启用。
 - [x] HTTP(S) `.m3u8`、master/media playlist、最高码率变体。
@@ -267,10 +267,13 @@ pub struct ExtractorFinalizer { /* registry */ }
 - [x] 跨源 playlist/密钥/分片默认剥离敏感头。
 - [x] AES-128 解密：密钥轮换、显式 IV、按 media sequence 推导 IV；密钥只驻留
       内存，加密分片先保存为 `.enc` 再解密为 `.bin`。
-- [ ] DASH、直播、`EXT-X-BYTERANGE`、交替音轨、ffmpeg 转封装。
+- [x] `EXT-X-BYTERANGE` 分片和 init map，包括隐式偏移；HTTP 层新增
+      `HttpBackend::download_range`，服务器忽略 `Range` 时回退完整对象。
+- [ ] DASH、直播、交替音轨、ffmpeg 转封装。
 - [ ] `clean --orphans` 清理 HLS 分片临时目录。
-- 设计记录见 [ADR 0013](adr/0013-hls-backend.md) 和
-  [ADR 0014](adr/0014-hls-aes128.md)。
+- 设计记录见 [ADR 0013](adr/0013-hls-backend.md)、
+  [ADR 0014](adr/0014-hls-aes128.md) 和
+  [ADR 0015](adr/0015-hls-byterange.md)。
 
 ## 扩展边界
 

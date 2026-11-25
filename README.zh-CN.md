@@ -204,10 +204,11 @@ Hugging Face / ModelScope 链接支持 `--revision`、`--include` 与
 - 分片通过共享 HTTP 栈并发下载，代理、认证、超时、重试、限速和连接预算都生效。
 - 支持 AES-128 加密分片，包括密钥轮换、显式 IV 和按 media sequence 推导的
   IV。密钥在运行时获取，只驻留内存，不写入任务 sidecar。
+- 支持 `#EXT-X-BYTERANGE` 分片和 init map，包括隐式偏移。
 - 分片级续传：用 playlist 的 SHA-256 校验 `<output>.shaul.hls.parts/` 中已完成
   的分片。
-- 支持 TS，以及带单个 `#EXT-X-MAP` 的 fMP4。暂不支持 SAMPLE-AES、
-  `#EXT-X-BYTERANGE`、直播列表和 DASH。
+- 支持 TS，以及带单个 `#EXT-X-MAP` 的 fMP4。暂不支持 SAMPLE-AES、直播列表
+  和 DASH。
 
 ### 校验与后处理
 
@@ -332,7 +333,8 @@ provider token 在运行时解析，不会写入任务 sidecar。Unix 上 sideca
   指纹变化会从零开始。`--mirror` 和最终输出的内容寻址缓存不适用于 HLS。
   跨源 playlist/密钥/分片 URL 默认剥离敏感请求头，除非开启
   `allow_cross_origin_auth`。AES-128 密钥在运行时获取且不落盘；加密分片
-  先保存为 `.enc`，解密后的 `.bin` 用于续传和拼接。
+  先保存为 `.enc`，解密后的 `.bin` 用于续传和拼接。BYTERANGE 分片使用精确
+  `Range` 请求；服务器忽略 `Range` 时退化为完整对象加前缀丢弃。
 - `--verify` 要求存在校验值；`--no-verify` 关闭可选校验。BitTorrent piece
   校验由协议内部完成，并视为已校验。
 - 解压默认关闭。先校验压缩包，再解压到临时目录，最后原子 rename。

@@ -165,8 +165,10 @@ HLS supports VOD playlists with `#EXT-X-ENDLIST` and resumes at segment
 granularity. AES-128 encrypted segments are supported, including key rotation
 and explicit or media-sequence IVs; keys are fetched at run time and never
 persisted. Encrypted segments are staged as `.enc` and decrypted to the `.bin`
-files used for resume and concatenation. SAMPLE-AES, `#EXT-X-BYTERANGE`, live
-playlists, DASH and alternate audio renditions are not supported yet.
+files used for resume and concatenation. `#EXT-X-BYTERANGE` segments and init
+maps are supported, including implicit offsets; a server that ignores `Range`
+is handled by reading the full object and discarding the prefix. SAMPLE-AES,
+live playlists, DASH and alternate audio renditions are not supported yet.
 `--mirror` and the final-output content cache do not apply to HLS tasks.
 Completed segments live in `<output>.shaul.hls.parts/`; `shaul clean --orphans`
 currently removes the concatenation `.part` but not that directory.

@@ -13,11 +13,11 @@ use reqwest::header::{
 use reqwest::redirect::Policy;
 use reqwest::{Client, Method, Response, StatusCode};
 use shaul_core::{
-    BackendCapabilities, Checksum, ChecksumAlgorithm, Config, ContentCache, DownloadBackend,
-    DownloadOutcome, DownloadRequest, Error, EventKind, EventSink, FileOutcome, FileResume, Header,
-    ProxySetting, Resource, ResourceFile, ResourceKind, Result, ResumeCheckpoint, TaskId,
-    TaskResume, Telemetry, Validator, VerifyMode, completed_bytes, merge_ranges, metrics,
-    missing_ranges, part_path, sanitize_file_name, split_range,
+    BackendCapabilities, ByteRange, Checksum, ChecksumAlgorithm, Config, ContentCache,
+    DownloadBackend, DownloadOutcome, DownloadRequest, Error, EventKind, EventSink, FileOutcome,
+    FileResume, Header, ProxySetting, Resource, ResourceFile, ResourceKind, Result,
+    ResumeCheckpoint, TaskId, TaskResume, Telemetry, Validator, VerifyMode, completed_bytes,
+    merge_ranges, metrics, missing_ranges, part_path, sanitize_file_name, split_range,
 };
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
 use tokio::sync::Mutex;
@@ -245,6 +245,184 @@ impl HttpBackend {
         }
         Err(last_error
             .unwrap_or_else(|| Error::Backend("no HTTP download URL was available".to_string())))
+    }
+
+    /// Download exactly `range` from `file` into `destination`, replacing it.
+    ///
+    /// The request uses the caller's headers, authentication, proxy, retry,
+    /// timeout and rate-limit settings. Only `GET` without a request body is
+    /// supported. A server that ignores `Range` and returns the full body is
+    /// handled by discarding the prefix and stopping after the requested
+    /// length. Progress events are not emitted; callers should report
+    /// aggregate progress.
+    pub async fn download_range(
+        &self,
+        request: &DownloadRequest,
+        file: &ResourceFile,
+        range: ByteRange,
+        destination: &Path,
+    ) -> Result<u64> {
+        if range.is_empty() {
+            return Err(Error::Backend("empty byte range".to_string()));
+        }
+        let method = configured_method(&request.options.request)?;
+        if method != Method::GET || request.options.request.body.is_some() {
+            return Err(Error::Config(
+                "range downloads require GET without a request body".to_string(),
+            ));
+        }
+        let range_header = format!("bytes={}-{}", range.start, range.end - 1);
+        let rate = self.request_rate(request, file.url.host_str().unwrap_or_default());
+        let mut attempt = 0u32;
+        loop {
+            if request.cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+            let headers =
+                build_headers(&request.options, &file.headers, Some(&range_header), None)?;
+            let sent = self
+                .send_follow(
+                    &file.url,
+                    &headers,
+                    &request.options,
+                    &request.cancel,
+                    &request.events,
+                )
+                .await;
+            let (response, captured, _, _permit) = match sent {
+                Err(Error::Cancelled) => return Err(Error::Cancelled),
+                Err(error) => {
+                    if attempt >= request.options.retries {
+                        return Err(error);
+                    }
+                    retry_event(request, file, attempt + 1, error.to_string());
+                    sleep_or_cancel(backoff(attempt), &request.cancel).await?;
+                    attempt += 1;
+                    continue;
+                }
+                Ok(response) => response,
+            };
+            let status = response.status();
+            let retry_after = retry_after(response.headers());
+            if status.is_server_error()
+                || status == StatusCode::REQUEST_TIMEOUT
+                || status == StatusCode::TOO_MANY_REQUESTS
+            {
+                drop(response);
+                if attempt >= request.options.retries {
+                    return Err(http_error(status, &captured));
+                }
+                retry_event(request, file, attempt + 1, format!("HTTP {status}"));
+                sleep_or_cancel(
+                    retry_after.unwrap_or_else(|| backoff(attempt)),
+                    &request.cancel,
+                )
+                .await?;
+                attempt += 1;
+                continue;
+            }
+            if status == StatusCode::RANGE_NOT_SATISFIABLE {
+                return Err(Error::Backend(format!(
+                    "range {range_header} is not satisfiable"
+                )));
+            }
+            let content_range = captured
+                .get("content-range")
+                .and_then(|value| parse_content_range(value));
+            let partial = status == StatusCode::PARTIAL_CONTENT
+                || (status == StatusCode::OK && content_range.is_some());
+            let mut skip = 0u64;
+            if partial {
+                let Some((start, end, _)) = content_range else {
+                    return Err(Error::Backend(
+                        "ranged response is missing a valid Content-Range".to_string(),
+                    ));
+                };
+                if start != range.start || end + 1 != range.end {
+                    return Err(Error::Backend(format!(
+                        "server returned range {start}-{end}, expected {}-{}",
+                        range.start,
+                        range.end - 1
+                    )));
+                }
+            } else if status == StatusCode::OK {
+                // Some servers ignore Range and return the full object. Skip
+                // the prefix and stop after the requested length.
+                skip = range.start;
+            } else {
+                return Err(http_error(status, &captured));
+            }
+
+            ensure_parent(destination).await?;
+            let part = part_path(destination);
+            remove_if_exists(&part).await?;
+            let mut output = tokio::fs::File::create(&part).await?;
+            let mut stream = response.bytes_stream();
+            let mut written = 0u64;
+            let mut skipped = 0u64;
+            let limit = range.len();
+            let mut retry_message: Option<String> = None;
+            loop {
+                let next = tokio::select! {
+                    _ = request.cancel.cancelled() => return Err(Error::Cancelled),
+                    next = tokio::time::timeout(request.options.timeout, stream.next()) => next,
+                };
+                match next {
+                    Ok(Some(Ok(chunk))) => {
+                        rate.throttle(chunk.len() as u64, &request.cancel).await?;
+                        let mut bytes = chunk.as_ref();
+                        if skipped < skip {
+                            let drop = (skip - skipped).min(bytes.len() as u64) as usize;
+                            skipped += drop as u64;
+                            bytes = &bytes[drop..];
+                            if bytes.is_empty() {
+                                continue;
+                            }
+                        }
+                        let remaining = limit - written;
+                        let take = (bytes.len() as u64).min(remaining) as usize;
+                        if take > 0 {
+                            output.write_all(&bytes[..take]).await?;
+                            written += take as u64;
+                        }
+                        if written == limit {
+                            break;
+                        }
+                    }
+                    Ok(Some(Err(error))) => {
+                        retry_message = Some(format!("stream error: {error}"));
+                        break;
+                    }
+                    Ok(None) => {
+                        if written == limit {
+                            break;
+                        }
+                        retry_message =
+                            Some(format!("short ranged response: {written} of {limit} bytes"));
+                        break;
+                    }
+                    Err(_) => {
+                        retry_message = Some("read timed out".to_string());
+                        break;
+                    }
+                }
+            }
+            output.flush().await?;
+            output.sync_all().await?;
+            drop(output);
+            if written == limit {
+                remove_if_exists(destination).await?;
+                tokio::fs::rename(&part, destination).await?;
+                return Ok(written);
+            }
+            let message = retry_message.unwrap_or_else(|| "range download failed".to_string());
+            if attempt >= request.options.retries {
+                return Err(Error::Backend(message));
+            }
+            retry_event(request, file, attempt + 1, message);
+            sleep_or_cancel(backoff(attempt), &request.cancel).await?;
+            attempt += 1;
+        }
     }
 
     async fn try_content_cache(

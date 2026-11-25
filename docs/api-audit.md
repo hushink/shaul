@@ -152,9 +152,13 @@ sidecar 的**语义**仍受保护：`TASK_SCHEMA_VERSION = 1`、`TaskResume.vers
      `hf-xet` 类型不泄漏到 `shaul-core`，默认 feature 仍为空。
    - `shaul` 的 `hls` feature 启用 `shaul-hls`：`HlsParser` 解析 HTTP(S)
      `.m3u8`，`HlsBackend` 下载分片并拼接为一个文件。支持点播 TS、单 init
-     map 的 fMP4 和 AES-128 加密（密钥轮换、显式/默认 IV）；SAMPLE-AES、
-     `EXT-X-BYTERANGE`、直播和 DASH 暂不支持，后续作为增量。AES-128 密钥
-     只驻留内存，不写入 sidecar。`reqwest` 类型不泄漏到 `shaul-core`。
+     map 的 fMP4、AES-128 加密（密钥轮换、显式/默认 IV）和
+     `EXT-X-BYTERANGE`（含隐式偏移）；SAMPLE-AES、直播和 DASH 暂不支持，
+     后续作为增量。AES-128 密钥只驻留内存，不写入 sidecar。`reqwest` 类型
+     不泄漏到 `shaul-core`。
+   - `HttpBackend::download_range(request, file, range, destination)` 下载
+     精确字节区间，复用 header/认证/代理/超时/重试/限速和连接预算；HLS 的
+     `EXT-X-BYTERANGE` 使用该方法。它是新增公开方法，属于 minor 变更。
    - `Task.priority` / `TaskOptions.priority` 控制队列顺序：`run_pending`
      按高优先级、创建时间、任务 id 依次排序；默认优先级为 0。
    - `EventKind::Retry` 和 `metrics::RETRIES` 暴露重试尝试；指数 backoff

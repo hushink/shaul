@@ -2055,6 +2055,65 @@ async fn downloads_multiple_http_files_concurrently() {
     assert!(resume.files.values().all(|file| file.is_complete()));
 }
 
+#[tokio::test]
+async fn downloads_exact_byte_ranges() {
+    let data = test_data(64 * 1024);
+    for mode in [RangeMode::Supported, RangeMode::Ignored] {
+        let server = TestServer::spawn(data.clone(), mode, None, "range.bin").await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path());
+        let options = config
+            .resolve(&config.download.dir, &TaskOptions::default())
+            .unwrap();
+        let (events, _receiver) = EventSink::channel(32);
+        let request = DownloadRequest {
+            task_id: shaul::TaskId::new_v4(),
+            resource: Resource {
+                kind: ResourceKind::Http,
+                name: "range.bin".to_string(),
+                files: Vec::new(),
+                request: Default::default(),
+                checksum: None,
+                revision: None,
+                metadata: Default::default(),
+            },
+            destination: config.download.dir.clone(),
+            options,
+            resume: None,
+            cancel: CancellationToken::new(),
+            events,
+            checkpoint: Arc::new(TestCheckpoint {
+                resume: Arc::new(Mutex::new(TaskResume::default())),
+            }),
+        };
+        let file = ResourceFile {
+            path: "range.bin".to_string(),
+            url: Url::parse(&server.file_url()).unwrap(),
+            size: None,
+            checksum: None,
+            headers: Vec::new(),
+            metadata: Default::default(),
+            use_response_filename: false,
+        };
+        let backend = HttpBackend::new(&config).unwrap();
+        let destination = config.download.dir.join("range.bin");
+        let written = backend
+            .download_range(
+                &request,
+                &file,
+                ByteRange::new(100, 200).unwrap(),
+                &destination,
+            )
+            .await
+            .unwrap();
+        assert_eq!(written, 100);
+        assert_eq!(
+            tokio::fs::read(&destination).await.unwrap(),
+            data[100..200].to_vec()
+        );
+    }
+}
+
 fn tar_gz(contents: &[u8]) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     {

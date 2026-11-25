@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   segment downloads, TS/fMP4 concatenation and segment-level resume
 - *(hls)* add AES-128 decryption with key rotation, explicit or media-sequence
   IVs, and encrypted-segment staging
+- *(http,hls)* add exact byte-range downloads (`HttpBackend::download_range`)
+  and support `#EXT-X-BYTERANGE` segments and init maps, including implicit
+  offsets and a full-object fallback
 - *(cli)* batch `pause`/`resume`/`cancel` with multiple ids or `--all`, plus
   `list --status` state filters
 

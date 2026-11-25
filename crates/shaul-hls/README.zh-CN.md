@@ -40,6 +40,7 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 - master/media playlist，默认选择最高码率变体
 - TS 输出，以及带单个 `#EXT-X-MAP` 的 fMP4
 - AES-128 加密，支持密钥轮换，以及显式 IV 或按 media sequence 推导的 IV
+- `#EXT-X-BYTERANGE` 分片和 init map，包括隐式偏移
 - 通过共享 HTTP 后端并发下载分片，因此代理、认证、超时、重试、限速和连接预算
   都生效
 - 分片级续传：暂停或失败后复用已完成的分片文件
@@ -47,7 +48,6 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 暂不支持：
 
 - SAMPLE-AES 加密
-- `#EXT-X-BYTERANGE` 分片
 - 直播列表
 - DASH（`mpd`）
 - 交替音轨和多音轨选择
@@ -66,6 +66,8 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
   `allow_cross_origin_auth` 后保留。
 - AES-128 密钥在运行时获取，只驻留内存，不写入任务 sidecar。加密分片先保存为
   `.enc`，解密后的 `.bin` 才用于续传和拼接。
+- BYTERANGE 分片使用精确的 `Range` 请求；如果服务器忽略 `Range` 并返回完整
+  对象，会退化为丢弃前缀。
 - 如果 master 使用独立的音频 rendition，目前只会下载选中的视频变体，输出可能
   没有音轨。
 
@@ -74,5 +76,6 @@ $ shaul download https://example.com/video/master.m3u8 --include '*1080*'
 - [项目 README](https://github.com/hushink/shaul#readme)
 - [HLS ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0013-hls-backend.md)
 - [AES-128 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0014-hls-aes128.md)
+- [BYTERANGE ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0015-hls-byterange.md)
 - [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
 - [API 参考](https://docs.rs/shaul-hls)

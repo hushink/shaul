@@ -19,6 +19,8 @@
 - 手动重定向处理，跨源时剥离凭据
 - 非 GET 请求（`POST`/`PUT`/`PATCH` 等）与可选请求体；单次发送，不分片、
   不续传、不使用镜像
+- 通过 `HttpBackend::download_range` 下载精确字节区间；服务器忽略 `Range`
+  时回退到完整对象
 - 自定义请求头，以及 bearer、basic 或 header 认证
 - HTTP/HTTPS/SOCKS5 代理、全局/单主机/单任务限速与活动请求预算
 - SHA-256/SHA-512/SHA-1/MD5 校验，以及 `Digest` 与 `Content-MD5`

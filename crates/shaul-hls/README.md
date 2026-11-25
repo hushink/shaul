@@ -42,6 +42,7 @@ backend is protocol-isolated: `shaul-core` does not depend on HLS.
 - TS output, and fMP4 playlists with a single `#EXT-X-MAP`
 - AES-128 encryption, including key rotation and explicit or media-sequence
   IVs
+- `#EXT-X-BYTERANGE` segments and init maps, including implicit offsets
 - Concurrent segment downloads through the shared HTTP backend, so proxy,
   authentication, timeouts, retries, rate limits and connection budgets apply
 - Segment-level resume: completed segment files are reused after a pause or
@@ -50,7 +51,6 @@ backend is protocol-isolated: `shaul-core` does not depend on HLS.
 Not supported yet:
 
 - SAMPLE-AES encryption
-- `#EXT-X-BYTERANGE` segments
 - Live playlists
 - DASH (`mpd`)
 - Alternate audio renditions and multi-track selection
@@ -72,6 +72,8 @@ The output extension is `.mp4` when the playlist has an init map, otherwise
 - AES-128 keys are fetched at run time, kept in memory only and never written
   to the task sidecar. Encrypted segments are staged as `.enc` files and
   decrypted to the `.bin` files used for resume and concatenation.
+- Byte-range segments use exact `Range` requests; a server that ignores
+  `Range` and returns the full object falls back to discarding the prefix.
 - A video-only variant will produce a video-only output when the master uses
   separate audio renditions.
 
@@ -80,5 +82,6 @@ The output extension is `.mp4` when the playlist has an init map, otherwise
 - [Project README](https://github.com/hushink/shaul#readme)
 - [HLS ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0013-hls-backend.md)
 - [AES-128 ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0014-hls-aes128.md)
+- [BYTERANGE ADR](https://github.com/hushink/shaul/blob/main/docs/adr/0015-hls-byterange.md)
 - [FAQ](https://github.com/hushink/shaul/blob/main/docs/faq.md)
 - [API reference](https://docs.rs/shaul-hls)

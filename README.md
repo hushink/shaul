@@ -217,10 +217,11 @@ select a variant.
 - AES-128 encrypted segments, including key rotation and explicit or
   media-sequence IVs. Keys are fetched at run time, kept in memory and never
   written to the task sidecar.
+- `#EXT-X-BYTERANGE` segments and init maps, including implicit offsets.
 - Segment-level resume: a playlist SHA-256 guards the completed segment files
   in `<output>.shaul.hls.parts/`.
-- TS output and fMP4 playlists with a single `#EXT-X-MAP`. SAMPLE-AES,
-  `#EXT-X-BYTERANGE`, live playlists and DASH are not supported yet.
+- TS output and fMP4 playlists with a single `#EXT-X-MAP`. SAMPLE-AES, live
+  playlists and DASH are not supported yet.
 
 ### Integrity and post-processing
 
@@ -360,6 +361,8 @@ redacts sensitive headers and removes query strings from HTTP task views.
   sensitive headers unless `allow_cross_origin_auth` is set. AES-128 keys are
   fetched at run time and are never persisted; encrypted segments are staged
   as `.enc` and decrypted to `.bin` files used for resume and concatenation.
+  Byte-range segments use exact `Range` requests, with a full-object fallback
+  for servers that ignore `Range`.
 - `--verify` requires a checksum. `--no-verify` disables optional checksum
   verification. BitTorrent piece verification is internal and counts as
   verification.

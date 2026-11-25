@@ -133,20 +133,6 @@ pub(crate) fn validate_media(media: &MediaPlaylist) -> Result<()> {
             "HLS playlists with multiple different #EXT-X-MAP values are not supported".to_string(),
         ));
     }
-    if media.init_byte_range {
-        return Err(Error::Backend(
-            "#EXT-X-MAP with BYTERANGE is not supported".to_string(),
-        ));
-    }
-    if media
-        .segments
-        .iter()
-        .any(|segment| segment.byte_range.is_some())
-    {
-        return Err(Error::Backend(
-            "#EXT-X-BYTERANGE segments are not supported yet".to_string(),
-        ));
-    }
     if media.init.is_some() && media.init_key.as_ref().is_some_and(|key| key.iv.is_none()) {
         return Err(Error::Backend(
             "encrypted #EXT-X-MAP without an IV is not supported".to_string(),

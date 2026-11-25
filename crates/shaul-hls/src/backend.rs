@@ -22,7 +22,7 @@ use url::Url;
 
 use crate::client::{HlsClient, same_origin};
 use crate::parser::{HLS_PROTOCOL, validate_media};
-use crate::playlist::{MediaPlaylist, Playlist, fingerprint};
+use crate::playlist::{ByteRange as HlsByteRange, MediaPlaylist, Playlist, fingerprint};
 
 const STATE_KEY: &str = "hls.state";
 const TEMP_DIR_KEY: &str = "hls.temp_dir";
@@ -260,6 +260,7 @@ impl DownloadBackend for HlsBackend {
 
         let segment_events =
             EventSink::default().with_telemetry(request.events.telemetry().clone());
+        let init_range = media.init_byte_range.map(core_range).transpose()?;
         if let Some(init_url) = &media.init
             && !init_done
         {
@@ -272,6 +273,7 @@ impl DownloadBackend for HlsBackend {
                     init_url,
                     &temp_dir,
                     INIT_ENC_NAME,
+                    init_range,
                     &segment_events,
                 )
                 .await?;
@@ -296,16 +298,21 @@ impl DownloadBackend for HlsBackend {
                     init_url,
                     &temp_dir,
                     INIT_NAME,
+                    init_range,
                     &segment_events,
                 )
                 .await?
-                .size
             };
             let current = progress.fetch_add(plaintext_size, Ordering::Relaxed) + plaintext_size;
             emit_progress(&request, &relative, &progress);
             writer.lock().await.save_progress(&request, current).await?;
         }
 
+        let segment_ranges: Vec<Option<ByteRange>> = media
+            .segments
+            .iter()
+            .map(|segment| segment.byte_range.map(core_range).transpose())
+            .collect::<Result<_>>()?;
         let pending: Vec<usize> = (0..segment_count)
             .filter(|index| !completed.contains(index))
             .collect();
@@ -318,11 +325,13 @@ impl DownloadBackend for HlsBackend {
             let progress = progress.clone();
             let relative = relative.clone();
             let writer = writer.clone();
+            let segment_ranges_ref = &segment_ranges;
             stream::iter(pending)
                 .map(|index| {
                     let url = media.segments[index].uri.clone();
                     let key = media.segments[index].key.clone();
                     let sequence = media.segments[index].sequence;
+                    let range = segment_ranges_ref[index];
                     let download_name = if key.is_some() {
                         encrypted_segment_name(index)
                     } else {
@@ -336,13 +345,14 @@ impl DownloadBackend for HlsBackend {
                     let writer = writer.clone();
                     let keys = keys.clone();
                     async move {
-                        let outcome = download_one(
+                        let downloaded_size = download_one(
                             http,
                             request_ref,
                             &options,
                             &url,
                             &temp_dir,
                             &download_name,
+                            range,
                             &segment_events,
                         )
                         .await?;
@@ -357,7 +367,7 @@ impl DownloadBackend for HlsBackend {
                             let _ = tokio::fs::remove_file(&encrypted).await;
                             tokio::fs::metadata(&output).await?.len()
                         } else {
-                            outcome.size
+                            downloaded_size
                         };
                         let current =
                             progress.fetch_add(plaintext_size, Ordering::Relaxed) + plaintext_size;
@@ -431,8 +441,9 @@ async fn download_one(
     url: &Url,
     destination: &Path,
     file_name: &str,
+    range: Option<ByteRange>,
     events: &EventSink,
-) -> Result<FileOutcome> {
+) -> Result<u64> {
     let file = ResourceFile {
         path: file_name.to_string(),
         url: url.clone(),
@@ -476,8 +487,14 @@ async fn download_one(
         events: events.clone(),
         checkpoint: Arc::new(NoopCheckpoint),
     };
-    http.download_file(&segment_request, &file, &mut resume)
-        .await
+    if let Some(range) = range {
+        http.download_range(&segment_request, &file, range, &destination.join(file_name))
+            .await
+    } else {
+        http.download_file(&segment_request, &file, &mut resume)
+            .await
+            .map(|outcome| outcome.size)
+    }
 }
 
 fn request_for_origin(request: &RequestOptions, trust: &Url, target: &Url) -> RequestOptions {
@@ -617,6 +634,14 @@ fn sequence_iv(sequence: u64) -> [u8; 16] {
     let mut iv = [0u8; 16];
     iv[8..].copy_from_slice(&sequence.to_be_bytes());
     iv
+}
+
+fn core_range(range: HlsByteRange) -> Result<ByteRange> {
+    let start = range.offset.unwrap_or(0);
+    let end = start
+        .checked_add(range.length)
+        .ok_or_else(|| Error::Backend("HLS byte range overflows u64".to_string()))?;
+    ByteRange::new(start, end)
 }
 
 async fn decrypt_cached_segments(

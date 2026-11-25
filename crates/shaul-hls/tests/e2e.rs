@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -58,6 +59,39 @@ const SAMPLE_AES_PLAYLIST: &str = r#"#EXTM3U
 #EXT-X-KEY:METHOD=SAMPLE-AES,URI="key.bin"
 #EXTINF:4.0,
 enc-0.ts
+#EXT-X-ENDLIST
+"#;
+
+const BYTERANGE_DATA: &[u8] = b"AAAAABBBBBCCCCC";
+
+const BYTERANGE_PLAYLIST: &str = r#"#EXTM3U
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-BYTERANGE:5@0
+#EXTINF:4.0,
+byterange.bin
+#EXT-X-BYTERANGE:5
+#EXTINF:4.0,
+byterange.bin
+#EXT-X-ENDLIST
+"#;
+
+const BYTERANGE_MAP_PLAYLIST: &str = r#"#EXTM3U
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-MAP:URI="byterange.bin",BYTERANGE="2@0"
+#EXT-X-BYTERANGE:3@2
+#EXTINF:4.0,
+byterange.bin
+#EXT-X-ENDLIST
+"#;
+
+const RANGE_IGNORED_PLAYLIST: &str = r#"#EXTM3U
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-BYTERANGE:5@0
+#EXTINF:4.0,
+full.bin
+#EXT-X-BYTERANGE:5
+#EXTINF:4.0,
+full.bin
 #EXT-X-ENDLIST
 "#;
 
@@ -192,6 +226,26 @@ async fn handle(
         return;
     }
 
+    let mut headers = HashMap::new();
+    for line in request.lines().skip(1) {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+        }
+    }
+    if path == "/byterange.bin" {
+        let total = BYTERANGE_DATA.len() as u64;
+        if let Some((start, end)) = headers
+            .get("range")
+            .and_then(|value| parse_range(value, total))
+        {
+            let body = &BYTERANGE_DATA[start as usize..=end as usize];
+            respond_range(&mut socket, body, start, end, total).await;
+        } else {
+            respond(&mut socket, "200 OK", BYTERANGE_DATA).await;
+        }
+        return;
+    }
+
     let body: Vec<u8> = match path.as_str() {
         "/master.m3u8" => MASTER.as_bytes().to_vec(),
         "/high.m3u8" => HIGH.as_bytes().to_vec(),
@@ -218,12 +272,38 @@ async fn handle(
         "/enc-init.mp4" => encrypt(INIT_PLAIN, &AES_KEY, &AES_IV),
         "/map-seg-0.ts" => encrypt(MAP_PLAIN, &AES_KEY, &AES_IV),
         "/sample-aes.m3u8" => SAMPLE_AES_PLAYLIST.as_bytes().to_vec(),
+        "/byterange.m3u8" => BYTERANGE_PLAYLIST.as_bytes().to_vec(),
+        "/byterange-map.m3u8" => BYTERANGE_MAP_PLAYLIST.as_bytes().to_vec(),
+        "/range-ignored.m3u8" => RANGE_IGNORED_PLAYLIST.as_bytes().to_vec(),
+        "/full.bin" => BYTERANGE_DATA.to_vec(),
         _ => {
             respond(&mut socket, "404 Not Found", b"not found").await;
             return;
         }
     };
     respond(&mut socket, "200 OK", &body).await;
+}
+
+async fn respond_range(socket: &mut TcpStream, body: &[u8], start: u64, end: u64, total: u64) {
+    let headers = format!(
+        "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes {start}-{end}/{total}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = socket.write_all(headers.as_bytes()).await;
+    let _ = socket.write_all(body).await;
+    let _ = socket.shutdown().await;
+}
+
+fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
+    let range = value.trim().strip_prefix("bytes=")?;
+    let (start, end) = range.split_once('-')?;
+    let start: u64 = start.parse().ok()?;
+    let end = if end.is_empty() {
+        total.saturating_sub(1)
+    } else {
+        end.parse().ok()?
+    };
+    (start <= end && end < total).then_some((start, end))
 }
 
 async fn respond(socket: &mut TcpStream, status: &str, body: &[u8]) {
@@ -470,6 +550,81 @@ async fn resumes_an_aes_128_playlist() {
     let requests = server.take_requests();
     assert!(!requests.iter().any(|path| path == "/enc-0.ts"));
     assert!(requests.iter().any(|path| path == "/enc-1.ts"));
+}
+
+#[tokio::test]
+async fn downloads_byterange_segments() {
+    let server = HlsServer::spawn(None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/byterange.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("byterange.ts"))
+            .await
+            .unwrap(),
+        b"AAAAABBBBB".to_vec()
+    );
+}
+
+#[tokio::test]
+async fn downloads_byterange_segments_when_range_is_ignored() {
+    let server = HlsServer::spawn(None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/range-ignored.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("range-ignored.ts"))
+            .await
+            .unwrap(),
+        b"AAAAABBBBB".to_vec()
+    );
+}
+
+#[tokio::test]
+async fn downloads_a_byterange_fmp4_init_segment() {
+    let server = HlsServer::spawn(None).await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = test_config(dir.path());
+    let engine = engine(&config);
+
+    let task = engine
+        .add(
+            Link::new(server.url("/byterange-map.m3u8")).unwrap(),
+            config.download.dir.clone(),
+            TaskOptions::default(),
+        )
+        .await
+        .unwrap();
+    let task = engine.run_task(task.id).await.unwrap();
+    assert_eq!(task.state, TaskState::Completed);
+    assert_eq!(
+        tokio::fs::read(config.download.dir.join("byterange-map.mp4"))
+            .await
+            .unwrap(),
+        b"AAAAA".to_vec()
+    );
 }
 
 #[tokio::test]

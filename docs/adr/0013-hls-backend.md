@@ -28,9 +28,10 @@ shaul 的 `Resource` / `FileItem` 模型把 `FileItem` 定义为落盘与校验�
 - `HlsBackend` 在运行时分片：
   - 重新抓取 media playlist（列表可能在 add 之后变化）；
   - 只支持点播：要求 `#EXT-X-ENDLIST`，拒绝直播列表；
-  - 首期支持 TS 和带单个 `#EXT-X-MAP` 的 fMP4；拒绝
-    `#EXT-X-BYTERANGE`、SAMPLE-AES、DASH、交替音轨和多个不同的 init map
-    （AES-128 已在二期加入，见 [ADR 0014](0014-hls-aes128.md)）；
+  - 首期支持 TS 和带单个 `#EXT-X-MAP` 的 fMP4；首期拒绝 SAMPLE-AES、DASH、
+    交替音轨和多个不同的 init map（AES-128 见
+    [ADR 0014](0014-hls-aes128.md)，BYTERANGE 见
+    [ADR 0015](0015-hls-byterange.md)）；
   - 每个分片通过共享的 `HttpBackend` 实例下载（连接数固定为 1），复用代理、
     认证头、超时、重试、全局/单主机连接预算和限速；
   - 分片文件放在 `<output>.shaul.hls.parts/`，全部完成后按顺序拼接成
@@ -61,10 +62,11 @@ shaul 的 `Resource` / `FileItem` 模型把 `FileItem` 定义为落盘与校验�
 - 支持：HTTP(S) `.m3u8`、master/media playlist、最高码率自动选择、
   `--include`/`--exclude` 变体选择、VOD、TS、单 init map 的 fMP4、
   分片并发、分片级续传、`--output`。
-- 不支持（后续增量）：DASH（mpd）、直播、`EXT-X-BYTERANGE`、
-  多音轨/交替 rendition、ffmpeg 转封装、分片内字节级续传。
+- 不支持（后续增量）：DASH（mpd）、直播、多音轨/交替 rendition、
+  ffmpeg 转封装、分片内字节级续传。
 - AES-128 已由二期加入；密钥、IV 和解密细节见
-  [ADR 0014](0014-hls-aes128.md)。
+  [ADR 0014](0014-hls-aes128.md)。BYTERANGE 已由三期加入，见
+  [ADR 0015](0015-hls-byterange.md)。
 
 ## Alternatives
 

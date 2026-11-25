@@ -83,7 +83,7 @@ cancel 默认选择 pending/running/paused，对 resume 默认选择 paused/fail
 
 `--include` / `--exclude` 也可用于按 `NAME`、`RESOLUTION`、`BANDWIDTH`、
 `CODECS` 或 URI 选择 HLS 变体。HLS 支持点播 TS、单 init map 的 fMP4、
-AES-128 加密分片和分片级续传；暂不支持 SAMPLE-AES、`#EXT-X-BYTERANGE`、
+AES-128 加密分片、`#EXT-X-BYTERANGE` 和分片级续传；暂不支持 SAMPLE-AES、
 直播列表和 DASH。
 
 `--method`、`--data`、`--data-file` 只适用于直接 HTTP(S) 链接。未指定

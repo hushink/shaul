@@ -85,8 +85,8 @@ tasks for resume; `--status` overrides the default.
 
 `--include` / `--exclude` also choose an HLS variant by `NAME`, `RESOLUTION`,
 `BANDWIDTH`, `CODECS` or URI. HLS supports VOD TS and single-init-map fMP4
-playlists, AES-128 encrypted segments and segment-level resume. SAMPLE-AES,
-`#EXT-X-BYTERANGE`, live playlists and DASH are not supported yet.
+playlists, AES-128 encrypted segments, `#EXT-X-BYTERANGE` and segment-level
+resume. SAMPLE-AES, live playlists and DASH are not supported yet.
 
 `--method`, `--data` and `--data-file` apply to direct HTTP(S) links only.
 `--data` implies `POST` when `--method` is not given. These requests are
