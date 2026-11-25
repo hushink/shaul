@@ -2,7 +2,8 @@
 
 - 更新日期：2026-11-26
 - 基线：1.2.2（运维闭环、通用内容缓存与可选 Xet 已发布）
-- 下一开发线：1.5 流媒体加固（交替音轨/转封装、DASH 动态多 Period/DRM）；
+- 下一开发线：1.5 流媒体加固（交替音轨/转封装）；DASH 专属后续见
+  [shaul-dash README](../crates/shaul-dash/README.zh-CN.md#todo--future-work)。
   1.3 仍有本地 Xet CAS fixture。
 - 目标：在不破坏 1.0 兼容性的前提下，把 shaul 从“能下载”推进到“可长期运行、可嵌入、可扩展”的生产级下载引擎。
 
@@ -283,8 +284,9 @@ pub struct ExtractorFinalizer { /* registry */ }
       `publishTime` 计算可用窗口，从 live edge 开始，过期分片报错。
 - [x] 静态多 Period DASH 的安全子集：逐 Period 选择、优先复用首个
       Representation id，要求 MIME/codecs 一致且 init 相同或都缺失。
-- [ ] 交替音轨混流、ffmpeg 转封装；DASH 动态多 Period、不同 init 的
-      多 Period、DRM 和低延迟 `availabilityTimeOffset`。
+- [ ] 交替音轨混流、ffmpeg 转封装。
+- DASH 专属后续项（动态/不同 init 的多 Period、DRM、低延迟等）见
+  [shaul-dash README](../crates/shaul-dash/README.zh-CN.md#todo--future-work)。
 - 设计记录见 [ADR 0013](adr/0013-hls-backend.md)、
   [ADR 0014](adr/0014-hls-aes128.md)、
   [ADR 0015](adr/0015-hls-byterange.md)、

@@ -63,17 +63,21 @@ $ shaul download https://example.com/live/manifest.mpd --live-segments 300
   都生效
 - 点播分片级续传：暂停或失败后复用已完成分片文件（动态录制不可续传）
 
-暂不支持：
+## TODO / future work
 
-- 动态多 Period 清单，以及 init/MIME/codecs 不一致的静态多 Period 清单
-  （这些需要转封装）
+以下项目尚未实现，不影响当前已支持的能力。DASH 专属的后续工作集中记录在
+此 crate README，而不是根 roadmap：
+
+- 动态多 Period 清单，以及直播过程中的 Period 切换
+- init/MIME/codecs 不一致的静态多 Period 清单（这些需要转封装）
+- 在无法转封装时，用 `--period` 只下载单个 Period
 - `availabilityTimeOffset`、低延迟分块和显式从 DVR 窗口起点录制
 - DRM（`ContentProtection`、CENC）与 `xlink:href`
 - 字幕、缩略图、交替音轨混流和多音轨选择
 - ffmpeg 转封装
 - `sidx` 解析和分片内字节级续传
 - 最终输出的内容寻址缓存
-- `--mirror`（DASH 任务会忽略）
+- `--mirror` 支持（当前 DASH 任务会忽略）
 
 输出扩展名：WebM Representation 为 `.webm`，其余为 `.mp4`。`--output` 优先。
 

@@ -70,10 +70,16 @@ backend is protocol-isolated: `shaul-core` does not depend on DASH.
 - Segment-level VOD resume: completed segment files are reused after a pause or
   failure (dynamic captures are not resumable)
 
-Not supported yet:
+## TODO / future work
 
-- Dynamic multi-Period manifests, or static Periods with different
-  initialization segments/MIME types/codecs (these need remuxing)
+These items are not implemented and do not change the currently supported
+behavior. DASH-specific follow-ups are tracked here instead of the project
+roadmap:
+
+- Dynamic multi-Period manifests and Period switching during a live capture
+- Static Periods with different initialization segments, MIME types or codecs
+  (these need remuxing)
+- A `--period` option to download one Period when remuxing is not possible
 - `availabilityTimeOffset`, low-latency chunked delivery and DVR-window start
   selection
 - DRM (`ContentProtection`, CENC) and `xlink:href`
@@ -81,7 +87,7 @@ Not supported yet:
 - ffmpeg remuxing
 - `sidx` parsing and segment-internal byte-level resume
 - Content-addressed cache for the final output
-- `--mirror` (ignored for DASH tasks)
+- `--mirror` support (currently ignored for DASH tasks)
 
 The output extension is `.webm` for WebM representations, otherwise `.mp4`.
 `--output` overrides it.
